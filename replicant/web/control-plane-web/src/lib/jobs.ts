@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { lagSeconds, request } from "./api";
+import { get, lagSeconds, request } from "./api";
 import { OPEN_STATUSES, TERMINAL } from "./status";
 import { useSession } from "./session";
-import type { JobSummary } from "./types";
+import type { JobDetail, JobSummary, TimelineEvent } from "./types";
 
 // Saved views of the job list (ui/job-list.md (1)): Open = non-terminal; terminal jobs live under Recent (R2-035).
 export const VIEWS = [
@@ -39,3 +39,31 @@ export function useJobs(view: ViewKey, q = "") {
 }
 
 export const countLabel = (d?: { items: unknown[]; more: boolean }) => (d ? `${d.items.length}${d.more ? "+" : ""}` : "…");
+
+/** One job (GET /v1/jobs/{id}) with the projection-lag header; shared by the Simple and Detailed job views. */
+export function useJobDetail(jobId: string) {
+  const { user } = useSession();
+  return useQuery({
+    queryKey: ["job", user, jobId], refetchInterval: 4000,
+    queryFn: async () => { const r = await request<JobDetail>(`/v1/jobs/${jobId}`); return { ...r.data, lag: lagSeconds(r.headers) }; },
+  });
+}
+
+/** The whole timeline of a job, oldest first (paged by after_seq). */
+export function useTimeline(jobId: string, enabled: boolean) {
+  const { user } = useSession();
+  return useQuery({
+    queryKey: ["timeline", user, jobId], refetchInterval: 4000, enabled,
+    queryFn: async () => {
+      const out: TimelineEvent[] = [];
+      let after = 0;
+      for (let i = 0; i < 20; i++) {
+        const page = await get<{ items: TimelineEvent[] }>(`/v1/jobs/${jobId}/timeline?after_seq=${after}&limit=200`);
+        out.push(...page.items);
+        if (page.items.length < 200) break;
+        after = page.items[page.items.length - 1].seq;
+      }
+      return out;
+    },
+  });
+}

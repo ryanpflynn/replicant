@@ -144,6 +144,8 @@ async def run(activities_by_queue: dict[str, list[Any]]) -> None:
         try:
             from replicant_worker.activities.bundle import publish_local_set
             log.info("published %d v0 definition blobs to the local registry", await asyncio.to_thread(publish_local_set))
+            from replicant_worker.activities.bundle import publish_node_catalog
+            log.info("published node catalog %s", await asyncio.to_thread(publish_node_catalog, nodecatalog(), build))
         except Exception as e:  # noqa: BLE001 - S3 not ready yet: bundles fall back to the built-in set
             log.warning("local registry publish skipped: %s", str(e)[:200])
     client = await connect()

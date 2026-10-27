@@ -28,7 +28,7 @@ function nodeMeta(n: GraphNode): string {
   return parts.join(" · ");
 }
 
-function GraphSvg({ doc, selected, onSelect }: { doc: NonNullable<GraphDoc["graph"]>; selected?: string; onSelect: (k: string) => void }) {
+export function GraphSvg({ doc, selected, onSelect }: { doc: NonNullable<GraphDoc["graph"]>; selected?: string; onSelect: (k: string) => void }) {
   const lay = useMemo(() => layout(doc), [doc]);
   const byKey = useMemo(() => new Map(doc.nodes.map((n) => [n.key, n])), [doc]);
   return (

@@ -8,6 +8,7 @@ intake retrier (every 5 s, advisory-lock singleton) restarts pending rows, and U
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import datetime as dt
 import json
 import logging
@@ -16,7 +17,7 @@ from typing import Any
 
 from sqlalchemy import text
 
-from control_plane_api import audit, contracts, registry
+from control_plane_api import audit, contracts, derived, projects, registry
 from control_plane_api.auth import AuthContext, check
 from control_plane_api.authz import Principal
 from control_plane_api.db import OPERATOR_SCOPE, Database
@@ -57,6 +58,7 @@ class Intake:
         self.auth = auth
         self.env = env
         self.web_origin = web_origin.rstrip("/")
+        self.app_state: Any = None     # app.state (S3 + settings for derived bundles); set by the app factory
 
     def ui_link(self, job_id: str) -> str:
         return f"{self.web_origin}/jobs/{job_id}"
@@ -91,6 +93,14 @@ class Intake:
         repo_ids = tuple(t["repo"]["repo_id"] for t in jr.get("targets", []))
         if not check(self.auth, subject, "job:create", tenant_id=tenant, repo_ids=repo_ids):
             raise ProblemError(403, "missing_permission", detail="requester lacks job:create on the tenant")
+        # CONFIG: the repo's project and its effective configuration, read fresh (live: who may trigger; pinned:
+        # gates/risk/workflows compiled into a derived bundle below)
+        proj = await self._project_config(tenant, repo_ids)
+        if proj is not None:
+            need = {"approver": "gate:decide", "project_admin": "tenant:policy:edit"}.get(
+                proj[2]["triggers"].get("min_trigger_role", "engineer"))
+            if need and not check(self.auth, subject, need, tenant_id=tenant, repo_ids=repo_ids):
+                raise ProblemError(403, "missing_permission", detail="the project requires a higher role to start jobs")
         may_pin = check(self.auth, subject, "release:pin")
         if jr["priority"] == "urgent" and jr["workflow_type"] != "hotfix":
             raise ProblemError(422, "urgent_requires_hotfix")
@@ -125,6 +135,17 @@ class Intake:
                                                  may_pin, evaluation_mode, req["principal_id"])
                 except registry.PinNotAllowed:
                     raise ProblemError(403, "release_pin_required")
+                if proj is not None and jr.get("requested_release_bundle_id") is None and \
+                        not projects.is_default_pinned(proj[2]) and self.app_state is not None:
+                    try:
+                        drb = await derived.ensure_derived(self.app_state, conn, self.db, res.release_bundle_id,
+                                                           tenant, proj[0], proj[2], "svc_control-plane-api")
+                    except derived.CompileError as e:
+                        raise ProblemError(503, "project_config_unbuildable", detail=str(e)[:300],
+                                           headers={"Retry-After": "30"})
+                    reason = res.assignment_reason if res.assignment_reason.endswith("+layer") \
+                        else res.assignment_reason + "+layer"
+                    res = dataclasses.replace(res, release_bundle_id=drb, assignment_reason=reason)
                 if self.db.settings.db_set_role:
                     await conn.execute(text("SET LOCAL ROLE svc_cpa_intake"))
                 cohort = evaluation_mode if evaluation_mode in ("eval", "shadow") else res.release_cohort
@@ -244,6 +265,13 @@ class Intake:
             raise ProblemError(403, "intake_closed")
         if "paused" in states:
             raise ProblemError(409, "intake_paused")
+
+    async def _project_config(self, tenant: str, repo_ids: tuple[str, ...]) -> tuple[str, str, dict[str, Any]] | None:
+        if not repo_ids or not await self.db.has_relation("tenancy.project_repos"):
+            return None
+        async with self.db.tx(tenant=tenant) as conn:
+            v = await projects.effective_for_repo_conn(conn, repo_ids[0])
+        return v if v is not None and v[1] == tenant else None
 
     async def _check_tenant(self, tenant: str) -> None:
         async with self.db.tx(tenant=tenant) as conn:

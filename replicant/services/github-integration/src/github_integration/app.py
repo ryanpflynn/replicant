@@ -113,9 +113,11 @@ def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None =
     @app.post("/v1/admin/scm-installations")
     async def register_installation(request: Request) -> JSONResponse:
         seed = read_secret(s.dev_seed_token_file) if s.is_local else None
+        cpa = read_secret(s.notify_caller_token_file)   # CONFIG: control-plane-api's service token (live trigger sync)
         h = request.headers.get("authorization", "")
         tok = h[7:].strip() if h[:7].lower() == "bearer " else ""
-        if not seed or not tok or not hmac.compare_digest(seed, tok):
+        by_seed = bool(seed and tok and hmac.compare_digest(seed, tok))
+        if not tok or not (by_seed or (cpa and hmac.compare_digest(cpa, tok))):
             return _problem(401, "unauthenticated")
         try:
             body = await request.json()
@@ -157,9 +159,11 @@ def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None =
         github-integration's schema). Registers the repo's Gitea org as an installation for the tenant when needed,
         the repo, and a new current settings version. M1 auth: the dev seed token forwarded by control-plane-api."""
         seed = read_secret(s.dev_seed_token_file) if s.is_local else None
+        cpa = read_secret(s.notify_caller_token_file)   # CONFIG: control-plane-api's service token (live trigger sync)
         h = request.headers.get("authorization", "")
         tok = h[7:].strip() if h[:7].lower() == "bearer " else ""
-        if not seed or not tok or not hmac.compare_digest(seed, tok):
+        by_seed = bool(seed and tok and hmac.compare_digest(seed, tok))
+        if not tok or not (by_seed or (cpa and hmac.compare_digest(cpa, tok))):
             return _problem(401, "unauthenticated")
         try:
             body = await request.json()
@@ -176,6 +180,10 @@ def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None =
                    "allowed_workflow_types", "default_priority", "ack_comment", "status_label_prefix"}
         if set(st) - allowed:
             return _problem(422, "invalid_request", detail=f"unknown settings {sorted(set(st) - allowed)}")
+        actor = str(body.get("actor") or "")
+        updated_by = actor if not by_seed and re.match(r"^(usr_[0-9a-hjkmnp-tv-z]{26}|svc_[a-z][a-z0-9-]{2,40})$",
+                                                       actor) else ("svc_control-plane-api" if not by_seed
+                                                                    else "svc_dev-seeder")
         settings_doc = {"trigger_modes": ["label", "command"], "trigger_label": "replicant", "ack_comment": True,
                         **{k: v for k, v in st.items() if k not in ("repo_id", "full_name")}}
         async with engine.begin() as conn:
@@ -205,8 +213,8 @@ def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None =
                                         "AND host = :h AND repo_id = :r AND is_current"), {"h": host, "r": repo_id})
                 await conn.execute(text(
                     "INSERT INTO github_app.repo_settings (provider, host, repo_id, version, settings, is_current, "
-                    "updated_by) VALUES ('gitea', :h, :r, :v, CAST(:s AS jsonb), true, 'svc_dev-seeder')"),
-                    {"h": host, "r": repo_id, "v": v, "s": json.dumps(settings_doc)})
+                    "updated_by) VALUES ('gitea', :h, :r, :v, CAST(:s AS jsonb), true, :by)"),
+                    {"h": host, "r": repo_id, "v": v, "s": json.dumps(settings_doc), "by": updated_by})
         return JSONResponse({"repo_id": repo_id, "full_name": full_name, **settings_doc,
                              "installation_id": int(inst), "tenant_id": tenant})
 

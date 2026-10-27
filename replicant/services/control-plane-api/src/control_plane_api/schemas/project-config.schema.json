@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://replicant.example.com/schemas/project-config.schema.json",
+  "title": "Project configuration (v0 CONFIG-01)",
+  "description": "Team-owned configuration of a project or one repo override. Live sections (triggers, approvals) are read at use time; pinned sections (gates, risk, workflows) are compiled into a derived Release Bundle at intake and apply to new jobs only. Every section is optional; omitted fields take the effective value of the parent (repo override -> project -> defaults).",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "triggers": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "label": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,49}$"},
+        "modes": {"type": "array", "items": {"enum": ["label", "command"]}, "uniqueItems": true},
+        "allowed_workflow_types": {"type": "array", "minItems": 1, "uniqueItems": true,
+                                   "items": {"enum": ["auto", "bugfix", "feature", "docs", "api_change"]}},
+        "default_priority": {"enum": ["low", "normal", "high"]},
+        "min_trigger_role": {"enum": ["engineer", "approver", "project_admin"],
+                             "description": "Least role on the project that may start a job (job:create is required too)."}
+      }
+    },
+    "approvals": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "approver_groups": {"type": "array", "uniqueItems": true, "maxItems": 20,
+                            "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{1,62}$"},
+                            "description": "Empty: anyone holding gate:decide on the project may decide."},
+        "slack_channel": {"type": ["string", "null"], "pattern": "^[CG][A-Z0-9]{6,20}$",
+                          "description": "Slack approval channel id; null uses the tenant's channel."}
+      }
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "plan": {"enum": ["off", "risk_medium", "always"]},
+        "publish": {"enum": ["always", "risk_medium"], "description": "The publish gate cannot be turned off (I-3)."},
+        "requester_may_decide": {"type": "boolean"}
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "large_change_files": {"type": "integer", "minimum": 0, "maximum": 10000,
+                               "description": "More changed files than this is at least medium risk."},
+        "sensitive_paths": {"type": "array", "maxItems": 100, "items": {"type": "string", "minLength": 1, "maxLength": 200},
+                            "description": "Globs; a change touching one is at least high risk."},
+        "forbidden_paths": {"type": "array", "maxItems": 100, "items": {"type": "string", "minLength": 1, "maxLength": 200},
+                            "description": "Globs; the verifier fails a change touching one."}
+      }
+    },
+    "workflows": {
+      "type": "object",
+      "propertyNames": {"enum": ["bugfix", "feature", "api_change", "docs", "hotfix", "maintenance", "pr_repair", "qa_only"]},
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "params": {"type": "object", "additionalProperties": false,
+                     "properties": {"max_review_rounds": {"type": "integer", "minimum": 1, "maximum": 10}}},
+          "max_visits": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 1, "maximum": 20}},
+          "graph_yaml": {"type": ["string", "null"], "maxLength": 200000,
+                         "description": "Advanced: a whole GraphDefinition (existing node types only)."}
+        }
+      }
+    }
+  }
+}

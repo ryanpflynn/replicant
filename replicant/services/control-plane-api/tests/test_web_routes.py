@@ -64,3 +64,28 @@ def test_new_routes_registered_with_permissions():
               ("/v1/releases/workers", "GET"), ("/v1/admin/kill-switches", "GET"),
               ("/v1/gates/{gate_id}/packet/refs/{ref_name}", "GET")]:
         assert p in paths, p
+
+
+# ------------------------------------------------------------------------------------------- WEB-UIPREF (no DB)
+def test_ui_preferences_effective_and_if_match():
+    import pytest
+
+    from control_plane_api import contracts
+    from control_plane_api.problems import ProblemError
+    from control_plane_api.routes_ui_prefs import effective, parse_if_match
+    assert effective(None) == {"job_view": "simple"}                     # everyone starts on Simple
+    assert effective({"job_view": "detailed"}) == {"job_view": "detailed"}
+    assert effective({"job_view": "graph", "old_key": 1}) == {"job_view": "simple"}   # invalid/unknown fall back
+    assert parse_if_match(None) is None and parse_if_match("") is None
+    assert parse_if_match('"3"') == 3 and parse_if_match('W/"4"') == 4 and parse_if_match("0") == 0
+    with pytest.raises(ProblemError):
+        parse_if_match('"abc"')
+    assert not contracts.errors("ui-preferences", {"job_view": "simple", "version": 2})
+    assert contracts.errors("ui-preferences", {"job_view": "fancy"})
+    assert contracts.errors("ui-preferences", {"job_view": "simple", "theme": "dark"})   # closed schema
+
+
+def test_ui_preferences_routes_registered():
+    app = create_app(Settings(background_tasks=False))
+    paths = {(getattr(r, "path", ""), m) for r in iter_routes(list(app.routes)) for m in getattr(r, "methods", ())}
+    assert ("/v1/me/ui-preferences", "GET") in paths and ("/v1/me/ui-preferences", "PUT") in paths

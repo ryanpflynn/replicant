@@ -85,7 +85,13 @@ export interface GateDetail {
 export interface Me {
   principal_id: string; display_name: string; login?: string; groups?: string[]; platform_roles?: string[];
   tenants: Array<{ tenant_id: string; roles: string[] }>; capabilities: string[];
+  ui_preferences?: UiPreferences;           // WEB-UIPREF: effective (default job_view simple)
+  projects?: MeProject[];                   // CONFIG-01: visible projects and the caller's permissions on each
 }
+
+export interface MeProject { project_id: string; tenant_id: string; name: string; repo_count: number; permissions: string[] }
+
+export interface UiPreferences { job_view?: "simple" | "detailed"; version?: number }
 
 // GET /v1/me/waiting: gates the caller can decide and open PRs where they are requester or reviewer.
 export interface WaitingGate {

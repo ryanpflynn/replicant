@@ -431,6 +431,58 @@ flowchart LR
   dark.
 - Deviations GRAPH-D1 to D10; interface GRAPH-01.
 
+## 8a. Team configuration and RBAC (2026-10-27)
+
+Teams own **projects**: a project belongs to a tenant and holds a set of repos. From **Projects → Settings** in the UI,
+a team configures how jobs start, when a human must approve, its risk thresholds and its workflow graph.
+**No configuration change rebuilds or restarts anything.** E2E-05 checks that every image ID and container start
+time is unchanged.
+
+```mermaid
+flowchart LR
+  ADM["Project admin<br/>(UI: Projects → Settings)"] -- "PUT config<br/>If-Match + reason" --> CPA[control-plane-api]
+  CPA --> VER[("tenancy.project_config_versions<br/>versioned · audited · rollback")]
+  subgraph Live["Live: applies immediately"]
+    TRG["triggers<br/>(label, modes, workflow types,<br/>priority, min role)"]
+    APR["approver groups,<br/>Slack channel"]
+  end
+  subgraph Pinned["Pinned: applies to new jobs"]
+    GATE["gate rules"]
+    RISK["risk rules"]
+    WF["workflow + params<br/>or custom graph YAML"]
+  end
+  VER --> Live
+  VER --> Pinned
+  TRG -- "sync" --> GI["github-integration<br/>repo_settings"]
+  ISSUE[Issue event] --> GI --> INTAKE["intake<br/>(job:create checked<br/>against project bindings)"]
+  Pinned -- "effective config → JCS digest" --> DB["derived bundle<br/>(base bundle + config digest,<br/>reused when identical)"]
+  INTAKE -- "pins rb_ of" --> DB
+  DB --> W["replicant-worker<br/>reads gates, risk and graph<br/>from the pinned bundle"]
+```
+
+- **Live settings** take effect on the next event: triggers, who may trigger, approver groups, Slack channel.
+- **Pinned settings** go into a derived bundle that new jobs pin at intake: gate rules, risk rules, the workflow and
+  its parameters, or a custom graph in YAML. In-flight jobs keep their own bundle, so replay stays deterministic.
+- **Graphs.** A graph can only use node types the running worker has, so validation rejects anything else.
+  `max_review_rounds` and `maxVisits` are compiled into the derived graph.
+- **Access.** Roles come from `identity.role_bindings` (group → role on a tenant or a project), written from the
+  Access tab; the dev header supplies identity only. Roles:
+  - `project_admin`: all project settings and access.
+  - `tenant_admin`: the same across every project in the tenant.
+  - `engineer`, `approver`, `viewer`: as before, scoped per project.
+- **Permissions.** Live changes need `tenant:ops:edit`, pinned changes need `tenant:policy:edit`, and access changes
+  need `identity:admin`.
+- **Change control.** One admin can apply any change (the user's decision). Every change is a version with the
+  author, the reason and a diff, and can be rolled back.
+- **Deviations** CONFIG-D1..D8, interface CONFIG-01.
+  - Projects and the UI policy editor are not in the spec.
+  - The ADR-013 eval and two-person rule are not applied.
+  - Job lists stay tenant-wide.
+
+**Simple job view.** Everyone starts on a plain view: a one-line status, six steps, "What's needed from you" with the
+approve buttons, links, and milestones. **Show details** switches to the engineering view (graph, runs, activity), and
+the choice is saved per user (`/v1/me/ui-preferences`, WEB-UIPREF-D1..D4).
+
 ## 9. Security model (v0 subset)
 
 - **Tenant isolation.** The schema has RLS with FORCE on every tenant table: the WS-10 gate found 0 tables without

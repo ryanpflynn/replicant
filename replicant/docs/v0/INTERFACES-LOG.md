@@ -920,3 +920,67 @@ projection reads in a tenant (RLS) transaction. Not in control-plane-api.openapi
   Inside the existing `WriteRunPrefixes` session policy. Image `localhost/replicant/sandbox-sidecars:dev` rebuilt.
 - E2E: `tests/e2e/e2e04_graph.py` (API level, finished job); Playwright `web/control-plane-web/e2e/06-graph.spec.ts`
   (`GRAPH_JOB_ID=…`, screenshots in `screenshots/graph/`).
+
+## WEB-UIPREF (web build agent -> CONTROL, PLATFORM, web, 2026-10-27): per-user UI preferences + Simple job view
+
+- `GET /v1/me/ui-preferences` (`require("authenticated")`, users only; services 403 `not_a_user`) →
+  `{job_view: "simple"|"detailed", version}` with `ETag: "<version>"`. No stored row → `{job_view: "simple", version: 0}`.
+- `PUT /v1/me/ui-preferences` body `{job_view, version?}` (schema `control_plane_api/schemas/ui-preferences.schema.json`,
+  closed). Optional `If-Match: "<n>"` (wins over body `version`); `0` means "no row yet". Stale → 412
+  `version_mismatch` with `current_version` and `ETag`. Invalid → 422 `invalid_preferences`. Response as GET.
+- `GET /v1/me` gains `ui_preferences: {job_view}` (effective; `simple` when unset, for service principals, or if the
+  table is missing).
+- **PLATFORM:** migration `202610270001_ui_preferences` (down `202610250021_slack_threads`): schema `web`, roles
+  `r_web_read` → `svc_cpa_read`, `r_web_write` → `svc_cpa_notify`, table `web.ui_preferences(principal_id PK,
+  version, prefs jsonb, updated_at)`. Image `localhost/replicant/migrate:dev` rebuilt.
+- **web:** `screens/JobSimple.tsx` (default at `/jobs/:id`), `lib/simple.ts` (`STAGES`/`stageStates` moved here from
+  `JobDetail.tsx`, plus `simpleSteps`, `headline`, `milestones`), `useJobView()` in `lib/session.tsx`,
+  `useJobDetail`/`useTimeline` in `lib/jobs.ts`, `DecisionBar` exported from `Approvals.tsx`. Tests:
+  `src/lib/simple.test.ts`, Playwright `e2e/07-simple-view.spec.ts` (screenshots in `screenshots/simple/`).
+
+## CONFIG-01 (config build agent -> CONTROL, WORKER, github-integration, web, 2026-10-27): projects, RBAC, team config
+
+All routes behind `require(...)`; project scope checked in the handler (`check(..., project_id=...)`). Not in
+control-plane-api.openapi.yaml. Deviations: DEVIATIONS CONFIG-D*.
+
+- `GET /v1/projects` (job:read) and `GET /v1/tenants/{t}/projects` (job:read) -> `{items[{project_id, tenant_id, name,
+  repo_count, permissions[]}]}`; `POST /v1/tenants/{t}/projects` (identity:admin on the tenant | dev:seed)
+  `{project_id: prj_<slug>, name, owners_group?, repos?[{repo_id, full_name, host?, provider?}]}` -> 201 (409
+  `repo_in_other_project`); `GET /v1/projects/{p}` (job:read); `PATCH /v1/projects/{p}` (identity:admin) `{name?,
+  owners_group?, add_repos?, remove_repos?}`.
+- `GET /v1/projects/{p}/access` (job:read) -> `{version, bindings[{group, role}], inherited[{group, role, scope}],
+  members{group: [{principal_id, login}]}, roles[], can_edit}`; `PUT` (identity:admin) `{bindings, reason}` writes a
+  new global `identity.role_binding_versions` version (project roles: viewer, engineer, approver, project_admin).
+- `GET /v1/projects/{p}/config` (job:read) -> `{version, config, effective, defaults, repos{repo_id: {version, config,
+  effective}}, history[{version, config, is_current, actor, reason, rolled_back_from, created_at}], sections{name:
+  live|new_jobs}, can_edit{live, pinned}}`.
+- `PUT /v1/projects/{p}/config` and `PUT /v1/projects/{p}/repos/{r}/config`: `If-Match: <current version>` (0 = none;
+  428 without, 412 `version_conflict` with `current_version`), body `{config, reason}` (schema
+  `schemas/project-config.schema.json`, 422 `invalid_config`); live changes need `tenant:ops:edit`, pinned ones
+  `tenant:policy:edit` (403 otherwise, also for another project). Response = GET doc + `{written_version, scope,
+  changes[], triggers_synced[]}`.
+- `POST /v1/projects/{p}/config:validate` (job:read) `{config, repo_id?}` -> `{valid, errors[{path, message}],
+  changes[{path, from, to, applies: live|new_jobs}], effective, graphs{type: {workflow_type, definition{ref, name},
+  graph}}}` (graph = the `GET /v1/jobs/{id}/graph` `graph` shape, all nodes pending).
+- `POST /v1/projects/{p}/config:rollback` `{version, reason?, repo_id?}` -> as PUT (a new version copying `version`).
+- `GET /v1/me` gains `projects[{project_id, tenant_id, name, repo_count, permissions[]}]`.
+- **Permissions:** new role `project_admin`; `tenant_admin` += `identity:admin`; `identity:admin` is no longer
+  platform-only.
+- **Bundles:** derived bundle rows (`request_name = 'project-config'`); policy documents `gate-rules-c<digest>`
+  (policyType gate_rules) and `risk-rules-c<digest>` (policyType `risk_rules`: `large_change_files`,
+  `sensitive_paths`, `forbidden_paths`); graphs `graph/<base>-c<digest>@1`.
+- **WORKER:** `risk.classify` / `verifier.check` inputs gain `release_bundle_id`; NodeCatalog object
+  `registry/nodecatalogs/replicant-worker/<build_id>.json`; `REPLICANT_BUNDLE_FALLBACK_ANY=true` (tests) re-enables
+  the built-in fallback for any `rb_`. Image rebuilt, same build id.
+- **github-integration:** `PUT /internal/v1/repo-settings` accepts the notify delivery token (control-plane-api) and
+  an `actor`; issue triggers resolve the sender through `identity.links`; job requests use `allowed_workflow_types` and
+  `default_priority`.
+- **DB:** migration `202610270010_projects_rbac` (down_revision `202610270001_ui_preferences`): `tenancy.projects`,
+  `tenancy.project_repos`, `tenancy.project_config_versions` (tenant RLS); `identity.role_bindings.project_id`, scope
+  `project`, role `project_admin`; svc_cpa_tenancy write + RLS policy on role bindings. Image `migrate:dev` rebuilt.
+- **Seed:** step `09-projects-rbac` (groups, memberships, binding v1, projects `prj_ledger` with ledger-api and
+  `prj_payments-web`, ledger-admins -> project_admin, first config); step 07 links `frank`.
+- **web:** `/projects`, `/projects/:id/settings/:tab` (overview, triggers, approvals, workflow, access, history) in
+  `screens/ProjectSettings.tsx`; Projects nav item when `me.projects` is non-empty; `GraphSvg` exported from
+  `JobGraph.tsx`. Playwright `e2e/08-project-settings.spec.ts` (screenshots `screenshots/settings/`).
+- **E2E:** `tests/e2e/e2e05_config.py`.

@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { QueryCache, QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, DEV_USERS, get, getDevUser, setDevUser } from "./api";
-import type { InboxItem, Me, WaitingResponse } from "./types";
+import { ApiError, DEV_USERS, get, getDevUser, request, setDevUser } from "./api";
+import type { InboxItem, Me, UiPreferences, WaitingResponse } from "./types";
 import { groupWaiting, WAITING_UNAVAILABLE, type Waiting } from "./waiting";
 
 // ---- live indicator store: filled by the query cache (polling stands in for SSE in v0; WEB-04) ----
@@ -78,6 +78,44 @@ export function useSession() {
 export function useMe() {
   const { user } = useSession();
   return useQuery({ queryKey: ["me", user], queryFn: () => get<Me>("/v1/me"), staleTime: 300_000, refetchInterval: 300_000 });
+}
+
+export type JobView = "simple" | "detailed";
+
+/** WEB-UIPREF: the caller's job view, read from /v1/me (`ui_preferences`; Simple when unset) and saved per user with
+ * PUT /v1/me/ui-preferences. The save sends the version it read (If-Match); a 412 (changed in another tab) re-reads
+ * and retries once. The /v1/me cache is updated optimistically and rolled back on failure. */
+export function useJobView() {
+  const { user } = useSession();
+  const qc = useQueryClient();
+  const me = useMe().data;
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<ApiError | null>(null);
+  const view: JobView = me?.ui_preferences?.job_view === "detailed" ? "detailed" : "simple";
+  const setView = useCallback(async (next: JobView) => {
+    const key = ["me", user];
+    const prev = qc.getQueryData<Me>(key);
+    if (prev) qc.setQueryData<Me>(key, { ...prev, ui_preferences: { ...prev.ui_preferences, job_view: next } });
+    setSaving(true); setError(null);
+    try {
+      for (let attempt = 0; ; attempt++) {
+        const cur = await get<UiPreferences>("/v1/me/ui-preferences");
+        try {
+          await request<UiPreferences>("/v1/me/ui-preferences", { method: "PUT", body: JSON.stringify({ job_view: next }),
+            headers: { "If-Match": `"${cur.version ?? 0}"` } });
+          break;
+        } catch (e) {
+          if (!(e instanceof ApiError && e.status === 412) || attempt > 0) throw e;
+        }
+      }
+    } catch (e) {
+      if (prev) qc.setQueryData<Me>(key, prev);
+      setError(e instanceof ApiError ? e : new ApiError(0, { code: "client_error", detail: String(e) }));
+    } finally {
+      setSaving(false);
+    }
+  }, [qc, user]);
+  return { view, ready: !!me, setView, saving, error };
 }
 
 export const hasCap = (me: Me | undefined, cap: string) => !!me?.capabilities.includes(cap);

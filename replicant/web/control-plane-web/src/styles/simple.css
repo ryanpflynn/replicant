@@ -1,0 +1,59 @@
+/* Simple job view (WEB-UIPREF). Tokens only, same vocabulary as app.css; stacks to one column on a phone. */
+.simple { padding: var(--sp-5); max-width: 1080px; }
+.simple .shead { display: flex; align-items: flex-start; gap: var(--sp-3); }
+.simple .shead h1 { font-size: var(--fs-title); line-height: var(--lh-title); overflow-wrap: anywhere; }
+.simple .shead .grow { min-width: 0; }
+.simple .shead p { margin-top: 4px; overflow-wrap: anywhere; }
+.simple .sline { display: flex; align-items: flex-start; gap: var(--sp-2); margin: var(--sp-5) 0 var(--sp-4);
+  font-size: var(--fs-body-lg); line-height: var(--lh-body-lg); font-weight: var(--fw-medium); color: var(--c-text); }
+.simple .sline .g { width: 16px; height: 16px; margin-top: 3px; }
+
+.ssteps { list-style: none; margin: 0 0 var(--sp-5); padding: 0; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--sp-1); }
+.ssteps .ss { min-width: 0; }
+.ssteps .bar { display: block; height: 4px; border-radius: 1px; background: var(--c-line); }
+.ssteps .done .bar { background: var(--c-success-solid); }
+.ssteps .now .bar { background: var(--c-info-solid); }
+.ssteps .wait .bar { background: var(--c-attention-solid); }
+.ssteps .fail .bar { background: var(--c-danger-solid); }
+.ssteps .skip .bar { background: var(--c-line-strong); }
+.ssteps .lbl { display: flex; gap: 6px; align-items: flex-start; margin-top: var(--sp-2); color: var(--c-text-2); font-size: var(--fs-small); line-height: var(--lh-small); }
+.ssteps .lbl .g { margin-top: 2px; }
+.ssteps .lbl .n { color: var(--c-text-3); }
+.ssteps .now .lbl, .ssteps .wait .lbl, .ssteps .fail .lbl { color: var(--c-text); font-weight: var(--fw-medium); }
+.ssteps .st { display: block; margin: 2px 0 0 18px; font-size: var(--fs-micro); line-height: var(--lh-micro); color: var(--c-text-3); }
+.ssteps .todo .lbl { color: var(--c-text-3); }
+
+.sgrid { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: var(--sp-4); align-items: start; }
+.scard { border: 1px solid var(--c-line); border-radius: var(--r-md); background: var(--c-bg-raised); padding: var(--sp-4); min-width: 0; }
+.scard + .scard { margin-top: var(--sp-4); }
+.scard h2 { font-size: var(--fs-body); font-weight: var(--fw-semibold); margin-bottom: var(--sp-2); }
+.scard p + p { margin-top: var(--sp-2); }
+.scard.urgent { border-color: var(--c-attention-solid); box-shadow: inset 3px 0 0 var(--c-attention-solid); }
+.scard .decide { position: static; margin: var(--sp-3) calc(-1 * var(--sp-4)) calc(-1 * var(--sp-4)); border-radius: 0 0 var(--r-md) var(--r-md); }
+.scard .decide .row { flex-wrap: wrap; gap: var(--sp-2); }
+.scard .btn.primary { text-decoration: none; }
+.scard.links { display: flex; flex-direction: column; gap: var(--sp-2); }
+.scard.links h2 { margin-bottom: 0; }
+.scard.links a { color: var(--c-text); }
+.sms { list-style: none; margin: 0; padding: 0; }
+.sms li { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: var(--sp-2); align-items: baseline; padding: 5px 0; }
+.sms li + li { border-top: 1px solid var(--c-line); }
+.sms .when { white-space: nowrap; }
+
+@media (max-width: 900px) {
+  .sgrid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .simple { padding: var(--sp-4); }
+  .simple .shead { flex-direction: column; }
+  .ssteps { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .ssteps .ss { display: grid; grid-template-columns: 4px minmax(0, 1fr) auto; gap: var(--sp-2); align-items: center; padding: 6px 0; }
+  .ssteps .bar { height: 100%; min-height: 20px; }
+  .ssteps .lbl { margin-top: 0; }
+  .ssteps .st { margin: 0; text-align: right; }
+}
+@media (max-width: 640px) {
+  /* the job crumb is a full ID: keep the topbar on one line on a phone */
+  .crumbs { overflow: hidden; }
+  .crumbs .id .rest { display: none; }
+}

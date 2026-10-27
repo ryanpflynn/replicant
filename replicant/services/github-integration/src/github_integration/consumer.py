@@ -167,13 +167,14 @@ class Consumer:
 
     async def _issue_trigger(self, ev: NormalizedEvent, repo: dict[str, Any], label: str, received_at: Any) -> str:
         assert ev.repo and ev.issue and ev.sender
-        if ev.sender.login not in self.s.dev_linked_logins:
+        principal_id = await self.linked_principal(ev.sender.id)
+        if principal_id is None:
             await self._unlinked_reply(ev, repo)
             return "unlinked"
         tenant = repo["tenant_id"]
         jr = build_job_request(ev, tenant=tenant, installation_id=repo["installation_id"], label=label,
                                default_branch=repo["default_branch"] or ev.repo.default_branch or "main",
-                               received_at=received_at)
+                               received_at=received_at, principal_id=principal_id, settings=repo["settings"] or {})
         res = await self.cp.submit_job(jr, idempotency_key=ev.delivery_id)
         if res.status == 503 or res.status >= 500 or res.status == 429:
             raise Retry(f"intake {res.status} {res.body.get('code')}")
@@ -186,6 +187,14 @@ class Consumer:
                             f"@{ev.sender.login}, the Replicant did not start a job for this issue: "
                             f"`{code}` ({res.status}).")
         return f"refused_{code}"[:60]
+
+    async def linked_principal(self, gitea_user_id: int) -> str | None:
+        """CONFIG: who may trigger comes from identity links (kind gitea), not REPLICANT_DEV_LINKED_LOGINS; whether the
+        linked principal may start a job on the repo is control-plane-api's job:create check (project bindings)."""
+        async with self.engine.begin() as conn:
+            return (await conn.execute(text(
+                "SELECT principal_id FROM identity.links WHERE kind = 'gitea' AND external_id = :e AND status = 'active' "
+                "ORDER BY created_at DESC LIMIT 1"), {"e": str(gitea_user_id)})).scalar()
 
     async def _gitea(self, repo: dict[str, Any], purpose: str, job_id: str | None = None) -> GiteaClient:
         tok = await self.broker.token(repo["installation_id"], repo["repo_id"], purpose, job_id)
@@ -309,11 +318,11 @@ class Consumer:
                 await self.s3.put(bucket, key, json.dumps(payload, sort_keys=True).encode())
             except Exception as e:  # noqa: BLE001
                 raise Retry(f"pr_event_payload write failed: {type(e).__name__}") from None
-        linked = ev.sender.login in self.s.dev_linked_logins
+        linked_pid = await self.linked_principal(ev.sender.id)
         actor: dict[str, Any] = {"github_user_id": max(1, ev.sender.id), "login": ev.sender.login[:64],
-                                 "is_bot": ev.sender.is_bot, "linked": linked}
-        if linked:
-            actor["principal_id"] = dev_principal(ev.sender.login)
+                                 "is_bot": ev.sender.is_bot, "linked": linked_pid is not None}
+        if linked_pid:
+            actor["principal_id"] = linked_pid
         sig: dict[str, Any] = {"schema": "replicant.msg.pr-event/v1", "delivery_id": ev.delivery_id[:64], "event": event,
                                "job_id": job_id, "repo": ev.repo.ref, "pr_number": ev.pull_request.number,
                                "actor": actor, "payload_uri": f"s3://{bucket}/{key}", "received_at": _iso(received_at)}
@@ -337,8 +346,15 @@ def _iso(v: Any) -> str:
     return dt.datetime.now(dt.UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+def requested_type(settings: dict[str, Any]) -> str:
+    """CONFIG: `allowed_workflow_types` of the repo settings; `auto` lets the router decide, else the first allowed."""
+    allowed = list(settings.get("allowed_workflow_types") or ["auto"])
+    return "auto" if "auto" in allowed else str(allowed[0])
+
+
 def build_job_request(ev: NormalizedEvent, *, tenant: str, installation_id: int, label: str, default_branch: str,
-                      received_at: Any) -> dict[str, Any]:
+                      received_at: Any, principal_id: str | None = None,
+                      settings: dict[str, Any] | None = None) -> dict[str, Any]:
     """C-JOBREQ 2.0.0 document for a Gitea issue trigger (triggers.md §1, Gitea row; INTERFACES-LOG CONTROL-04)."""
     assert ev.repo and ev.issue and ev.sender
     text_ = ev.issue.body or ""
@@ -351,15 +367,16 @@ def build_job_request(ev: NormalizedEvent, *, tenant: str, installation_id: int,
         "tenant_id": tenant,
         "source": {"channel": "github", "event_type": ev.kind, "event_id": ev.delivery_id[:200],
                    "github": {"installation_id": int(installation_id), "app_registration": "dev"}},
-        "requester": {"kind": "user", "principal_id": dev_principal(ev.sender.login),
+        "requester": {"kind": "user", "principal_id": principal_id or dev_principal(ev.sender.login),
                       "channel_identity": {"kind": "gitea", "id": str(ev.sender.id), "login": ev.sender.login}},
         "targets": [{"repo": {"provider": "gitea", "host": ev.repo.host, "owner": ev.repo.owner, "name": ev.repo.name,
                               "repo_id": ev.repo.repo_id},
                      "base_ref": default_branch, "issue": {"number": ev.issue.number}}],
         "intent": {"title": (ev.issue.title or f"Issue #{ev.issue.number}")[:256], "text": text_, "format": "markdown",
                    "untrusted": True},
-        "workflow_type": "auto",
-        "priority": "normal",
+        "workflow_type": requested_type(settings or {}),
+        "priority": (settings or {}).get("default_priority") if (settings or {}).get("default_priority") in
+        ("low", "normal", "high") else "normal",
         "received_at": _iso(received_at),
     }
     if ev.issue.html_url:

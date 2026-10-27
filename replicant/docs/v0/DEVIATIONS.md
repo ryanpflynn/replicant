@@ -515,3 +515,80 @@ User request: "a view of the graph in the UI … a detailed view of what the age
 - **FIX-D5 Codec test vector after the rename.** Vector 2 (`replicant-system`) had been encrypted with the old AAD
   `factory-system`, so `test_codec_test_vectors` failed. Its `expected.data_b64` was regenerated in both the spec and
   the worker copies. No other bytes changed.
+
+## WEB-UIPREF (Simple job view and per-user UI preferences, 2026-10-27)
+
+- **WEB-UIPREF-D1 New schema `web` for `web.ui_preferences`.** The spec has no per-user UI preference store, and
+  `notify.preferences` has a closed schema. Migration `202610270001_ui_preferences` creates the schema `web`, roles
+  `r_web_read` / `r_web_write` and the table (shaped like `notify.preferences`: per principal, no tenant RLS). The
+  `web` schema is not in C-PG's 17-schema list, `10-roles-and-grants.sql`, `naming.SCHEMAS` or
+  `ck_migration_log_schema`, so the revision is logged as `multi`. control-plane-api writes it through the existing
+  `svc_cpa_notify` module role (granted `r_web_write`) instead of a new module role; reads go through
+  `svc_cpa_read` (granted `r_web_read`). No ORM model, so `--verify-drift` does not cover it.
+- **WEB-UIPREF-D2 Simple is the default job view.** `/jobs/:id` shows `JobSimple` unless the user chose Detailed;
+  a sub-page link (`/jobs/:id/graph|runs|gates|plan|diff|qa`) always opens the Detailed page it names. The ui/ spec
+  describes only the Detailed job page. The Simple view's six steps are a fixed grouping of the bugfix phase track
+  (`lib/simple.ts` `SIMPLE_STEPS`); another workflow graph would need its own grouping.
+- **WEB-UIPREF-D3 Optimistic concurrency on preferences.** `PUT /v1/me/ui-preferences` honours `If-Match` (or body
+  `version`) and answers 412 `version_mismatch` on a stale version; without either it is last-writer-wins.
+  `PUT /v1/me/notification-preferences` still ignores `version` (unchanged here).
+- **WEB-UIPREF-D4 E2E helper pins the Detailed view.** `e2e/helpers.ts` `as()` now sets the user's job view to
+  `detailed` by default (the 01–06 specs were written for the Detailed page); `07-simple-view.spec.ts` passes `null`.
+
+## CONFIG (team-owned configuration under RBAC, no rebuilds, 2026-10-27)
+
+- **CONFIG-D1 Projects are not in the spec.** `tenancy.projects` and `tenancy.project_repos` (tenant -> project ->
+  repos, one project per repo) exist for ownership and configuration only; cross-repo contracts come later.
+  Migration `202610270010_projects_rbac` (logged as `multi`: tenancy + identity). Job lists stay tenant-granular: a
+  principal with a role on one project of a tenant sees the tenant's job list (`tenants_with`), while project-scoped
+  checks (`repo_ids`, `project_id`) evaluate project bindings.
+- **CONFIG-D2 The policy editor is in the UI, not the config repo.** `ui/admin.md` describes read-only policy screens;
+  `release-bundle.md` §9.1 allows a policy editor. Team settings are versioned rows in
+  `tenancy.project_config_versions` (actor, reason, rollback = a new version copying an old one), not commits to
+  replicant-config. One admin can apply any change: no T1 eval and no two-person rule (ADR-013) for team settings.
+  The publish gate cannot be turned off (I-3, schema-enforced).
+- **CONFIG-D3 Roles come from DB bindings, written by control-plane-api.** `rbac.RoleResolver` builds a user's roles
+  from `identity.role_bindings` (current `role_binding_versions` version) and `identity.memberships`, refreshed every
+  5 s; the dev header supplies identity only. identity-service is not in v0, so control-plane-api's tenancy module
+  role writes `identity.role_bindings` (new grant + RLS policy) for `PUT /v1/projects/{p}/access`, and seed step
+  `09-projects-rbac` writes groups, memberships and binding version 1 as `svc_identity_service` (like step 07).
+  Static dev-directory platform roles are kept as a union (no lockout); static tenant roles are used only until a
+  binding version exists. New role `project_admin` (engineer + approver rights plus `tenant:ops:edit`,
+  `tenant:policy:edit`, `identity:admin` on one project); `tenant_admin` gains `identity:admin`, which is no longer
+  platform-only (the Admin page capability still comes from platform roles). Platform-scope bindings of a tenant
+  role (grace's approver-everywhere) apply to every tenant. New dev user `frank` (project_admin of `prj_ledger`).
+- **CONFIG-D4 Derived bundles for pinned settings.** Gates, risk rules and workflow tuning are compiled at intake
+  onto the job's base bundle into a derived Release Bundle (`registry.release_bundles` row with
+  `base_release_bundle_id`, `request_name = 'project-config'`, `request_digest = sha256(JCS({base, pinned}))`,
+  reused for the same pair; assignment reason gets `+layer`). The derived bundle is taken to `promoted` through the
+  normal transitions without an eval (it inherits the base's promotion). `registry.tenant_layers` /
+  `derived_bundles` (keyed by tenant layer version) are not used. Graph `params` and `maxVisits` overrides are
+  compiled into the derived graph definition by control-plane-api (`max_review_rounds` sets the review node's
+  `maxVisits`), so the worker only follows `spec.graphs`; it does not apply params itself. A project whose pinned
+  settings equal the defaults keeps the base bundle (so E2E-01/04 run on the default bundle unchanged).
+- **CONFIG-D5 Worker behaviour from the bundle.** `risk.classify` reads `risk_rules` (`large_change_files`, default 20;
+  `sensitive_paths` -> at least high; `forbidden_paths`, also enforced by `verifier.check`); both activities now
+  receive `release_bundle_id` (inputs without it use the former constants). `graph.compose` uses the bundle's
+  `spec.graphs` mapping (`GRAPH_FILES` only as default). The worker publishes its NodeCatalog to
+  `registry/nodecatalogs/replicant-worker/<build>.json` at start; `config:validate` rejects node types not in it and
+  checks node configs against their `configSchema` (falls back to the base graphs' node types when absent). The
+  built-in-set fallback for a missing bundle pointer now applies only to this build's base dev bundle (or with no
+  build id, unit tests); any other `rb_` fails retryably. The worker image was rebuilt once with the same
+  `REPLICANT_WORKER_BUILD_ID` (the changes are additive activity inputs, replay-safe), so the default bundle was not
+  re-registered.
+- **CONFIG-D6 Live trigger settings.** `PUT .../config` pushes the effective trigger settings of every repo of the
+  project to github-integration's existing `PUT /internal/v1/repo-settings`, which now also accepts control-plane-api's
+  notify delivery token (`updated_by` = the acting user). github-integration resolves who may trigger through
+  `identity.links` (kind gitea, active) instead of `REPLICANT_DEV_LINKED_LOGINS` (setting kept, unused); whether that
+  principal may start a job is control-plane-api's `job:create` check with project bindings plus the project's
+  `min_trigger_role`. `allowed_workflow_types` (`auto` when allowed, else the first type) and `default_priority` are
+  honoured in the job request. Approver groups (`approvals.approver_groups`) narrow gate deciders in
+  `routes_gates.py` and notify's approver fan-out; `approvals.slack_channel` overrides the tenant's Slack approval
+  channel. Live settings are cached for 3 s (`LiveConfig`).
+- **CONFIG-D7 Whole-document writes.** `PUT /v1/projects/{p}/config` replaces the project-level document (sections
+  left out fall back to the defaults); the UI always sends the whole draft. Audit events
+  `admin.project_config_changed`, `admin.project_access_changed`, `admin.project_created`, `admin.project_changed`
+  carry the reason in `details` (the audit `reason` column is an enum).
+- **CONFIG-D8 E2E-05 on the scripted gateway.** `.env` `REPLICANT_GATEWAY_MODE` was switched to `script` for the
+  E2E runs; the e2e asserts every container's image ID and start time and every `localhost/replicant/*` image ID are
+  unchanged across the config steps.

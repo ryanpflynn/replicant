@@ -54,6 +54,12 @@ export function Rail() {
         <NavItem to="/jobs?view=mine" icon="mine" label="My jobs" count={mineOpen} active={p === "/jobs" && view === "mine"} />
         <NavItem to="/approvals" icon="approvals" label="Approvals" count={nInbox ? nInbox : null} attn={nInbox > 0}
           active={p.startsWith("/approvals")} />
+        {me?.projects?.length ? (
+          <>
+            <div className="group caps">Teams</div>
+            <NavItem to="/projects" icon="projects" label="Projects" count={me.projects.length} active={p.startsWith("/projects")} />
+          </>
+        ) : null}
         {hasCap(me, "release:read") ? (
           <>
             <div className="group caps">Platform</div>

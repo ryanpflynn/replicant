@@ -268,6 +268,7 @@ class RiskClassify(NodeType):
     async def run(self, ctx: NodeContext, config: dict[str, Any]) -> NodeResult:
         s = ctx.s
         det = await ctx.act("risk.classify", {"job_id": s.job_id, "tenant_id": s.tenant_id,
+                                              "release_bundle_id": s.release_bundle_id,
                                               "stage": config["stage"], "refs": dict(s.refs),
                                               "targets": s.targets, "workflow_type": s.workflow_type})
         level, rules, raised = det["level"], list(det["rules_fired"]), False
@@ -332,6 +333,7 @@ class Verifier(NodeType):
 
     async def run(self, ctx: NodeContext, config: dict[str, Any]) -> NodeResult:
         r = await ctx.act("verifier.check", {"job_id": ctx.s.job_id, "tenant_id": ctx.s.tenant_id,
+                                             "release_bundle_id": ctx.s.release_bundle_id,
                                              "refs": dict(ctx.s.refs), "checks": config.get("checks"),
                                              "paths_scope": ctx.s.request_summary.get("paths")})
         ctx.set_ref("verification_report_uri", r.get("report_uri"))

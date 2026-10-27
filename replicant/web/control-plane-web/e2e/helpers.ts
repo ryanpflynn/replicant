@@ -9,8 +9,15 @@ export const env = (k: string) => {
   return v;
 };
 
-/** Dev identity and theme are per-browser preferences (localStorage), set before the app boots. */
-export async function as(page: Page, user: string, theme: "light" | "dark" = "light") {
+/** Dev identity and theme are per-browser preferences (localStorage), set before the app boots. The job view is a
+ * per-user server preference (WEB-UIPREF, default Simple): the screen specs written for the Detailed job page set it
+ * to "detailed" (the default here); pass null to leave the user's stored choice alone. */
+export async function as(page: Page, user: string, theme: "light" | "dark" = "light",
+                         jobView: "simple" | "detailed" | null = "detailed") {
+  if (jobView) {
+    const r = await page.request.put("/v1/me/ui-preferences", { headers: { "X-Replicant-Dev-User": user }, data: { job_view: jobView } });
+    expect(r.ok(), `PUT /v1/me/ui-preferences ${user} -> ${r.status()}`).toBe(true);
+  }
   await page.addInitScript(([u, t]) => {
     localStorage.setItem("replicant.devUser", u);
     localStorage.setItem("replicant.theme", t);

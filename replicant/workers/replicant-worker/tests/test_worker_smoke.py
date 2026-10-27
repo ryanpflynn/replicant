@@ -236,7 +236,8 @@ def env(tmp_path, monkeypatch):
     kf.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
     for k, v in {"REPLICANT_ENV": "local", "REPLICANT_RUN_GRANT_KEY_FILE": str(kf), "REPLICANT_RUNNER_URL": "http://runner.test",
                  "REPLICANT_GATEWAY_URL": "http://runner.test", "REPLICANT_CONTROL_PLANE_URL": "http://runner.test",
-                 "REPLICANT_GATEWAY_SCRIPT_SET": "ledger-api-v0", "REPLICANT_LOCAL_REGISTRY_PUBLISH": "false"}.items():
+                 "REPLICANT_GATEWAY_SCRIPT_SET": "ledger-api-v0", "REPLICANT_LOCAL_REGISTRY_PUBLISH": "false",
+                 "REPLICANT_BUNDLE_FALLBACK_ANY": "true"}.items():  # CONFIG-D5: arbitrary rb_ in tests
         monkeypatch.setenv(k, v)
     config.settings.cache_clear()
     grants.signer.cache_clear()

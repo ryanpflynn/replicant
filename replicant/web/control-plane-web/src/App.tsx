@@ -8,6 +8,7 @@ import { Approvals } from "./screens/Approvals";
 import { Waiting } from "./screens/Waiting";
 import { Releases } from "./screens/Releases";
 import { Admin, Memory } from "./screens/Admin";
+import { ProjectSettings, Projects } from "./screens/ProjectSettings";
 import { hasCap, useMe, useSession, useWaiting } from "./lib/session";
 import { badgeCount, titleWithCount } from "./lib/waiting";
 import { Link, match, useRouter } from "./router";
@@ -22,6 +23,8 @@ function Routes() {
   if (p === "/waiting") return <Waiting />;
   if ((m = match("/approvals/:gateId?", p))) return <Approvals gateId={m.gateId} />;
   if (p.startsWith("/releases")) return <Releases />;
+  if ((m = match("/projects/:projectId/settings/:tab?", p))) return <ProjectSettings key={m.projectId} projectId={m.projectId} tab={m.tab} />;
+  if (p === "/projects") return <Projects />;
   if (p.startsWith("/admin/memory")) return <Memory />;
   if (p === "/admin") return <Admin />;
   return (

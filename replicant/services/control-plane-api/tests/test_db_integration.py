@@ -256,3 +256,85 @@ async def test_bundle_registry_objects_follow_cdef(env):
     async with app.state.db.tx(role="svc_cpa_registry") as conn:
         rb, digest, _ = await registry.register_bundle(conn, app.state.db, doc, "svc_dev-seeder", w)
     assert read_bundle_spec(store[f"bundles/{rb}.json"], store.__getitem__) == (rb, spec)
+
+
+# ------------------------------------------------------------------------------------------- WEB-UIPREF
+async def test_ui_preferences_versioned_per_user(env):
+    c, *_ = env
+    login = "erin"
+    db = c._transport.app.state.db  # type: ignore[attr-defined]
+    async with db.tx(role="svc_cpa_notify") as conn:          # fresh state for the test user
+        await conn.execute(text("DELETE FROM web.ui_preferences WHERE principal_id = :p"),
+                           {"p": dev_user_principal(login)})
+    h = {"X-Replicant-Dev-User": login}
+    r = await c.get("/v1/me", headers=h)
+    assert r.status_code == 200 and r.json()["ui_preferences"] == {"job_view": "simple"}
+    r = await c.get("/v1/me/ui-preferences", headers=h)
+    assert r.json() == {"job_view": "simple", "version": 0} and r.headers["etag"] == '"0"'
+    r = await c.put("/v1/me/ui-preferences", headers={**h, "If-Match": '"0"'}, json={"job_view": "detailed"})
+    assert r.status_code == 200 and r.json() == {"job_view": "detailed", "version": 1}, r.text
+    # a stale version (body or If-Match) is refused, not silently applied
+    r = await c.put("/v1/me/ui-preferences", headers=h, json={"job_view": "simple", "version": 0})
+    assert r.status_code == 412 and r.json()["code"] == "version_mismatch" and r.headers["etag"] == '"1"'
+    r = await c.put("/v1/me/ui-preferences", headers={**h, "If-Match": '"7"'}, json={"job_view": "simple"})
+    assert r.status_code == 412
+    assert (await c.get("/v1/me", headers=h)).json()["ui_preferences"] == {"job_view": "detailed"}
+    r = await c.put("/v1/me/ui-preferences", headers=h, json={"job_view": "simple", "version": 1})
+    assert r.status_code == 200 and r.json()["version"] == 2
+    r = await c.put("/v1/me/ui-preferences", headers=h, json={"job_view": "detailed"})   # no version: upsert
+    assert r.status_code == 200 and r.json()["version"] == 3
+    r = await c.put("/v1/me/ui-preferences", headers=h, json={"job_view": "nope"})
+    assert r.status_code == 422
+    # per user: another user is unaffected
+    other = {"X-Replicant-Dev-User": "alice"}
+    async with db.tx(role="svc_cpa_notify") as conn:
+        await conn.execute(text("DELETE FROM web.ui_preferences WHERE principal_id = :p"),
+                           {"p": dev_user_principal("alice")})
+    assert (await c.get("/v1/me", headers=other)).json()["ui_preferences"] == {"job_view": "simple"}
+
+
+# ------------------------------------------------------------------------------------------- CONFIG-01
+async def test_project_config_versions_if_match_rbac_and_rollback(env):
+    c, fake, seed_h, *_ = env
+    pid, repo = f"prj_t{secrets.token_hex(4)}", str(900000 + secrets.randbelow(99999))
+    r = await c.post("/v1/tenants/payments/projects", headers=seed_h, json={
+        "project_id": pid, "name": "Test", "repos": [{"repo_id": repo, "full_name": "acme-payments/t"}]})
+    assert r.status_code == 201 and r.json()["repos"][0]["repo_id"] == repo, r.text
+    r = await c.post("/v1/tenants/payments/projects", headers=seed_h, json={
+        "project_id": f"{pid}b", "name": "Other", "repos": [{"repo_id": repo, "full_name": "acme-payments/t"}]})
+    assert r.status_code == 409 and r.json()["code"] == "repo_in_other_project"
+    erin, dave, alice = ({"X-Replicant-Dev-User": u} for u in ("erin", "dave", "alice"))
+    doc = (await c.get(f"/v1/projects/{pid}/config", headers=dave)).json()
+    assert doc["version"] == 0 and doc["can_edit"] == {"live": False, "pinned": False}
+    assert (await c.get(f"/v1/projects/{pid}/config", headers=erin)).json()["can_edit"] == {"live": True, "pinned": True}
+    v1 = {"gates": {"plan": "always"}, "risk": {"large_change_files": 0}}
+    r = await c.put(f"/v1/projects/{pid}/config", headers=erin, json={"config": v1, "reason": "r"})
+    assert r.status_code == 428
+    r = await c.put(f"/v1/projects/{pid}/config", headers={**erin, "If-Match": "0"}, json={"config": v1, "reason": "r1"})
+    assert r.status_code == 200 and r.json()["written_version"] == 1, r.text
+    assert {ch["applies"] for ch in r.json()["changes"]} == {"new_jobs"}
+    r = await c.put(f"/v1/projects/{pid}/config", headers={**erin, "If-Match": "0"}, json={"config": {}, "reason": "x"})
+    assert r.status_code == 412 and r.json()["current_version"] == 1
+    r = await c.put(f"/v1/projects/{pid}/config", headers={**dave, "If-Match": "1"}, json={"config": {}, "reason": "x"})
+    assert r.status_code == 403
+    r = await c.put(f"/v1/projects/{pid}/config", headers={**erin, "If-Match": "1"},
+                    json={"config": {"gates": {"publish": "off"}}, "reason": "x"})
+    assert r.status_code == 422 and r.json()["code"] == "invalid_config"
+    r = await c.put(f"/v1/projects/{pid}/config", headers={**erin, "If-Match": "1"}, json={"config": {}, "reason": "r2"})
+    assert r.json()["written_version"] == 2 and r.json()["effective"]["gates"]["plan"] == "off"
+    r = await c.post(f"/v1/projects/{pid}/config:rollback", headers=erin, json={"version": 1, "reason": "back"})
+    assert r.status_code == 200 and r.json()["written_version"] == 3 and r.json()["config"] == v1
+    hist = r.json()["history"]
+    assert [h["version"] for h in hist] == [3, 2, 1] and hist[0]["rolled_back_from"] == 1 and hist[0]["is_current"]
+    r = await c.post(f"/v1/projects/{pid}/config:validate", headers=alice, json={"config": {"triggers": {"label": "go"}}})
+    assert r.status_code == 200 and {ch["path"]: ch["applies"] for ch in r.json()["changes"]}["triggers.label"] == "live"
+    # live: min_trigger_role is enforced at intake for the project's repo (alice is an engineer)
+    r = await c.put(f"/v1/projects/{pid}/config", headers={**erin, "If-Match": "3"},
+                    json={"config": {"triggers": {"min_trigger_role": "approver"}}, "reason": "approvers only"})
+    assert r.status_code == 200
+    jr = job_request("alice")
+    jr["targets"][0]["repo"]["repo_id"] = repo
+    r = await c.post("/v1/jobs", headers={"X-Replicant-Dev-User": "alice", "Idempotency-Key": ulid("x")}, json=jr)
+    assert r.status_code == 403 and "higher role" in r.json().get("detail", ""), r.text
+    assert (await c.get(f"/v1/projects/{pid}", headers=dave)).status_code == 200
+    assert (await c.get("/v1/projects/prj_nope", headers=erin)).status_code == 404

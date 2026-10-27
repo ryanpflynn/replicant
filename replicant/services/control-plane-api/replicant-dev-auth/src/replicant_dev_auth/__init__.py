@@ -29,6 +29,8 @@ DEV_USERS: dict[str, dict[str, Any]] = {
     "dave": {"groups": ["payments-engineers"], "platform_roles": [], "tenant_roles": {"payments": ["viewer"]}},
     "erin": {"groups": ["payments-engineers", "payments-admins"], "platform_roles": [],
              "tenant_roles": {"payments": ["tenant_admin"]}},
+    # CONFIG: project admin of prj_ledger only (role from the DB binding ledger-admins -> project_admin)
+    "frank": {"groups": ["ledger-admins"], "platform_roles": [], "tenant_roles": {}},
 }
 DEV_USER_HEADER = "x-replicant-dev-user"
 

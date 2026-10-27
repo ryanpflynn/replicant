@@ -55,7 +55,9 @@ class AuthContext:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.directory = PrincipalLookup()
-        self.evaluator = Evaluator(self.directory)
+        from control_plane_api.rbac import RoleResolver
+        self.rbac = RoleResolver(None)           # attach_db() wires the DB snapshot (app factory)
+        self.evaluator = Evaluator(self.directory, self.rbac)
         self.authenticators: list[Authenticator] = []
         self._internal: dict[str, Principal] = {}
         if settings.internal_caller_tokens_file:
@@ -70,6 +72,12 @@ class AuthContext:
             except FileNotFoundError:
                 log.warning("internal caller tokens file not found; no internal callers")
         self.authenticators.append(self._bearer_internal)
+
+    def attach_db(self, db: Any) -> None:
+        self.rbac.db = db
+
+    def effective(self, principal: Principal) -> Principal:
+        return self.rbac.effective(principal)
 
     def _bearer_internal(self, request: Request) -> Principal | None:
         tok = bearer(request)
@@ -104,17 +112,23 @@ async def current_principal(request: Request) -> Principal:
     p = ctx.authenticate(request)
     if p is None:
         raise ProblemError(401, "unauthenticated", headers={"WWW-Authenticate": "Bearer"})
+    if p.is_user:
+        await ctx.rbac.refresh()
+        p = ctx.rbac.effective(p)
     request.state.principal = p
     return p
 
 
 def check(ctx: AuthContext, principal: Principal, permission: str, *, tenant_id: str | None = None,
-          repo_ids: tuple[str, ...] = (), job_id: str | None = None) -> bool:
+          repo_ids: tuple[str, ...] = (), job_id: str | None = None, project_id: str | None = None) -> bool:
     """`permission` may list alternatives `a|b` (OpenAPI x-replicant-permission)."""
     for alt in permission.split("|"):
         if alt in ("public", "authenticated"):
             return True
-        if ctx.evaluator.authorize(AuthorizeRequest(principal.principal_id, alt, tenant_id, repo_ids, job_id)).allowed:
+        if alt in principal.permissions:
+            return True
+        if ctx.evaluator.authorize(AuthorizeRequest(principal.principal_id, alt, tenant_id, repo_ids, job_id,
+                                                    project_id=project_id)).allowed:
             return True
     return False
 

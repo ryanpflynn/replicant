@@ -182,7 +182,25 @@ class NotifyService:
         p = self.auth.directory.get(principal_id) if principal_id else None
         return p.login if p is not None else None
 
-    async def approval_channel(self, tenant_id: str) -> str | None:
+    async def project_cfg(self, repo_id: str | None) -> dict[str, Any] | None:
+        lc = getattr(self, "live_config", None)
+        v = await lc.for_repo(repo_id) if lc is not None and repo_id else None
+        return v[2] if v else None
+
+    async def project_approvers(self, ctx: Any, tenant_id: str, may: bool, suggested: str | None) -> list[str]:
+        """CONFIG (live): eligible approvers scoped to the job's repo (project bindings) and the project's approver
+        groups, when set."""
+        from control_plane_api.projects import approver_ok
+        repo_id = (ctx.repo or {}).get("repo_id")
+        eff = await self.project_cfg(repo_id)
+        ids = self.eligible_approvers(tenant_id, ctx.requester, may, suggested,
+                                      repo_ids=(str(repo_id),) if repo_id else ())
+        return [p for p in ids if approver_ok(self.auth.effective(self.auth.directory.get(p)), eff)]
+
+    async def approval_channel(self, tenant_id: str, repo_id: str | None = None) -> str | None:
+        eff = await self.project_cfg(repo_id) if repo_id else None
+        if eff and (eff.get("approvals") or {}).get("slack_channel"):
+            return eff["approvals"]["slack_channel"]   # CONFIG: the project's Slack approval channel (live)
         """tenancy.tenant_settings `approval_targets.slack.approval_channel` (operational config, ADR-013): the
         channel that gets one thread per job (NOTIFY-D13). None = no channel posts for this tenant."""
         async with self.db.tx(scope=OPERATOR_SCOPE) as conn:
@@ -200,7 +218,7 @@ class NotifyService:
 
     def user_principal(self, principal_id: str) -> Any:
         p = self.auth.directory.get(principal_id)
-        return p if p is not None and p.is_user else None
+        return self.auth.effective(p) if p is not None and p.is_user else None
 
     async def waiting_count(self, principal_id: str) -> int:
         p = self.user_principal(principal_id)
@@ -210,15 +228,16 @@ class NotifyService:
         return [p for p in self.auth.directory.all() if p.is_user]
 
     def eligible_approvers(self, tenant_id: str, requester: str | None, requester_may_decide: bool,
-                           suggested: str | None = None) -> list[str]:
+                           suggested: str | None = None, repo_ids: tuple[str, ...] = ()) -> list[str]:
         out = [p.principal_id for p in self.users()
-               if check(self.auth, p, "gate:decide", tenant_id=tenant_id)
+               if check(self.auth, p, "gate:decide", tenant_id=tenant_id, repo_ids=repo_ids)
                and (requester_may_decide or p.principal_id != requester)]
         out.sort(key=lambda x: (x != suggested, self.login_of(x) or x))
         return out[: self.ns.max_dm_recipients]
 
     def tenant_admins(self, tenant_id: str) -> list[str]:
-        return sorted(p.principal_id for p in self.users() if "tenant_admin" in p.tenant_roles.get(tenant_id, ()))
+        return sorted(p.principal_id for p in map(self.auth.effective, self.users())
+                      if "tenant_admin" in p.tenant_roles.get(tenant_id, ()))
 
     async def publish_approvers(self, job_id: str) -> list[str]:
         async with self.db.tx(scope=OPERATOR_SCOPE) as conn:
@@ -330,9 +349,9 @@ class NotifyService:
             g = await self.gate_row(gate_id) if gate_id else None
             gf = self.gate_facts(gate_id or "", g, ctx, v.get("kind"), v)
             may = bool(g.requester_may_decide) if g is not None else False
-            approvers = self.eligible_approvers(tenant, ctx.requester, may, g.suggested_approver if g is not None else None)
+            approvers = await self.project_approvers(ctx, tenant, may, g.suggested_approver if g is not None else None)
             gsubj = f"{gate_id}:{intent}"
-            chan = await self.approval_channel(tenant)
+            chan = await self.approval_channel(tenant, (ctx.repo or {}).get("repo_id"))
             if ek == "gate.opened":
                 plans += [Planned(p, "gate.requested", R.gate_requested(f, gf), gsubj, job_id, gate_id) for p in approvers]
                 if chan:
@@ -373,14 +392,14 @@ class NotifyService:
         elif ek == "job.pr_opened":
             if ctx.requester:
                 plans.append(Planned(ctx.requester, "job.pr_opened", R.pr_opened(f), job_id, job_id))
-            if (chan := await self.approval_channel(tenant)):
+            if (chan := await self.approval_channel(tenant, (ctx.repo or {}).get("repo_id"))):
                 plans.append(self.thread_plan(chan, ctx, ek, R.pr_opened(f), job_id))
         elif ek.startswith("job.") and ek[4:] in TERMINAL_KINDS:
             kind = ek[4:]
             msg = R.succeeded(f) if kind == "succeeded" else R.failed(f) if kind == "failed" else R.ended(f, kind)
             if ctx.requester:
                 plans.append(Planned(ctx.requester, ek, msg, job_id, job_id))
-            if (chan := await self.approval_channel(tenant)):
+            if (chan := await self.approval_channel(tenant, (ctx.repo or {}).get("repo_id"))):
                 plans.append(self.thread_plan(chan, ctx, ek, msg, job_id))
         elif ek == "job.pr_waiting_for_review":
             # The workflow's own PR-wait reminders (repair_limits.pr_wait.reminder_days) are folded into the

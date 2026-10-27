@@ -6,51 +6,16 @@ import { Avatar, Banner, Empty, ErrorBanner, Ext, Id, Kbd, Pill, Quote, Risk, St
 import { DiffSection, HandoffSection, PlanSection, QASection, ReviewSection, RulesSection } from "../components/Packet";
 import { CancelDialog, SteerDialog, useControl } from "./JobActions";
 import { activityHref, GraphTab } from "./JobGraph";
-import { ApiError, get, lagSeconds, request } from "../lib/api";
-import { personName, hasCap, useDirectory, useMe, useSession } from "../lib/session";
+import { ApiError, get } from "../lib/api";
+import { personName, hasCap, useDirectory, useJobView, useMe, useSession } from "../lib/session";
 import { age, clock, dateTime, duration, humanize, parseTs, timeLeft, usd } from "../lib/format";
 import { gateStatus, jobStatus, OUTCOME_WORDS, runStatus, TERMINAL, type Family } from "../lib/status";
 import { browserGitUrl, grafanaContainersUrl, grafanaJobUrl, repoName, repoUrl, temporalWorkflowUrl } from "../lib/config";
 import { Link } from "../router";
+import { stageStates } from "../lib/simple";
+import { useJobDetail, useTimeline } from "../lib/jobs";
+import { JobSimple, ViewToggle } from "./JobSimple";
 import type { GateDetail, GateView, JobDetail as JobDetailT, JobSnapshot, Me, RunView, TimelineEvent } from "../lib/types";
-
-// Phase track for the bugfix graph (ui/job-detail.md (2)): stage → node keys of replicant-worker's ReplicantJob.
-const STAGES: Array<{ label: string; nodes: string[]; gate?: boolean }> = [
-  { label: "routing", nodes: ["__routed"] },
-  { label: "context", nodes: ["context"] },
-  { label: "planning", nodes: ["plan", "risk_plan"] },
-  { label: "plan gate", nodes: ["plan_gate"], gate: true },
-  { label: "implementing", nodes: ["implement", "repair"] },
-  { label: "qa", nodes: ["qa"] },
-  { label: "review", nodes: ["review"] },
-  { label: "verify", nodes: ["verify", "risk_diff"] },
-  { label: "publish gate", nodes: ["publish_gate"], gate: true },
-  { label: "publishing", nodes: ["base_check", "publish"] },
-  { label: "pr review", nodes: ["pr_wait"] },
-];
-
-function stageStates(tl: TimelineEvent[], s: JobSnapshot): Array<{ label: string; gate?: boolean; st: string; title?: string }> {
-  const started = new Set<string>();
-  const done = new Map<string, string>();
-  for (const e of tl) {
-    const n = e.refs?.node_key;
-    if (e.type === "job.routed") { started.add("__routed"); done.set("__routed", "routed"); }
-    if (n && e.type === "node.started") started.add(n);
-    if (n && e.type === "node.completed") done.set(n, e.summary.split(": ").slice(1).join(": "));
-  }
-  const terminal = TERMINAL.has(s.status);
-  return STAGES.map((g) => {
-    const anyStarted = g.nodes.some((n) => started.has(n));
-    const allDone = anyStarted && g.nodes.filter((n) => started.has(n)).every((n) => done.has(n));
-    const outcome = g.nodes.map((n) => done.get(n)).filter(Boolean).join(", ");
-    let st = "";
-    if (allDone) st = "done";
-    else if (anyStarted) st = terminal ? (s.status === "succeeded" ? "done" : s.status === "failed" ? "fail" : "skip") : (g.gate && s.status === "waiting_human" ? "wait" : "now");
-    if (g.label === "pr review" && s.status === "succeeded") st = "done";
-    if (allDone && g.gate && /not_required/.test(outcome)) st = "skip";
-    return { label: g.label, gate: g.gate, st, title: outcome || undefined };
-  });
-}
 
 interface Row { key: string; at: string; glyph: string; family: Family; body: ReactNode; right?: ReactNode; cls?: string }
 
@@ -230,29 +195,21 @@ function GatesTab({ gates, dir }: { gates: GateView[]; dir: Map<string, string> 
 const TABS = ["timeline", "graph", "runs", "gates", "plan", "diff", "qa"] as const;
 type Tab = (typeof TABS)[number];
 
-export function JobDetail({ jobId, tab: tabParam }: { jobId: string; tab?: string }) {
+/** WEB-UIPREF: /jobs/:id follows the user's job view (Simple unless they chose Detailed); a sub-page link
+ * (/jobs/:id/graph, /runs, ...) always opens the Detailed view it names. */
+export function JobDetail({ jobId, tab }: { jobId: string; tab?: string }) {
+  const { view } = useJobView();
+  if (!tab && view === "simple") return <JobSimple jobId={jobId} />;
+  return <JobDetailed jobId={jobId} tab={tab} />;
+}
+
+function JobDetailed({ jobId, tab: tabParam }: { jobId: string; tab?: string }) {
   const { user } = useSession();
   const me = useMe().data;
   const dir = useDirectory();
   const tab: Tab = (TABS as readonly string[]).includes(tabParam ?? "") ? (tabParam as Tab) : "timeline";
-  const job = useQuery({
-    queryKey: ["job", user, jobId], refetchInterval: 4000,
-    queryFn: async () => { const r = await request<JobDetailT>(`/v1/jobs/${jobId}`); return { ...r.data, lag: lagSeconds(r.headers) }; },
-  });
-  const tl = useQuery({
-    queryKey: ["timeline", user, jobId], refetchInterval: 4000, enabled: job.isSuccess,
-    queryFn: async () => {
-      const out: TimelineEvent[] = [];
-      let after = 0;
-      for (let i = 0; i < 20; i++) {
-        const page = await get<{ items: TimelineEvent[] }>(`/v1/jobs/${jobId}/timeline?after_seq=${after}&limit=200`);
-        out.push(...page.items);
-        if (page.items.length < 200) break;
-        after = page.items[page.items.length - 1].seq;
-      }
-      return out;
-    },
-  });
+  const job = useJobDetail(jobId);
+  const tl = useTimeline(jobId, job.isSuccess);
   const runsQ = useQuery({ queryKey: ["runs", user, jobId], refetchInterval: 4000, enabled: job.isSuccess,
     queryFn: () => get<{ items: RunView[] }>(`/v1/jobs/${jobId}/runs`) });
   const [dialog, setDialog] = useState<null | "cancel" | "steer" | "pause">(null);
@@ -337,6 +294,9 @@ export function JobDetail({ jobId, tab: tabParam }: { jobId: string; tab?: strin
                 <span className="sep" />
                 <span className="t3">{s.workflow_type}{created ? ` · started ${dateTime(created)}` : ""}{elapsed != null ? ` · ${duration(elapsed)}` : ""}</span>
               </div>
+            </div>
+            <div className="acts">
+              <ViewToggle jobId={jobId} />
             </div>
             {control ? (
               <div className="acts">

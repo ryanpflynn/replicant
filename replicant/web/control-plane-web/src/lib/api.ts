@@ -10,6 +10,7 @@ export const DEV_USERS: DevUser[] = [
   { login: "carol", name: "Carol", role: "replicant-admins · operator" },
   { login: "dave", name: "Dave", role: "payments · viewer" },
   { login: "erin", name: "Erin", role: "payments · tenant admin" },
+  { login: "frank", name: "Frank", role: "Ledger project · project admin" },
 ];
 
 const USER_KEY = "replicant.devUser";

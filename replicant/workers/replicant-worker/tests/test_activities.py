@@ -501,3 +501,41 @@ def test_catalog_covers_every_replicant_worker_activity() -> None:
                "gates.build_packet", "gates.write_approval_record", "identity.check_decision", "notify.gate_opened",
                "notify.gate_resolved", "artifacts.expire_session_state", "memory.record_outcome", "memory.write_episode"}
     assert v0_path <= set(catalog_impl.implemented())
+
+
+# ------------------------------------------------------------------------------------------------ CONFIG: bundle rules
+def test_risk_and_verifier_read_bundle_rules(env) -> None:
+    key = f"tenants/{T}/jobs/{JOB}/runs/run_dddddddddddddddddddddddddd/diff_bundle/changes.tar.zst"
+    env["s3"].objs[(ART, key)] = diff_bundle({"internal/ledger/ledger.go": "fixed", "db/schema.sql": "x"})
+    refs = {"latest_diff_bundle_uri": f"s3://{ART}/{key}"}
+    b = bundle._local("rb_cfgtestaaaaaaaaaaaaaaaaaaaa")
+    pol = {"apiVersion": "replicant.example.com/v1", "kind": "Policy", "metadata": {"name": "risk-rules-cx"},
+           "spec": {"policyType": "risk_rules", "large_change_files": 0, "sensitive_paths": [],
+                    "forbidden_paths": ["db/**"]}}
+    b.docs["policy/risk-rules-cx@1"], b.digests["policy/risk-rules-cx@1"] = pol, "sha256:" + "a" * 64
+    bundle._cache[b.release_bundle_id] = b
+    a = {"job_id": JOB, "tenant_id": T, "stage": "diff", "refs": refs, "targets": [], "workflow_type": "bugfix"}
+    assert run(core.risk_classify, a)["level"] == "low"                              # no bundle id: the defaults
+    r = run(core.risk_classify, {**a, "release_bundle_id": b.release_bundle_id})
+    assert r["level"] == "medium" and "size.files_over_0" in r["rules_fired"]
+    pol["spec"]["sensitive_paths"] = ["db/**"]
+    assert run(core.risk_classify, {**a, "release_bundle_id": b.release_bundle_id})["level"] == "high"
+    v = run(core.verifier_check, {"job_id": JOB, "tenant_id": T, "refs": refs, "checks": None, "paths_scope": [],
+                                  "release_bundle_id": b.release_bundle_id})
+    assert not v["passed"] and v["findings"] == 1
+
+
+def test_graph_through_bundle_mapping_and_fallback_gap(monkeypatch) -> None:
+    b = bundle._local("rb_cfgtestbbbbbbbbbbbbbbbbbbbb")
+    ref, doc = b._by("graph", "bugfix")
+    tuned = copy.deepcopy(doc)
+    tuned["metadata"]["name"] = "bugfix-c0123456789"
+    b.docs["graph/bugfix-c0123456789@1"], b.digests["graph/bugfix-c0123456789@1"] = tuned, "sha256:" + "b" * 64
+    assert b.graph_for("bugfix")[0]["name"] == "bugfix"                               # no mapping: GRAPH_FILES
+    b.graph_refs = {"bugfix": "graph/bugfix-c0123456789@1"}
+    assert b.graph_for("bugfix")[0]["name"] == "bugfix-c0123456789"
+    assert b.risk_rules() == bundle.RISK_DEFAULTS
+    monkeypatch.setenv("REPLICANT_WORKER_BUILD_ID", "b20261024-000000000000")
+    monkeypatch.delenv("REPLICANT_BUNDLE_FALLBACK_ANY", raising=False)
+    base_rb = local_bundle.bundle_registry_objects("b20261024-000000000000")[0]
+    assert bundle._fallback_allowed(base_rb) and not bundle._fallback_allowed("rb_someotherbundleaaaaaaaaaa")

@@ -21,6 +21,7 @@ from replicant_worker.activities import s3
 
 log = logging.getLogger("replicant_worker.bundle")
 _lock = threading.Lock()
+RISK_DEFAULTS: dict[str, Any] = {"large_change_files": 20, "sensitive_paths": [], "forbidden_paths": []}
 _cache: dict[str, "Bundle"] = {}
 _blob_cache: dict[str, dict[str, Any]] = {}
 
@@ -31,6 +32,7 @@ class Bundle:
     source: str  # registry | local
     docs: dict[str, dict[str, Any]] = field(default_factory=dict)  # ref -> envelope
     digests: dict[str, str] = field(default_factory=dict)  # ref -> sha256:<hex>
+    graph_refs: dict[str, str] = field(default_factory=dict)  # workflow type -> graph ref (spec.graphs; CONFIG)
 
     def _by(self, kind: str, name: str) -> tuple[str, dict[str, Any]]:
         for ref, doc in self.docs.items():
@@ -50,6 +52,20 @@ class Bundle:
     def graph(self, file_name: str) -> tuple[dict[str, Any], dict[str, Any]]:
         ref, doc = self._by("graph", file_name)
         return self.pinned(ref), doc
+
+    def graph_for(self, workflow_type: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        """The bundle's graph for a workflow type through `spec.graphs` (derived bundles map a type to a tuned or
+        custom definition, CONFIG-D4); GRAPH_FILES is only the default for bundles without the mapping."""
+        ref = self.graph_refs.get(workflow_type)
+        if ref and ref in self.docs:
+            return self.pinned(ref), self.docs[ref]
+        return self.graph(local_bundle.GRAPH_FILES[workflow_type])
+
+    def risk_rules(self) -> dict[str, Any]:
+        """The bundle's risk_rules policy (CONFIG); today's constants are the defaults."""
+        r = dict(RISK_DEFAULTS)
+        r.update({k: v for k, v in (self.policies().get("risk_rules") or {}).items() if k in RISK_DEFAULTS})
+        return r
 
     def pinned(self, ref: str) -> dict[str, Any]:
         kn, _, ver = ref.partition("@")
@@ -97,7 +113,8 @@ def _from_registry(rb: str) -> Bundle | None:
         raise ApplicationError(f"pointer {rb} names {got_rb}", type="DefinitionDigestMismatch", non_retryable=True)
     refs: list[dict[str, Any]] = [*spec.get("agents", []), *spec.get("environments", []), *spec.get("policies", []),
                                   *spec.get("graphs", {}).values()]
-    b = Bundle(release_bundle_id=rb, source="registry")
+    b = Bundle(release_bundle_id=rb, source="registry",
+               graph_refs={wt: g["ref"] for wt, g in (spec.get("graphs") or {}).items() if isinstance(g, dict)})
     local = local_bundle.documents()
     for r in refs:
         ref, dg = r["ref"], r["digest"]
@@ -143,11 +160,39 @@ def load(release_bundle_id: str) -> Bundle:
     except Exception as e:  # noqa: BLE001 - S3 down: retryable
         raise ApplicationError(f"registry read failed: {type(e).__name__}", type="RegistryUnavailable") from e
     if b is None:
+        # CONFIG (fallback gap): only the base dev bundle of this build may fall back to the built-in set; any other
+        # rb_ (a derived bundle, a bundle of another build) must resolve from the registry, or a rebuilt worker would
+        # silently run different definitions under an existing rb_ (retryable: the pointer may not be written yet).
+        if not _fallback_allowed(release_bundle_id):
+            raise ApplicationError(f"bundle {release_bundle_id} is not in the registry", type="RegistryUnavailable")
         log.warning("bundle %s not in the local registry; using the built-in v0 local set", release_bundle_id)
         b = _local(release_bundle_id)
     with _lock:
         _cache[release_bundle_id] = b
     return b
+
+
+def _fallback_allowed(rb: str) -> bool:
+    import os
+    if os.environ.get("REPLICANT_BUNDLE_FALLBACK_ANY", "").lower() == "true":   # unit tests / stub harness
+        return True
+    build = os.environ.get("REPLICANT_WORKER_BUILD_ID")
+    if not build:
+        return True     # no build identity (tests): keep the M1 behaviour
+    try:
+        return rb == local_bundle.bundle_registry_objects(build)[0]
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def publish_node_catalog(catalog: dict[str, Any], build_id: str) -> str:
+    """The worker's NodeCatalog next to the definitions (WORKER-D2): control-plane-api's config:validate rejects
+    graphs with node types this build does not have (CONFIG-D5). Overwritten per start (same build, same content)."""
+    key = f"nodecatalogs/replicant-worker/{build_id}.json"
+    r = s3.ref("registry", key)
+    s3.client().put_object(Bucket=r.bucket, Key=r.key, Body=json.dumps(catalog, sort_keys=True).encode(),
+                           ContentType="application/json")
+    return key
 
 
 def publish_local_set() -> int:

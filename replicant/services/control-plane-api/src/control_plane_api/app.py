@@ -13,6 +13,9 @@ from starlette.routing import Route
 
 from control_plane_api import routes_admin, routes_gates, routes_jobs, routes_notify, routes_registry, routes_web
 from control_plane_api import routes_graph
+from control_plane_api import routes_projects
+from control_plane_api.projects import LiveConfig
+from control_plane_api import routes_ui_prefs
 from control_plane_api.auth import AuthContext
 from control_plane_api.config import Settings
 from control_plane_api.db import Database
@@ -79,6 +82,7 @@ def create_app(settings: Settings | None = None, *, db: Database | None = None,
         if settings.background_tasks:
             tasks.append(asyncio.create_task(app.state.intake.retrier_loop()))
             tasks.append(asyncio.create_task(app.state.outbox.retrier_loop()))
+            tasks.append(asyncio.create_task(app.state.auth.rbac.loop()))
             import os
 
             from control_plane_api.registry import WORKER_QUEUES_DEFAULT, worker_registrar_loop
@@ -99,9 +103,13 @@ def create_app(settings: Settings | None = None, *, db: Database | None = None,
     app.state.temporal = temporal
     app.state.s3 = S3(settings)
     app.state.auth = AuthContext(settings)
+    app.state.auth.attach_db(db)               # CONFIG: DB role bindings (rbac.py)
+    app.state.live_config = LiveConfig(db)     # CONFIG: live project settings (approver groups, Slack channel)
     app.state.intake = Intake(db, temporal, app.state.auth, settings.replicant_env, settings.web_origin)
+    app.state.intake.app_state = app.state     # CONFIG: derived bundles need S3 + settings
     app.state.outbox = Outbox(db, temporal)
     app.state.notify = NotifyService(db, app.state.auth, NotifySettings.from_env(settings.web_origin))
+    app.state.notify.live_config = app.state.live_config
     app.state.notify_loops = NotifyLoops(app.state.notify)
     app.add_exception_handler(ProblemError, problem_handler)  # type: ignore[arg-type]
     app.add_exception_handler(RequestValidationError, validation_handler)  # type: ignore[arg-type]
@@ -120,6 +128,8 @@ def create_app(settings: Settings | None = None, *, db: Database | None = None,
     app.include_router(routes_admin.router)
     app.include_router(routes_registry.router)
     app.include_router(routes_graph.router)  # GRAPH-01: job graph + run activity reads
+    app.include_router(routes_projects.router)  # CONFIG-01: projects, access, team configuration
+    app.include_router(routes_ui_prefs.router)  # WEB-UIPREF: /v1/me/ui-preferences
 
     try:
         import replicant_dev_auth

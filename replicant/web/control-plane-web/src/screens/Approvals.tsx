@@ -48,7 +48,7 @@ type BarState =
 
 const DECISION_WORD: Record<string, string> = { approve: "Approved", reject: "Rejected", request_changes: "Changes requested", answer: "Answered" };
 
-function DecisionBar({ d, onDecided }: { d: GateDetail; onDecided: (decision?: string) => void }) {
+export function DecisionBar({ d, onDecided }: { d: GateDetail; onDecided: (decision?: string) => void }) {
   const { user } = useSession();
   const dir = useDirectory();
   const [comment, setComment] = useState("");

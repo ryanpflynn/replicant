@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/web/ui-preferences/v1.json",
+  "title": "UI preferences (per user)",
+  "description": "v0 WEB-UIPREF. Stored in web.ui_preferences (writer control-plane-api). `job_view` picks the job page: `simple` (plain-language progress, the default when unset) or `detailed` (graph and activity feed). `version` is the optimistic-concurrency token: PUT with a stale version (body or If-Match) is refused with 412.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "version": {"type": "integer", "minimum": 0},
+    "job_view": {"type": "string", "enum": ["simple", "detailed"]}
+  }
+}

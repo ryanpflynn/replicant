@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from sqlalchemy import text
 
+from control_plane_api import routes_ui_prefs
 from control_plane_api.auth import require
 from control_plane_api.authz import PLATFORM_ONLY, ROLE_PERMISSIONS, Principal
 from control_plane_api.db import OPERATOR_SCOPE
@@ -32,6 +33,8 @@ def capabilities(p: Principal) -> list[str]:
     platform_perms = {perm for r in p.platform_roles for perm in ROLE_PERMISSIONS.get(r, ())}
     if "ops:kill-switch" in platform_perms:
         caps.add("ops:kill-switch")
+    if "identity:admin" in platform_perms:      # CONFIG: identity:admin is also tenant/project scoped now
+        caps.add("identity:admin")
     if ADMIN_GROUP in p.groups:
         caps.add("memory:admin")
     return sorted(caps)
@@ -69,7 +72,11 @@ async def _tenant_rows(request: Request) -> list[Any]:
 @router.get("/v1/me")
 async def get_me(request: Request, principal: Principal = require("authenticated")) -> dict[str, Any]:
     rows = await _tenant_rows(request)
-    return me_doc(principal, [r.tenant_id for r in rows])
+    doc = me_doc(principal, [r.tenant_id for r in rows])
+    doc["ui_preferences"] = await routes_ui_prefs.for_me(request, principal)   # WEB-UIPREF: effective, default simple
+    from control_plane_api.routes_projects import visible_projects
+    doc["projects"] = await visible_projects(request, principal)             # CONFIG-01: per-project permissions
+    return doc
 
 
 @router.get("/v1/tenants")

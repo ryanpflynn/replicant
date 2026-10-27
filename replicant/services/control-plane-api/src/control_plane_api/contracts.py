@@ -17,6 +17,8 @@ _FILES = {
     "tenant-settings": "tenant-settings.schema.json",
     "definition-envelope": "definition-envelope.schema.json",
     "notification-preferences": "notification-preferences.schema.json",
+    "ui-preferences": "ui-preferences.schema.json",
+    "project-config": "project-config.schema.json",
 }
 
 

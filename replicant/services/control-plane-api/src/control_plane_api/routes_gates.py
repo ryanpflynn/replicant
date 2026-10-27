@@ -71,6 +71,14 @@ def _gate_view(g: Any) -> dict[str, Any]:
     return gv
 
 
+async def approver_group_ok(request: Request, principal: Principal, g: Any) -> bool:
+    """CONFIG (live): the project's approver groups, when set, narrow who may decide its gates."""
+    from control_plane_api.projects import approver_ok
+    repos = tuple(g.repo_ids or ())
+    eff = await request.app.state.live_config.for_repo(repos[0]) if repos else None
+    return approver_ok(principal, eff[2] if eff else None)
+
+
 def _precheck(principal: Principal, g: Any, decision: str, presented_digest: str, channel: str) -> None:
     if g.state != "open":
         raise ProblemError(409, "gate_already_decided", winning_decision=g.winning_decision)
@@ -127,7 +135,7 @@ async def decide_gate(gate_id: str, request: Request, response: Response, body: 
     if g is None or not check(request.app.state.auth, principal, "job:read", tenant_id=g.tenant_id):
         raise ProblemError(404, "not_found")
     if not check(request.app.state.auth, principal, "gate:decide", tenant_id=g.tenant_id,
-                 repo_ids=tuple(g.repo_ids or ())):
+                 repo_ids=tuple(g.repo_ids or ())) or not await approver_group_ok(request, principal, g):
         raise ProblemError(403, "not_in_approver_group")
     channel = "cli" if (x_replicant_client or "").lower() == "cli" else "ui"
     idem = idempotency_key.strip().strip('"')
@@ -173,8 +181,9 @@ async def adapter_decide_gate(gate_id: str, request: Request, response: Response
     existing = await _existing(request, body["decision_id"], g.tenant_id)
     # Same authorization as the UI route (NOTIFY phase 2): the linked user must hold gate:decide on the tenant/repo;
     # _precheck adds separation of duties (requester_may_decide), the digest, the channel and the gate state.
-    if existing is None and not check(request.app.state.auth, actor, "gate:decide", tenant_id=g.tenant_id,
-                                      repo_ids=tuple(g.repo_ids or ())):
+    if existing is None and (not check(request.app.state.auth, actor, "gate:decide", tenant_id=g.tenant_id,
+                                       repo_ids=tuple(g.repo_ids or ()))
+                             or not await approver_group_ok(request, request.app.state.auth.effective(actor), g)):
         raise ProblemError(403, "not_in_approver_group")
     if existing is None:
         _precheck(actor, g, body["decision"], body["presented_digest"], body["channel"])
@@ -190,7 +199,8 @@ async def get_gate(gate_id: str, request: Request, principal: Principal = requir
     decidable, reason = True, None
     if g.state != "open":
         decidable, reason = False, "gate_not_open"
-    elif not check(request.app.state.auth, principal, "gate:decide", tenant_id=g.tenant_id):
+    elif not check(request.app.state.auth, principal, "gate:decide", tenant_id=g.tenant_id,
+                   repo_ids=tuple(g.repo_ids or ())) or not await approver_group_ok(request, principal, g):
         decidable, reason = False, "not_in_approver_group"
     elif not g.requester_may_decide and principal.principal_id == g.requester:
         decidable, reason = False, "self_approval_forbidden"

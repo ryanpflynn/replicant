@@ -39,7 +39,7 @@ async def load_bundle_core(a: dict[str, Any]) -> dict[str, Any]:
 async def graph_compose(a: dict[str, Any]) -> dict[str, Any]:
     b = bundles.load(a["release_bundle_id"])
     wt = a["workflow_type"]
-    pin, doc = b.graph(local_bundle.GRAPH_FILES[wt])
+    pin, doc = b.graph_for(wt)  # CONFIG: through the bundle's spec.graphs mapping
     base = parse_definition(doc, version=pin["version"], digest=pin["digest"])
     cat = registry.catalog_entries()
     g = compose(base, [], catalog=cat)  # no codebase bindings (graph modifiers) in M1
@@ -288,10 +288,19 @@ def added_lines(patch: bytes) -> list[str]:
 
 
 # ------------------------------------------------------------------------------------------------ risk
+def _risk_rules(a: dict[str, Any]) -> dict[str, Any]:
+    """risk_rules of the job's bundle; inputs without `release_bundle_id` (histories from before CONFIG) use the
+    defaults, which are the former constants."""
+    rb = a.get("release_bundle_id")
+    return bundles.load(rb).risk_rules() if rb else dict(bundles.RISK_DEFAULTS)
+
+
 @implements("risk.classify")
 async def risk_classify(a: dict[str, Any]) -> dict[str, Any]:
     """Deterministic risk rules (D-19), v0 subset: CI-executed paths -> critical, agent files -> critical,
-    > 20 changed files -> medium, otherwise low. The plan stage has no diff and is low."""
+    sensitive paths (bundle risk_rules) -> high, more than `large_change_files` (default 20) changed files -> medium,
+    otherwise low. The plan stage has no diff and is low. Thresholds come from the job's bundle (CONFIG)."""
+    rr = _risk_rules(a)
     if a["stage"] != "diff":
         return {"level": "low", "rules_fired": [f"v0.{a['stage']}.default_low"]}
     uri = (a.get("refs") or {}).get("latest_diff_bundle_uri")
@@ -303,8 +312,12 @@ async def risk_classify(a: dict[str, Any]) -> dict[str, Any]:
         rules.append("path.ci_executed"); level = "critical"
     if any(_glob(p, AGENT_FILES) for p in d["paths"]):
         rules.append("path.agent_config"); level = "critical"
-    if len(d["paths"]) > 20 and RISK_ORDER[level] < RISK_ORDER["medium"]:
-        rules.append("size.files_over_20"); level = "medium"
+    if rr["sensitive_paths"] and any(_glob(p, rr["sensitive_paths"]) for p in d["paths"]) \
+            and RISK_ORDER[level] < RISK_ORDER["high"]:
+        rules.append("path.sensitive"); level = "high"
+    n = int(rr["large_change_files"])
+    if len(d["paths"]) > n and RISK_ORDER[level] < RISK_ORDER["medium"]:
+        rules.append(f"size.files_over_{n}"); level = "medium"
     return {"level": level, "rules_fired": rules or ["v0.diff.default_low"], "paths": d["paths"][:200],
             "diff_sha256": d["sha256"]}
 
@@ -324,9 +337,12 @@ async def verifier_check(a: dict[str, Any]) -> dict[str, Any]:
         raise ApplicationError("no diff bundle to verify", type="InvalidInput", non_retryable=True)
     d = read_diff_bundle(uri)
     findings: list[dict[str, Any]] = []
+    forbidden = _risk_rules(a)["forbidden_paths"]
     for p in d["paths"]:
         if _glob(p, AGENT_FILES) or _glob(p, [".github/workflows/**", ".github/actions/**"]):
             findings.append({"check": "diff_scope", "path": p, "rule": "never_publish_paths"})
+        elif forbidden and _glob(p, forbidden):
+            findings.append({"check": "diff_scope", "path": p, "rule": "forbidden_path"})
     scope = a.get("paths_scope") or []
     if scope:
         findings += [{"check": "diff_scope", "path": p, "rule": "outside_requested_paths"}

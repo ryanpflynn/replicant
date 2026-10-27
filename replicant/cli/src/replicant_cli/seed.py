@@ -228,7 +228,7 @@ def step_gitea_webhook(c: Ctx) -> str:
     return f"org hook {h.get('id')} -> {WEBHOOK_URL} active, label replicant present"
 
 
-DEV_LOGINS = ("grace", "carol", "alice", "bob", "dave", "erin")   # replicant_dev_auth static users
+DEV_LOGINS = ("grace", "carol", "alice", "bob", "dave", "erin", "frank")   # replicant_dev_auth static users
 SLACK_TEAM = "T0LOCAL01"
 
 
@@ -298,6 +298,81 @@ def step_slack_channel(c: Ctx) -> str:
     return f"{TENANT}: approval_channel {SLACK_APPROVAL_CHANNEL}"
 
 
+# CONFIG (v0): groups and memberships reproducing the dev roles, binding version 1 (tenant + platform), projects.
+SEED_GROUPS = {
+    "payments-viewers": ["dave"], "payments-engineers": ["alice", "bob", "erin"], "payments-approvers": ["bob"],
+    "payments-admins": ["erin"], "ledger-admins": ["frank"], "replicant-admins": ["carol"],
+    "replicant-operators": ["grace", "carol"], "replicant-release-managers": ["grace"],
+    "replicant-platform-admins": ["grace"],
+}
+SEED_BINDINGS = [  # (group, scope, tenant, role)
+    ("payments-viewers", "tenant", TENANT, "viewer"), ("payments-engineers", "tenant", TENANT, "engineer"),
+    ("payments-approvers", "tenant", TENANT, "approver"), ("payments-admins", "tenant", TENANT, "tenant_admin"),
+    ("replicant-platform-admins", "platform", None, "approver"),        # grace: approver on every tenant
+    ("replicant-platform-admins", "platform", None, "platform_admin"), ("replicant-operators", "platform", None, "operator"),
+    ("replicant-release-managers", "platform", None, "release_operator"),
+    ("replicant-release-managers", "platform", None, "release_manager"),
+]
+PROJECTS = [  # (project_id, name, owners_group, repos)
+    ("prj_ledger", "Ledger", "ledger-admins", True), ("prj_payments-web", "Payments web", "payments-admins", False),
+]
+
+
+def step_projects_rbac(c: Ctx) -> str:
+    """CONFIG: identity groups/memberships and role-binding version 1 as identity-service's DB role (no identity-service
+    in v0, like step 07; written only when no binding version exists, so UI edits survive a re-seed), then the
+    projects, prj_ledger's access (ledger-admins -> project_admin) and its first configuration through the API."""
+    import subprocess
+
+    from replicant_ids import derived
+
+    from replicant_cli import compose
+    stmts = ["BEGIN;", "SET LOCAL ROLE svc_identity_service;"]
+    for g, members in SEED_GROUPS.items():
+        gid = derived("grp", "dev", g)
+        stmts.append(f"INSERT INTO identity.groups (group_id, display_name) VALUES ({_sql_lit(gid)}, {_sql_lit(g)}) "
+                     "ON CONFLICT (display_name) DO NOTHING;")
+        for login in members:
+            pid = derived("usr", "replicant-dev-user", login)
+            stmts.append(
+                "INSERT INTO identity.memberships (group_id, principal_id) SELECT g.group_id, u.principal_id FROM "
+                f"identity.groups g, identity.users u WHERE g.display_name = {_sql_lit(g)} AND u.principal_id = "
+                f"{_sql_lit(pid)} ON CONFLICT DO NOTHING;")
+    vals = ", ".join(f"(1, {i}, {_sql_lit(g)}, {_sql_lit(sc)}, {_sql_lit(t)}, {_sql_lit(r)})"
+                     for i, (g, sc, t, r) in enumerate(SEED_BINDINGS, start=1))
+    stmts.append("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM identity.role_binding_versions) THEN "
+                 "INSERT INTO identity.role_binding_versions (version, is_current, created_by, reason) VALUES "
+                 "(1, true, 'svc_dev-seeder', 'replicant dev seed: dev roles as group bindings'); "
+                 f"INSERT INTO identity.role_bindings (version, binding_id, group_name, scope, tenant_id, role) VALUES {vals}; "
+                 "END IF; END $$;")
+    stmts.append("COMMIT;")
+    cont = compose.containers().get("postgres-replicant")
+    if not cont or cont.status != "running":
+        raise SeedError("postgres-replicant is not running")
+    r = subprocess.run(["podman", "exec", "-i", cont.name, "psql", "-v", "ON_ERROR_STOP=1", "-q", "-U", "postgres",
+                        "-d", "replicant"], input="\n".join(stmts), capture_output=True, text=True, timeout=60)
+    if r.returncode != 0:
+        raise SeedError(f"groups/bindings: {(r.stdout + r.stderr).strip()[-400:]}")
+    rid = str(gitea_repo_id(c))
+    for pid, name, owners, with_repo in PROJECTS:
+        body: dict = {"project_id": pid, "name": name, "owners_group": owners}
+        if with_repo:
+            body["repos"] = [{"repo_id": rid, "full_name": f"{ORG}/{REPO}", "host": GITEA_HOST, "provider": "gitea"}]
+        _check(c.api.post(f"/v1/tenants/{TENANT}/projects", json=body), f"POST project {pid}", ok=(200, 201))
+    acc = _check(c.api.get("/v1/projects/prj_ledger/access"), "GET access").json()
+    if not acc["bindings"]:
+        _check(c.api.put("/v1/projects/prj_ledger/access", json={
+            "bindings": [{"group": "ledger-admins", "role": "project_admin"}],
+            "reason": "replicant dev seed: ledger-admins administer the Ledger project"}), "PUT access")
+    cfg = _check(c.api.get("/v1/projects/prj_ledger/config"), "GET config").json()
+    if cfg["version"] == 0:
+        first = {"triggers": {"enabled": True, "label": "replicant", "modes": ["label"],
+                              "allowed_workflow_types": ["bugfix"], "default_priority": "normal"}}
+        _check(c.api.put("/v1/projects/prj_ledger/config", json={"config": first, "reason": "replicant dev seed"},
+                         headers={"If-Match": "0"}), "PUT config")
+    return f"{len(SEED_GROUPS)} groups, {len(SEED_BINDINGS)} bindings, projects {[p[0] for p in PROJECTS]}"
+
+
 STEPS: list[tuple[str, Callable[[Ctx], str]]] = [
     ("01-platform-caps", step_platform_caps),
     ("02-tenants", step_tenants),
@@ -307,6 +382,7 @@ STEPS: list[tuple[str, Callable[[Ctx], str]]] = [
     ("06-gitea-webhook", step_gitea_webhook),
     ("07-identity-links", step_identity_links),
     ("08-slack-approval-channel", lambda c: step_slack_channel(c)),
+    ("09-projects-rbac", step_projects_rbac),
 ]
 ALWAYS_RUN = {"06-gitea-webhook"}
 
