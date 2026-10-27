@@ -159,6 +159,9 @@ class Gitea:
     async def edit_pull(self, number: int, **fields: Any) -> dict[str, Any]:
         return (await self.req("PATCH", f"/pulls/{number}", json=fields)).json()
 
+    async def comments(self, number: int) -> list[dict[str, Any]]:
+        return (await self.req("GET", f"/issues/{number}/comments", params={"limit": 50})).json() or []
+
     async def comment(self, number: int, body: str) -> dict[str, Any]:
         return (await self.req("POST", f"/issues/{number}/comments", json={"body": body})).json()
 
@@ -183,7 +186,7 @@ def _git(cwd: str, *args: str, env: dict[str, str], input_: bytes | None = None,
 
 
 def build_and_push(repo: Repo, tok: str, *, base_sha: str, patch: bytes, branch: str, message: str,
-                   author: tuple[str, str], parent: str | None = None) -> str:
+                   author: tuple[str, str], parent: str | None = None, on_top_of: str | None = None) -> str:
     """Clone, check out `parent or base_sha`, apply the patch with `git apply --index --binary`, commit and push
     `HEAD:refs/heads/<branch>` (force: the branch is replicant-owned, §10.1 step 6.2). Returns the new head SHA."""
     work = tempfile.mkdtemp(prefix="pub-")
@@ -209,10 +212,21 @@ def build_and_push(repo: Repo, tok: str, *, base_sha: str, patch: bytes, branch:
         except GitError as e:
             raise ApplicationError(f"the approved patch does not apply: {str(e)[:300]}", type="MergeConflict",
                                    non_retryable=True) from None
-        _git(repo_dir, "commit", "--quiet", "--no-verify", "-F", "-", env=env, input_=message.encode())
-        head = _git(repo_dir, "rev-parse", "HEAD", env=env)
+        if on_top_of:
+            # push_update (D-15): the approved patch is cumulative from base_sha; its tree becomes a new commit on top of
+            # the PR branch head, so reviewers see an incremental commit and the branch is never rewritten.
+            try:
+                _git(repo_dir, "cat-file", "-e", f"{on_top_of}^{{commit}}", env=env)
+            except GitError:
+                _git(repo_dir, "fetch", "--quiet", "origin", on_top_of, env=env)
+            tree = _git(repo_dir, "write-tree", env=env)
+            head = _git(repo_dir, "commit-tree", tree, "-p", on_top_of, "-F", "-", env=env, input_=message.encode())
+        else:
+            _git(repo_dir, "commit", "--quiet", "--no-verify", "-F", "-", env=env, input_=message.encode())
+            head = _git(repo_dir, "rev-parse", "HEAD", env=env)
         try:
-            _git(repo_dir, "push", "--quiet", "--force", "origin", f"HEAD:refs/heads/{branch}", env=env)
+            _git(repo_dir, "push", "--quiet", *([] if on_top_of else ["--force"]), "origin",
+                 f"{head}:refs/heads/{branch}", env=env)
         except GitError as e:
             msg = str(e)
             if "protected" in msg.lower():

@@ -22,3 +22,7 @@ services:
       <<: *requires-db-temporal
       gateway-shim: {condition: service_started}
       runner-local: {condition: service_started}
+  memory-service:
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      s3-init: {condition: service_completed_successfully}

@@ -233,7 +233,9 @@ class ReplicantJobBase:
                     self._prologue_resume = r
         self._compose = await self.call(
             "graph.compose", {"release_bundle_id": self.s.release_bundle_id, "workflow_type": self.s.workflow_type,
-                              "repo": self.s.targets[0]["repo"] if self.s.targets else None})
+                              "repo": self.s.targets[0]["repo"] if self.s.targets else None,
+                              # MEM: label-selected graph variants (repo scan, DEVIATIONS MEM-D7)
+                              "labels": list(self.s.request_summary.get("labels") or [])})
         self._spec = GraphSpec.from_json(self._compose["spec"])
         if self.s.graph_spec_digest and self.s.graph_spec_digest != self._compose["composed_digest"] \
                 and self.inp.reason not in ("reroute", "migration"):
@@ -880,7 +882,10 @@ class ReplicantJobBase:
         self.s.terminal = {"outcome": outcome, "reason": reason, "at": workflow.now().isoformat()}
         if not self.s.evaluation and self._ready:
             mem = {"job_id": self.s.job_id, "tenant_id": self.s.tenant_id, "outcome": outcome, "status": status,
-                   "memory_snapshot_id": self.s.memory_snapshot_id, "cycle": self.s.cycle, "refs": dict(self.s.refs)}
+                   "memory_snapshot_id": self.s.memory_snapshot_id, "cycle": self.s.cycle, "refs": dict(self.s.refs),
+                   # MEM: outcome metrics key (memory.job_outcomes)
+                   "repo": self.s.targets[0]["repo"] if self.s.targets else None, "workflow_type": self.s.workflow_type,
+                   "release_bundle_id": self.s.release_bundle_id}
             try:  # best effort: memory bookkeeping never changes the job's outcome (WS-04 XD-04-01)
                 await self._aux_act("memory.record_outcome", mem, node_key="finalize", effect="record_outcome",
                                     ordinal=1, block=False)
@@ -1048,6 +1053,14 @@ class ReplicantJobBase:
             sas.append(SA_WAITING.value_set(workflow.now()) if waiting else SA_WAITING.value_unset())
         if sas:
             self._queue_sa(*sas)
+        # The projection follows a wait on an external event (PR review) at once: GET /v1/jobs, the lists and the
+        # Simple view's "PR #N is ready for review" read `waiting_external` (MEM-PR-D10). Leaving the wait is covered
+        # by the node or terminal event that follows.
+        if sas and sas[0].key.name == "ReplicantStatus" and status == "waiting_external" and \
+                workflow.patched("status-waiting-external-v1"):
+            pr = (self.s.pr or {}).get("number")
+            self.emit("job.waiting", f"Waiting for review on PR #{pr}" if pr and phase == "pr_review"
+                      else f"Waiting on an external event ({phase})")
 
     async def _signal_parent(self, status: str, phase: str) -> None:
         """SignalExternalWorkflowExecution to the MaintenanceBatch parent (ADR-01-007, CCR-01-04).
@@ -1570,6 +1583,16 @@ class ReplicantJobBase:
                 "decision": g.decision, "channels": g.channels},
                 activity_id=ids.logical_activity_id(g.node_key, g.cycle, g.ordinal, f"notify_res_{g.kind[:8]}"),
                 **_opts("notify.gate_resolved")))
+        if d["decision"] in ("request_changes", "reject") and d.get("comment") and not self.s.evaluation \
+                and source != "script" and workflow.patched("memory-gate-feedback-v1"):
+            # MEM (DEVIATIONS MEM-D3): an approver's comment becomes memory feedback -> extraction -> candidates
+            self._audit.append(workflow.start_activity(
+                "memory.ingest_gate_feedback", {"job_id": self.s.job_id, "tenant_id": self.s.tenant_id,
+                "gate_id": g.gate_id, "gate_kind": g.kind, "decision_id": decision_id, "decision": d["decision"],
+                "comment": d["comment"][:8000], "principal_id": d["principal_id"], "cycle": g.cycle,
+                "repo": self.s.targets[0]["repo"] if self.s.targets else None},
+                activity_id=ids.logical_activity_id(g.node_key, g.cycle, g.ordinal, f"memory_fb_{g.kind[:8]}"),
+                **_opts("memory.ingest_gate_feedback")))
         if g.kind == "bundle_migration":
             self._on_migration_decided(g)
         self._wake += 1

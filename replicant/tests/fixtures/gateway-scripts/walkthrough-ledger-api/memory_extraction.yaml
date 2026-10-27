@@ -1,0 +1,25 @@
+# replicant.gateway-script/v1: memory extraction (MEM-01; worker_llm, X-Replicant-Script-Key memory_extraction).
+# Stateless: the first turn whose `match` regexp hits the request body answers; the last turn is the default.
+# Add match turns ABOVE the default for new E2E feedback texts (match on a unique marker in the comment).
+schema: replicant.gateway-script/v1
+name: walkthrough-ledger-api-memory-extraction
+protocol: anthropic_messages
+turns:
+  # E2E-06 step 2: a publish-gate request_changes comment that states a repo convention
+  - match: "e2e06-gate-rule"
+    respond:
+      text: '{"proposals": [{"source_index": 0, "memory_type": "rule", "scope": "path", "path_globs": ["internal/ledger/**"], "subject_key": "ledger.errors.wrapping", "title": "Wrap ledger errors with context", "statement": "In internal/ledger, wrap returned errors with fmt.Errorf and %w, naming the operation that failed.", "rationale": "Approver request on a publish gate: bare errors made a failed refund hard to trace.", "generalization_score": 0.9}], "non_candidates": []}'
+      usage: {input_tokens: 900, output_tokens: 120}
+  # E2E-06: a PR-specific comment (not generalizable)
+  - match: "e2e06-gate-specific"
+    respond:
+      text: '{"proposals": [{"source_index": 0, "memory_type": "rule", "scope": "repo", "statement": "Rename the variable in this diff.", "generalization_score": 0.2}], "non_candidates": []}'
+      usage: {input_tokens: 900, output_tokens: 60}
+  # E2E-07: the PR review line comment the repair addressed (D-15)
+  - match: "e2e07-pr-rule"
+    respond:
+      text: '{"proposals": [{"source_index": 0, "memory_type": "rule", "scope": "path", "path_globs": ["internal/ledger/**"], "subject_key": "ledger.comments.money_arithmetic", "title": "Explain money arithmetic at the call site", "statement": "In internal/ledger, add a short comment wherever an amount is prorated or rounded, saying which share is computed and how it rounds.", "rationale": "PR review request: the prorated FX fee reversal was not explained.", "generalization_score": 0.9}], "non_candidates": []}'
+      usage: {input_tokens: 900, output_tokens: 120}
+  - respond:
+      text: '{"proposals": [], "non_candidates": [{"source_index": 0, "reason": "pr_specific"}]}'
+      usage: {input_tokens: 800, output_tokens: 30}

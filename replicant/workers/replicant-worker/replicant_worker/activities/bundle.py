@@ -61,6 +61,15 @@ class Bundle:
             return self.pinned(ref), self.docs[ref]
         return self.graph(local_bundle.GRAPH_FILES[workflow_type])
 
+    def graph_variant(self, name: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        """A label-selected graph (MEM repo scan, DEVIATIONS MEM-D7): from the bundle when it pins one, else the
+        definition shipped with this worker build (its digest is still recorded in the job's graph pin)."""
+        for ref, doc in self.docs.items():
+            if ref.startswith(f"graph/{name}@"):
+                return self.pinned(ref), doc
+        ref, doc = local_bundle.find("graph", name)
+        return local_bundle.pinned(ref), doc
+
     def risk_rules(self) -> dict[str, Any]:
         """The bundle's risk_rules policy (CONFIG); today's constants are the defaults."""
         r = dict(RISK_DEFAULTS)

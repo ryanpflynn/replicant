@@ -483,6 +483,51 @@ flowchart LR
 approve buttons, links, and milestones. **Show details** switches to the engineering view (graph, runs, activity), and
 the choice is saved per user (`/v1/me/ui-preferences`, WEB-UIPREF-D1..D4).
 
+## 8b. Memory and the PR feedback loop (2026-10-27)
+
+Agents learn each repo's practices and the feedback they received, so later jobs avoid the same rejections. Memory
+lives in Postgres (the `memory` schema, RLS per tenant), and memory-service is the only writer. Nothing a job learns
+affects agents until a member of `replicant-admins` approves it (D-25).
+
+```mermaid
+flowchart LR
+  subgraph Sources["Where lessons come from"]
+    GATE["Gate request-changes /<br/>reject comments"]
+    PR["PR review comments<br/>(linked humans with write access)"]
+    REV["Reviewer findings and<br/>QA failures (recurring ≥2 jobs)"]
+    SCAN["Repo scan job<br/>(configs, CONTRIBUTING, code samples)"]
+  end
+  GATE & PR --> EXT["memory.extract_candidates<br/>(LLM via gateway; feedback text only)"]
+  REV --> MS
+  SCAN --> MS
+  EXT --> MS["memory-service<br/>safety rules · dedupe (digest, trigram, LLM judge) · conflicts"]
+  MS --> Q[("memory.entries: candidate")]
+  Q -- "admin approves / edits / rejects<br/>(/admin/memory)" --> A[("active entries<br/>versioned, with provenance")]
+  A -- "job start: scope filter + rank + budget" --> SNAP["pinned snapshot<br/>memory_snapshot_id"]
+  SNAP -- "each run (minus revoked)" --> INJ["inputs/memory-injection.json<br/>→ system prompt (data, not instructions)"]
+  INJ --> AG[Agent run]
+  AG --> UI["'Memory used' panel<br/>(job readers, read-only)"]
+```
+
+- **Repo practices.** "Learn this repo's conventions" (Projects → Overview) runs a scan job that proposes convention
+  candidates. Each run also quotes the repo's own `CLAUDE.md`, `AGENTS.md` and `copilot-instructions.md` as untrusted
+  context; the CLI's own loading of them stays off.
+- **The PR review loop (D-15).** A review from a linked human with write access is triaged by an LLM. Replicant
+  acknowledges it, repairs on the same branch, re-runs QA and verification, waits at the push gate, pushes, replies with
+  a fix summary and proposes memory. Feedback is only remembered if its fix was pushed. Bots and unlinked users are
+  ignored; an unlinked user is asked to link. `/replicant no-memory` and `/replicant remember` are honoured. A job
+  waiting on its PR shows `waiting_external`.
+- **Curation (admins only).** The candidate queue, entries, entry detail (provenance, versions, jobs that used it),
+  conflicts, quarantine and purge (each with a dry-run blast radius), export and analytics. Mutations are versioned
+  and audited; non-admins get 403, and the refusal is audited.
+- **Search.** v0 has no embeddings: entries are chosen by scope and ranked with Postgres full-text search and trigram
+  similarity. Add vectors when paraphrase dedupe misses in practice, a repo passes about 150 entries, or "similar past
+  work" search is built.
+- **Deviations:** MEM-D1..D10 and MEM-PR-D1..D10; interfaces MEM-01 and MEM-PR-01. Notable ones:
+  - the scan runs as a `docs` job with a label, because the workflow-type enum is frozen;
+  - memory is best effort locally (a job never fails because memory is down);
+  - the local repair budget is 2 cycles.
+
 ## 9. Security model (v0 subset)
 
 - **Tenant isolation.** The schema has RLS with FORCE on every tenant table: the WS-10 gate found 0 tables without
@@ -535,7 +580,7 @@ fix prorates the FX fee reversal, which is correct. The API key appeared in no c
 | QA and verification | Minimal `replicant-qa` (install, unit, build); regex secret scan instead of `replicant-secretscan`; no ecosystem contract stubs | RUNNER-D11, WORKER-D7 |
 | Publisher | Unsigned commits over git HTTP; no CODEOWNERS reviewer requests, rebased diff in `check_base`, or `push_takeover_branch` | WORKER-D10 |
 | Sessions | No session restore (SR-1) or session capture; no WS-08 pattern redaction (known-credential redaction only) | RUNNER-D10 |
-| Memory | `memory.*` returns a pinned empty snapshot; no memory-service or MCP servers | plan §1.3, WORKER-D3 |
+| Memory | No embeddings, MCP pull tools, episodes, holdouts or auto-activation; reviewer/QA recurrence exercised only in DB tests; purge doesn't scrub past transcripts | MEM-D*, §8b |
 | Agents | `reviewer-codex` runs Claude Code; images by tag, not digest | WORKER-D3, RUNNER-D9 |
 | Observability | Langfuse not started (memory budget); minimal Go OTLP exporter | PLATFORM-D15, D16 |
 | Release pipeline | No replicant-config repo or publish pipeline; bundles promoted without evaluation | WORKER-D2, CONTROL-D3 |

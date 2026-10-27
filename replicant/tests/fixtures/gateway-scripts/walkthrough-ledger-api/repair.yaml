@@ -1,0 +1,30 @@
+# replicant.gateway-script/v1: the canned PR repair run for E2E-07 (tests/e2e/e2e07_pr_feedback.py, D-15).
+# Selected by the run policy stub key repair.c<cycle>.n<ordinal> (falls back to "repair"). The workspace already holds
+# the published fix (the repair run starts from the PR's diff bundle), so the Edit's old_string only matches when the
+# prior change was applied. The reviewer asked for a comment explaining the proration.
+schema: replicant.gateway-script/v1
+name: walkthrough-ledger-api-repair
+protocol: anthropic_messages
+finish: "Done. Added the requested comment; go test ./... passes."
+turns:
+  - expect: {tools: [Read, Edit, Bash]}
+    respond:
+      text: "I'll read ApplyRefund and add the comment the reviewer asked for."
+      tool_use: {name: Read, input: {file_path: "${cwd}/internal/ledger/ledger.go"}}
+      usage: {input_tokens: 9000, output_tokens: 60}
+  - respond:
+      text: "Adding a comment above the prorated FX fee reversal."
+      tool_use:
+        name: Edit
+        input:
+          file_path: "${cwd}/internal/ledger/ledger.go"
+          old_string: "\t\tfxReversal := Prorate(c.FXFeeMinor, refundMinor, c.AmountMinor)\n"
+          new_string: "\t\t// Reverse only the FX fee share of the refunded amount (half-even, integer minor units).\n\t\tfxReversal := Prorate(c.FXFeeMinor, refundMinor, c.AmountMinor)\n"
+      usage: {input_tokens: 11000, output_tokens: 120}
+  - respond:
+      tool_use: {name: Bash, input: {command: "cd ${cwd} && go vet ./... && go test -count=1 ./...", description: "Run vet and the unit tests"}}
+      usage: {input_tokens: 11500, output_tokens: 50}
+  - respond:
+      text: "Added the comment explaining the prorated FX fee reversal."
+      structured_output_from: repair.agent_report.json
+      usage: {input_tokens: 12000, output_tokens: 150}

@@ -4,6 +4,9 @@ Claims `github_app.inbound_deliveries` rows with SKIP LOCKED, normalizes them (r
 * `issues.labeled` / `issues.opened` carrying the repo's trigger label (default `replicant`) -> JobRequest ->
   control-plane-api `POST /v1/jobs` -> acknowledgement comment as `replicant-bot` (edited in place on duplicates);
 * `pull_request.closed` on a PR owned by a job -> Signal `pr.event` (`pull_request_merged` | `pull_request_closed`);
+* review submitted / PR comment on a PR owned by a job, from a linked human with write access -> comment bodies to S3
+  (`events/pr/<delivery>.json`) + Signal `pr.event` (`review_submitted` | `issue_comment_created` | `replicant_command`)
+  (D-15, pr-replies.md); bots are ignored, unlinked humans get one link-your-account reply;
 * everything else -> `ignored`.
 Every effect is keyed by the delivery id (dedupe_key, comment_refs, pr.event delivery_id), so redelivery is safe.
 """
@@ -119,6 +122,9 @@ class Consumer:
         if ev.repo is None:
             return "ignored_no_repo"
         if ev.sender is None or ev.sender.is_bot:
+            if self._is_pr_feedback(ev):
+                log.info(json.dumps({"event": "pr_feedback.ignored", "reason": "bot", "delivery_id": ev.delivery_id,
+                                     "login": ev.sender.login if ev.sender else None}))
             return "ignored_bot"
         repo = await self._repo(ev)
         if repo is None:
@@ -135,6 +141,8 @@ class Consumer:
             return await self._issue_trigger(ev, repo, label, r.received_at)
         if ev.kind == "pull_request.closed" and ev.pull_request:
             return await self._pr_closed(ev, repo, r.received_at)
+        if self._is_pr_feedback(ev):
+            return await self._pr_feedback(ev, repo, r.received_at)
         return "ignored_event"
 
     async def _repo(self, ev: NormalizedEvent) -> dict[str, Any] | None:
@@ -291,19 +299,21 @@ class Consumer:
                             f"@{ev.sender.login}, link your account to the Replicant first: "
                             f"{self.s.web_origin.rstrip('/')}/settings/identity. Then comment `/replicant retry`.")
 
+    async def _job_for_pr(self, repo: dict[str, Any], number: int, head_ref: str | None) -> str | None:
+        """The job that owns PR `number` (jobs_read.job_prs, else the `replicant/<job_id>` head branch)."""
+        async with self.engine.begin() as conn:
+            await conn.execute(text("SELECT set_config('replicant.tenant_id', :t, true)"), {"t": repo["tenant_id"]})
+            row = (await conn.execute(text("SELECT job_id FROM jobs_read.job_prs WHERE repo_id = :r AND pr_number = :n"),
+                                      {"r": repo["repo_id"], "n": number})).first()
+        if row is not None:
+            return row.job_id
+        m = JOB_BRANCH_RE.match(head_ref or "")
+        return m.group(1) if m else None
+
     async def _pr_closed(self, ev: NormalizedEvent, repo: dict[str, Any], received_at: Any) -> str:
         assert ev.repo and ev.pull_request and ev.sender
         tenant = repo["tenant_id"]
-        job_id = None
-        async with self.engine.begin() as conn:
-            await conn.execute(text("SELECT set_config('replicant.tenant_id', :t, true)"), {"t": tenant})
-            row = (await conn.execute(text("SELECT job_id FROM jobs_read.job_prs WHERE repo_id = :r AND pr_number = :n"),
-                                      {"r": repo["repo_id"], "n": ev.pull_request.number})).first()
-            if row is not None:
-                job_id = row.job_id
-        if job_id is None:
-            m = JOB_BRANCH_RE.match(ev.pull_request.head_ref or "")
-            job_id = m.group(1) if m else None
+        job_id = await self._job_for_pr(repo, ev.pull_request.number, ev.pull_request.head_ref)
         if job_id is None:
             return "ignored_not_job_pr"
         event = "pull_request_merged" if ev.pull_request.merged else "pull_request_closed"
@@ -336,6 +346,165 @@ class Consumer:
                 return "ignored_closed_job"
             raise Retry(f"signal failed: {type(e).__name__}") from None
         return "pr_event_signalled"
+
+
+    # ------------------------------------------------------------------------------- PR review feedback (D-15)
+    @staticmethod
+    def _is_pr_feedback(ev: NormalizedEvent) -> bool:
+        if ev.kind == "pull_request_review.submitted" and ev.pull_request is not None:
+            return ev.review_state in ("commented", "changes_requested", "approved")
+        return ev.kind in ("issue_comment.created", "pull_request_review_comment.created") and \
+            ev.issue is not None and ev.issue.is_pull
+
+    async def repo_permission(self, repo: dict[str, Any], login: str) -> str:
+        """C-MSG actor.repo_permission of `login` on the repo: `admin` for an Owners-type team, `write` for a team with
+        code write or a direct collaborator (Gitea's collaborator permission read needs repo admin, so a direct
+        collaborator counts as write: MEM-PR-D2), else `read`. Live, never stored."""
+        owner, _, name = str(repo["full_name"]).partition("/")
+        tok = await self.broker.token(repo["installation_id"], repo["repo_id"], "identity.repo_permission",
+                                      permissions={"metadata": "read"})
+        async with GiteaClient(self.s.gitea_base_url, token=tok, transport=self._gitea_transport) as g:
+            best = "read"
+            for t in await g.repo_teams(owner, name):
+                level = (t.get("units_map") or {}).get("repo.code") or t.get("permission") or "none"
+                lvl = "admin" if level in ("owner", "admin") else "write" if level == "write" else None
+                if lvl and (best == "read" or lvl == "admin") and await g.is_team_member(int(t["id"]), login):
+                    best = lvl
+                    if best == "admin":
+                        return best
+            if best == "read" and await g.is_collaborator(owner, name, login):
+                best = "write"
+            return best
+
+    def _ignored(self, ev: NormalizedEvent, reason: str, **kw: Any) -> str:
+        log.info(json.dumps({"event": "pr_feedback.ignored", "reason": reason, "delivery_id": ev.delivery_id,
+                             "login": ev.sender.login if ev.sender else None, **kw}))
+        return f"ignored_{reason}"
+
+    async def _pr_feedback(self, ev: NormalizedEvent, repo: dict[str, Any], received_at: Any) -> str:
+        assert ev.repo and ev.sender
+        is_review = ev.kind == "pull_request_review.submitted"
+        number = ev.pull_request.number if is_review and ev.pull_request else (ev.issue.number if ev.issue else 0)
+        head_ref = ev.pull_request.head_ref if ev.pull_request else None
+        job_id = await self._job_for_pr(repo, number, head_ref)
+        if job_id is None:
+            return self._ignored(ev, "not_job_pr", pr_number=number)
+        principal_id = await self.linked_principal(ev.sender.id)
+        if principal_id is None:
+            await self._pr_unlinked_reply(ev, repo, number, job_id)
+            return self._ignored(ev, "unlinked", pr_number=number, job_id=job_id)
+        perm = await self.repo_permission(repo, ev.sender.login)
+        if perm not in ("admin", "maintain", "write"):
+            return self._ignored(ev, "no_write", pr_number=number, job_id=job_id, permission=perm)
+        comments = await self._feedback_comments(ev, repo, number, is_review)
+        if not comments:
+            return self._ignored(ev, "empty", pr_number=number, job_id=job_id)
+        for c in comments:
+            c.update(parse_commands(c["body"]))
+        command_only = all(c["command_only"] for c in comments)
+        event = "replicant_command" if command_only else ("review_submitted" if is_review else "issue_comment_created")
+        tenant = repo["tenant_id"]
+        key = f"tenants/{tenant}/jobs/{job_id}/events/pr/{ev.delivery_id}.json"
+        bucket = self.s.bucket("artifacts")
+        actor_doc = {"id": ev.sender.id, "login": ev.sender.login, "principal_id": principal_id, "repo_permission": perm}
+        payload = {"schema": "replicant.pr-event-payload/v1", "provider": "gitea", "delivery_id": ev.delivery_id,
+                   "event": event, "repo": ev.repo.ref, "pr_number": number, "review_state": ev.review_state,
+                   "actor": actor_doc, "comments": comments, "received_at": _iso(received_at)}
+        if self.s.s3_endpoint:
+            try:
+                await self.s3.put(bucket, key, json.dumps(payload, sort_keys=True).encode())
+            except Exception as e:  # noqa: BLE001
+                raise Retry(f"pr_event_payload write failed: {type(e).__name__}") from None
+        refs = [{k: v for k, v in {"comment_id": int(c["comment_id"]), "kind": c["kind"], "path": c.get("path"),
+                                   "line": c.get("line")}.items() if v not in (None, "", 0)}
+                for c in comments if int(c.get("comment_id") or 0) >= 1][:100]
+        sig: dict[str, Any] = {"schema": "replicant.msg.pr-event/v1", "delivery_id": ev.delivery_id[:64], "event": event,
+                               "job_id": job_id, "repo": ev.repo.ref, "pr_number": number,
+                               "actor": {"github_user_id": max(1, ev.sender.id), "login": ev.sender.login[:64],
+                                         "is_bot": False, "linked": True, "principal_id": principal_id,
+                                         "repo_permission": perm},
+                               "payload_uri": f"s3://{bucket}/{key}", "received_at": _iso(received_at)}
+        if refs:
+            sig["comment_refs"] = refs
+        if is_review and ev.review_state:
+            sig["review_state"] = ev.review_state
+        try:
+            await self.temporal.signal(job_id, "pr.event", sig)
+        except Exception as e:  # noqa: BLE001
+            from temporalio.service import RPCError, RPCStatusCode
+            if isinstance(e, RPCError) and e.status == RPCStatusCode.NOT_FOUND:
+                return self._ignored(ev, "closed_job", job_id=job_id)
+            raise Retry(f"signal failed: {type(e).__name__}") from None
+        log.info(json.dumps({"event": "pr_feedback.signalled", "delivery_id": ev.delivery_id, "job_id": job_id,
+                             "pr_number": number, "kind": event, "comments": [c["comment_id"] for c in comments]}))
+        return "pr_feedback_signalled"
+
+    async def _feedback_comments(self, ev: NormalizedEvent, repo: dict[str, Any], number: int,
+                                 is_review: bool) -> list[dict[str, Any]]:
+        """Comment items (bodies capped at 8 KiB). A review: its body plus its line comments, read from the API (the
+        webhook carries only `review.content`); the review is the sender's latest on the PR."""
+        def item(cid: int, kind: str, body: str, **kw: Any) -> dict[str, Any]:
+            return {"comment_id": cid, "kind": kind, "body": body[:8192], **{k: v for k, v in kw.items() if v}}
+        assert ev.repo and ev.sender
+        if not is_review:
+            c = ev.comment
+            return [item(c.id, "issue_comment", c.body, url=f"{ev.issue.html_url}#issuecomment-{c.id}"
+                         if ev.issue and ev.issue.html_url else None)] if c and c.body.strip() else []
+        out: list[dict[str, Any]] = []
+        g = await self._gitea(repo, "github.read_review")
+        async with g:
+            reviews = [r for r in await g.list_pull_reviews(ev.repo.owner, ev.repo.name, number)
+                       if (r.get("user") or {}).get("id") == ev.sender.id]
+            rv = max(reviews, key=lambda r: int(r.get("id") or 0)) if reviews else None
+            review_id = int(rv["id"]) if rv else 0
+            body = (ev.comment.body if ev.comment else "") or (rv or {}).get("body") or ""
+            if body.strip():
+                out.append(item(review_id, "review_body", body, review_id=review_id, url=(rv or {}).get("html_url")))
+            if rv and int(rv.get("comments_count") or 0) > 0:
+                for c in await g.review_comments(ev.repo.owner, ev.repo.name, number, review_id):
+                    if (c.get("body") or "").strip():
+                        out.append(item(int(c["id"]), "review_comment", c["body"], review_id=review_id,
+                                        path=c.get("path"), line=int(c.get("position") or c.get("original_position")
+                                                                     or 0) or None, url=c.get("html_url")))
+        return out
+
+    async def _pr_unlinked_reply(self, ev: NormalizedEvent, repo: dict[str, Any], number: int, job_id: str) -> None:
+        """One link-your-account reply per (user, repo) per 24 h, on the PR (WS-07 unlinked reply)."""
+        assert ev.sender and ev.repo
+        async with self.engine.begin() as conn:
+            seen = (await conn.execute(text(
+                "SELECT replied_at FROM github_app.unlinked_replies WHERE provider = 'gitea' AND user_id = :u AND "
+                "repo_id = :r AND replied_at > now() - interval '24 hours'"),
+                {"u": ev.sender.id, "r": repo["repo_id"]})).first()
+            if seen is not None:
+                return
+            await conn.execute(text(
+                "INSERT INTO github_app.unlinked_replies (provider, user_id, repo_id, replied_at) VALUES ('gitea', :u, :r, "
+                "now()) ON CONFLICT (provider, user_id, repo_id) DO UPDATE SET replied_at = now()"),
+                {"u": ev.sender.id, "r": repo["repo_id"]})
+        body = (f"@{ev.sender.login}, the Replicant only acts on review feedback from linked accounts. Link yours at "
+                f"{self.s.web_origin.rstrip('/')}/settings/identity, then comment again.")
+        g = await self._gitea(repo, "github.post_reply", job_id)
+        async with g:
+            c = await g.create_issue_comment(ev.repo.owner, ev.repo.name, number, body)
+        async with self.engine.begin() as conn:
+            await conn.execute(text(
+                "INSERT INTO github_app.comment_refs (provider, repo_id, number, purpose, job_id, external_id, "
+                "delivery_guid) VALUES ('gitea', :r, :n, 'unlinked_reply', :j, :c, :g) ON CONFLICT DO NOTHING"),
+                {"r": repo["repo_id"], "n": number, "j": job_id, "c": int(c["id"]), "g": ev.delivery_id})
+
+
+COMMAND_RE = re.compile(r"^\s*/replicant\s+(no-memory|remember)\b", re.M | re.I)
+
+
+def parse_commands(body: str) -> dict[str, bool]:
+    """`/replicant no-memory` and `/replicant remember` (pr-replies.md §5) on a line of their own; `command_only` when
+    nothing but commands is left."""
+    found = {m.group(1).lower() for m in COMMAND_RE.finditer(body or "")}
+    rest = COMMAND_RE.sub("", body or "")
+    rest = re.sub(r"^\s*/replicant\b.*$", "", rest, flags=re.M)
+    return {"no_memory": "no-memory" in found, "remember": "remember" in found and "no-memory" not in found,
+            "command_only": bool(found) and not rest.strip()}
 
 
 def _iso(v: Any) -> str:

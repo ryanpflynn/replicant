@@ -1,5 +1,6 @@
 // Simple job view (WEB-UIPREF; the default for everyone): one plain sentence, six steps, what is needed from you,
 // the issue and PR, and milestones only. "Show details" switches to the Detailed view and saves the choice per user.
+import { MemoryLine } from "../components/MemoryUsed";
 import { useMemo, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { TopBar } from "../components/Shell";
@@ -179,6 +180,7 @@ export function JobSimple({ jobId }: { jobId: string }) {
           <p className={`sline f-${st.family}`} data-testid="headline"><Glyph g={st.glyph} family={st.family} /><span>{tl.data ? headline(s, steps) : "…"}</span></p>
           <StaleBanner lag={(d as typeof d & { lag?: number }).lag ?? 0} active={s.status === "running" || s.status === "queued"} />
           {tl.isError ? <ErrorBanner error={tl.error} what="the progress" retry={() => void tl.refetch()} /> : <Steps steps={steps} />}
+          <MemoryLine jobId={jobId} />
           <div className="sgrid">
             <div>
               <Needed s={s} me={me} issueUrl={issueUrl} />

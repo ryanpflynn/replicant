@@ -1,3 +1,4 @@
+import { MemoryUsed } from "../components/MemoryUsed";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { TopBar } from "../components/Shell";
@@ -383,10 +384,7 @@ function JobDetailed({ jobId, tab: tabParam }: { jobId: string; tab?: string }) 
                 <dt>Updated</dt><dd className="t2">{age(s.as_of)} ago <span className="t3 small">seq {s.seq}</span></dd>
               </dl>
             </div>
-            <div className="section">
-              <div className="section-h"><h3>Memory used</h3><span className="t3 small">read-only</span></div>
-              <p className="small t3">No entries. memory-service is not deployed in v0; the job pinned an empty snapshot <span className="mono">{s.memory_snapshot_id?.slice(0, 16)}…</span></p>
-            </div>
+            <MemoryUsed jobId={jobId} snapshotId={s.memory_snapshot_id} />
             <div className="section links">
               <div className="section-h"><h3>Observe</h3></div>
               <a href={grafanaJobUrl(jobId)} target="_blank" rel="noreferrer noopener">Grafana job drilldown <span className="ext">job_id ↗</span></a>

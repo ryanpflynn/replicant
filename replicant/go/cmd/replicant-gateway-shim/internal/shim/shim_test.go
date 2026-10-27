@@ -503,3 +503,33 @@ func TestSharedLocalServiceToken(t *testing.T) {
 	mustStatus(t, h.do("POST", "/internal/v1/revocations", "shared-tok", map[string]any{"run_ids": []string{m.runID}, "reason": "job_cancelled"}, nil), 204) // control-plane-api right
 	mustStatus(t, h.do("PUT", "/internal/v1/runs/"+m.runID+"/policy", "unknown-tok", map[string]any{}, nil), 401)
 }
+
+func TestServiceCallerScriptKeyAndMatch(t *testing.T) {
+	h := newHarness(t, "script", "", map[string]string{"REPLICANT_GATEWAY_SCRIPT_DEFAULT_SET": "svc"})
+	h.script("svc", "worker_llm", happyScript)
+	h.script("svc", "feedback_triage", `
+schema: replicant.gateway-script/v1
+name: t-triage
+protocol: anthropic_messages
+turns:
+  - match: "(?i)what does"
+    respond: {text: '{"class":"question"}'}
+  - respond: {text: '{"class":"actionable_fix"}'}
+`)
+	hdr := map[string]string{"X-Replicant-Purpose": "worker_llm", "X-Replicant-Tenant-Id": "acme-payments",
+		"X-Replicant-Job-Id": "job_01m5r7ap8fwrbbsw819jn8ptwm", "X-Replicant-Script-Key": "feedback_triage"}
+	text := func(out map[string]any) string {
+		c := out["content"].([]any)
+		return c[0].(map[string]any)["text"].(string)
+	}
+	b := msgBody("anthropic/claude-sonnet-5-5", false, 1, false)
+	if got := text(mustStatus(t, h.do("POST", "/anthropic/v1/messages", h.svcToken, b, hdr), 200)); got != `{"class":"actionable_fix"}` {
+		t.Fatalf("default turn: %s", got)
+	}
+	b["messages"] = []map[string]any{{"role": "user", "content": "What does this function return?"}}
+	for i := 0; i < 2; i++ { // stateless: the same request gets the same answer
+		if got := text(mustStatus(t, h.do("POST", "/anthropic/v1/messages", h.svcToken, b, hdr), 200)); got != `{"class":"question"}` {
+			t.Fatalf("match turn: %s", got)
+		}
+	}
+}

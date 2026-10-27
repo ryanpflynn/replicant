@@ -223,6 +223,7 @@ class FakeWorld:
                                 "proposals": 1, "non_candidates": 0}
 
         for n in ("memory.feedback_signals", "memory.record_outcome", "memory.write_episode", "cost.record_run",
+                  "memory.ingest_gate_feedback",
                   "budget.apply_extension"):
             @act(n)
             async def _(a): return {"ok": True}

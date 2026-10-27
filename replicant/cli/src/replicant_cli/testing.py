@@ -32,14 +32,16 @@ NODE_IMAGE = "docker.io/library/node:22"
 PLAYWRIGHT_IMAGE = "mcr.microsoft.com/playwright:v1.64.1-noble"
 GO_CACHE_VOLUMES = ("plat-gomod", "plat-gocache")  # reused across runs (also used by the runner-contract driver)
 PY_ROOTS = ("services", "workers", "libs/python", "cli", "tools/slack-mock")
-DB_SUITES = {"control-plane-api", "github-integration"}  # share the smoke Postgres: run one at a time
+DB_SUITES = {"control-plane-api", "github-integration", "memory-service"}  # share the smoke Postgres: run one at a time
 WORKER = "replicant-worker"
 SMOKE_PG_PORT = 55432
-E2E_DRIVERS = ("e2e01", "e2e04", "e2e02", "e2e03", "e2e05")  # e2e04 reads the job e2e01 just finished
+E2E_DRIVERS = ("e2e01", "e2e04", "e2e02", "e2e03", "e2e05", "e2e06", "e2e07")  # e2e04 reads the job e2e01 just finished
 E2E_FILES = {"e2e01": "e2e01_v0.py", "e2e02": "e2e02_notify.py", "e2e03": "e2e03_slack.py",
-             "e2e04": "e2e04_graph.py", "e2e05": "e2e05_config.py"}
+             "e2e04": "e2e04_graph.py", "e2e05": "e2e05_config.py",
+             "e2e06": "e2e06_memory.py", "e2e07": "e2e07_pr_feedback.py"}
 PLAYWRIGHT_SPECS = ("e2e/01-screens.spec.ts", "e2e/02-live.spec.ts", "e2e/03-after.spec.ts",
-                    "e2e/05-waiting.spec.ts", "e2e/07-simple-view.spec.ts", "e2e/08-project-settings.spec.ts")
+                    "e2e/05-waiting.spec.ts", "e2e/07-simple-view.spec.ts", "e2e/08-project-settings.spec.ts",
+                    "e2e/09-memory.spec.ts")
 
 
 @dataclass
@@ -313,7 +315,9 @@ class SmokeDb:
                 "CTL_DB_PASSWORD_FILE": str(sec / "db_svc_control_plane_api"),
                 "CTL_SU_DSN": f"postgresql+psycopg://postgres:{su_pw}@{host}",
                 "CTL_GI_DB_DSN": f"postgresql+psycopg://svc_github_integration@{host}",
-                "CTL_GI_DB_PASSWORD_FILE": str(sec / "db_svc_github_integration")}
+                "CTL_GI_DB_PASSWORD_FILE": str(sec / "db_svc_github_integration"),
+                "CTL_MEM_DB_DSN": f"postgresql+psycopg://svc_memory_service@{host}",
+                "CTL_MEM_DB_PASSWORD_FILE": str(sec / "db_svc_memory_service")}
 
     def down(self) -> None:
         if self.started and not self.keep:
@@ -519,6 +523,22 @@ def _run_playwright(ctx: Ctx, s: Suite) -> list[Result]:
     return [_status(r, rc)]
 
 
+def _set_gateway_mode(p: Paths, mode: str, log: Callable[[str], None]) -> None:
+    """Set REPLICANT_GATEWAY_MODE and recreate only gateway-shim, then wait until it is healthy again."""
+    from replicant_cli import secrets
+    secrets.set_env(p, {"REPLICANT_GATEWAY_MODE": mode})
+    subprocess.run(compose.compose_cmd(p, "v0") + ["up", "-d", "--no-deps", "--force-recreate", "gateway-shim"],
+                   capture_output=True, text=True, timeout=300)
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline:
+        c = compose.containers().get("gateway-shim")
+        if c and c.status == "running" and getattr(c, "health", "healthy") in ("healthy", "", None):
+            log(f"gateway-shim is up in `{mode}` mode")
+            return
+        time.sleep(3)
+    log(f"WARNING: gateway-shim not healthy after switching to `{mode}`")
+
+
 def e2e(p: Paths, *, only: list[str], fail_fast: bool, junit: str | None, log: Callable[[str], None]) -> int:
     t0 = time.monotonic()
     cs = compose.containers()
@@ -527,15 +547,21 @@ def e2e(p: Paths, *, only: list[str], fail_fast: bool, junit: str | None, log: C
     if down:
         log(f"the stack is not up ({', '.join(down)} not running): replicant dev up && replicant dev seed")
         return 1
-    mode = compose.env_values(p).get("REPLICANT_GATEWAY_MODE", "script")
-    if mode != "script":
-        log(f"WARNING: gateway mode is {mode!r}; the E2Es expect `script` (replicant dev up --gateway script)")
     suites = [Suite(n, _run_driver, cwd=p.root / "tests" / "e2e") for n in E2E_DRIVERS]
     suites.append(Suite("playwright", _run_playwright))
     suites = _selected(suites, only)
     out = out_dir(p)
-    log(f"running {len(suites)} E2E suite(s) one at a time (shared stack); logs in {out}")
-    results = run_suites(Ctx(p, out, dict(os.environ), log=log), suites, 1, fail_fast)
+    # The E2Es use the scripted gateway (deterministic, no model cost): switch for the run, restore afterwards.
+    mode = compose.env_values(p).get("REPLICANT_GATEWAY_MODE", "script")
+    if mode != "script":
+        log(f"gateway mode is {mode!r}: switching to `script` for the E2Es (restored afterwards)")
+        _set_gateway_mode(p, "script", log)
+    try:
+        log(f"running {len(suites)} E2E suite(s) one at a time (shared stack); logs in {out}")
+        results = run_suites(Ctx(p, out, dict(os.environ), log=log), suites, 1, fail_fast)
+    finally:
+        if mode != "script":
+            _set_gateway_mode(p, mode, log)
     print_table(results, time.monotonic() - t0, log)
     copy_junit(out, junit, log)
     return 1 if any(r.status in ("FAIL", "NOT RUN") for r in results) else 0

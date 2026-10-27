@@ -190,6 +190,7 @@ CATALOG: dict[str, ActivityDef] = {a.name: a for a in [
     ActivityDef("memory.feedback_signals", IO_INTERNAL, True),
     ActivityDef("memory.record_outcome", IO_INTERNAL, True),
     ActivityDef("memory.write_episode", IO_INTERNAL, True),
+    ActivityDef("memory.ingest_gate_feedback", LLM, True),  # MEM: request_changes/reject comments -> candidates
     # agent runs (WS-03, XD-03-12)
     ActivityDef("agents.build_run_plan", IO_INTERNAL, False),
     ActivityDef("budget.allocate_run", IO_INTERNAL, False),

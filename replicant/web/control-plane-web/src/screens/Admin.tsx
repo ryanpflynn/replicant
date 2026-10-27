@@ -125,31 +125,3 @@ export function Admin() {
     </>
   );
 }
-
-export function Memory() {
-  const me = useMe().data;
-  if (me && !hasCap(me, "memory:admin")) {
-    return (
-      <><TopBar><b>Memory</b></TopBar><main className="main">
-        <Forbidden what="memory administration" perm="memory:admin">
-          This page manages Replicant's long-term memory. Only members of the Okta group <span className="mono">replicant-admins</span> can open it, and that is checked on every request. Your account, {me.display_name}, is not in that group.
-        </Forbidden>
-      </main></>
-    );
-  }
-  return (
-    <>
-      <TopBar><b>Memory</b><span className="sep">/</span><span>Candidates</span><span className="adminbadge" style={{ marginLeft: 6 }}>replicant-admins</span></TopBar>
-      <main className="main">
-        <nav className="tabs" aria-label="Memory sections">
-          {["Candidates", "Active", "Conflicts", "Quarantine", "Flags", "Analytics", "Exports"].map((t, i) => <a key={t} className={i === 0 ? "on" : ""} aria-disabled="true">{t}</a>)}
-        </nav>
-        <div className="empty">
-          <h3>Memory service is not running in v0</h3>
-          <p className="t2">Curation reads and writes go through <span className="mono">/v1/admin/memory/**</span> to memory-service, which the local v0 stack does not deploy. Jobs pin an empty memory snapshot, so there are no candidates, entries or flags to review.</p>
-          <p className="t2" style={{ marginTop: 10 }}>When memory-service is added to the stack, this page lists candidates from PR reviews for approval, with their provenance and poisoning checks.</p>
-        </div>
-      </main>
-    </>
-  );
-}

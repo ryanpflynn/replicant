@@ -241,6 +241,7 @@ func (rc *runCtx) runCLI(ctx context.Context, term chan os.Signal, schemaJSON, p
 	if len(first) == 0 {
 		first = []byte("Complete the task described in /replicant/inputs/context.")
 	}
+	first = firstMessageWithRepoInstructions(sandbox.InputsDir, first)
 	rc.sendUser(string(first), "user_message")
 
 	lines := make(chan []byte, 256)

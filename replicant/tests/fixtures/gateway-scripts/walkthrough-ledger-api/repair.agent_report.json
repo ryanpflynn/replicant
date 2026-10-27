@@ -1,0 +1,10 @@
+{
+  "outcome": "completed",
+  "summary": "Addressed the review comment: ApplyRefund now explains, in a comment above the FX fee reversal, that only the refunded share of the fee is reversed (Prorate, half-even, integer minor units). No behaviour change.",
+  "tests_run": [
+    {"command": "go vet ./... && go test -count=1 ./...", "exit_code": 0, "summary": "all packages pass"}
+  ],
+  "confidence": "high",
+  "follow_ups": [],
+  "handoff_written": false
+}

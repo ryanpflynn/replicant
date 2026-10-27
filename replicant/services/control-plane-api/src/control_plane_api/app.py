@@ -16,6 +16,7 @@ from control_plane_api import routes_graph
 from control_plane_api import routes_projects
 from control_plane_api.projects import LiveConfig
 from control_plane_api import routes_ui_prefs
+from control_plane_api import routes_memory
 from control_plane_api.auth import AuthContext
 from control_plane_api.config import Settings
 from control_plane_api.db import Database
@@ -130,6 +131,7 @@ def create_app(settings: Settings | None = None, *, db: Database | None = None,
     app.include_router(routes_graph.router)  # GRAPH-01: job graph + run activity reads
     app.include_router(routes_projects.router)  # CONFIG-01: projects, access, team configuration
     app.include_router(routes_ui_prefs.router)  # WEB-UIPREF: /v1/me/ui-preferences
+    app.include_router(routes_memory.router)  # MEM: /v1/admin/memory/**, /v1/jobs/{id}/memory, repo scan
 
     try:
         import replicant_dev_auth

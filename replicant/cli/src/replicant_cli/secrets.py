@@ -31,6 +31,8 @@ SIMPLE_TOKENS = (
     # v0 (CONTROL-02)
     "github_integration_cp_token", "broker_publisher_token", "broker_github_integration_token",
     "replicant_worker_cp_token", "notify_delivery_token", "slack_integration_cp_token",
+    # v0 MEM: control-plane-api -> memory-service (admin proxy; also the HMAC key of the signed caller principal)
+    "memory_cpa_token",
     # not mounted by compose; inputs of rendered files
     "s3_services_secret", "s3_gateway_shim_secret", "s3_dev_reader_secret", "s3_langfuse_secret",
 )
@@ -111,6 +113,8 @@ def ensure(p: Paths) -> list[str]:
                                            s("github_integration_cp_token"): "svc_github-integration",
                                            s("replicant_worker_cp_token"): "svc_replicant-worker",
                                            s("slack_integration_cp_token"): "svc_slack-integration"},
+        "memory_internal_callers": {s("memory_cpa_token"): "svc_control-plane-api",
+                                    s("replicant_worker_cp_token"): "svc_replicant-worker"},
         "broker_caller_tokens": {s("broker_mirror_token"): "repo-mirror", s("broker_publisher_token"): "publisher-worker",
                                  s("broker_github_integration_token"): "github-integration"},
     }

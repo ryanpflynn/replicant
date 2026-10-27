@@ -1,0 +1,12 @@
+# replicant.gateway-script/v1: memory-service paraphrase dedupe judge (worker_llm, script key memory_dedupe_judge).
+schema: replicant.gateway-script/v1
+name: walkthrough-ledger-api-memory-dedupe-judge
+protocol: anthropic_messages
+turns:
+  - match: "e2e06-paraphrase"
+    respond:
+      text: '{"same": true, "reason": "Both require wrapping errors with context."}'
+      usage: {input_tokens: 300, output_tokens: 20}
+  - respond:
+      text: '{"same": false, "reason": "Different requirements."}'
+      usage: {input_tokens: 300, output_tokens: 20}

@@ -984,3 +984,56 @@ control-plane-api.openapi.yaml. Deviations: DEVIATIONS CONFIG-D*.
   `screens/ProjectSettings.tsx`; Projects nav item when `me.projects` is non-empty; `GraphSvg` exported from
   `JobGraph.tsx`. Playwright `e2e/08-project-settings.spec.ts` (screenshots `screenshots/settings/`).
 - **E2E:** `tests/e2e/e2e05_config.py`.
+
+## MEM (memory subsystem: memory-service, snapshots, injection, curation, 2026-10-27)
+
+- **MEM-01 (2026-10-27) Feedback into memory: `memory.extract_candidates` / `memory.write_candidates`.** Called by
+  the `memory_writer` node with its existing input `{job_id, tenant_id, cycle, candidates_uri?, triage_uri?,
+  memory_snapshot_id}` (node code unchanged). Two sources are read, both optional:
+  1. `triage_uri`: the JSON document `feedback.triage` writes (PR-loop owner). memory reads only its `items` array
+     (or `events` when `items` is absent). Per item:
+
+     | field | required | meaning |
+     |---|---|---|
+     | `source_kind` | yes | `pr_review_comment` \| `pr_review_body` \| `pr_issue_comment` |
+     | `text` | yes | the comment body as posted (memory redacts and caps it at 2000 chars) |
+     | `classification` | yes | `actionable_fix` \| `question` \| `optional_suggestion` \| `no_action` |
+     | `addressed` | no | `false` when the repair did not address it (default true for `actionable_fix`) |
+     | `memory_directive` | no | `none` (default) \| `no_memory` (`/replicant no-memory`) \| `remember` (`/replicant remember`) |
+     | `author_principal_id` | yes | linked `usr_` of the commenter (bots and unlinked users must not appear here) |
+     | `author_repo_permission` | yes | `admin` \| `maintain` \| `write` (anything else is dropped as `blocked_author`) |
+     | `author_github_user_id`, `author_association` | no | as GitHub/Gitea report them |
+     | `repo` | yes | `host[:port]/owner/name` as in the job targets (memory strips the port) |
+     | `repo_id`, `pr_number`, `comment_id`, `review_id`, `delivery_id` | pr_number yes; comment_id or review_id yes | refs |
+     | `source_url` | yes | `http(s)://` link to the comment |
+     | `observed_at` | no | RFC 3339; default now |
+
+     Extracted: `actionable_fix` items not `addressed: false`, plus any item with `memory_directive: remember`.
+     `no_memory` items are recorded as `opted_out`; everything else as `not_generalizable`.
+  2. `candidates_uri`: `out/memory_candidates.json` of an agent run (`replicant.memory-candidates/v1`
+     proposals; the repo scan uses it). Written with origin `import` for repo_scan jobs, `agent_proposal` otherwise.
+
+  The extraction is one tool-less gateway call (`activities/llm.py complete(...)`, script key `memory_extraction`,
+  fixture `tests/fixtures/gateway-scripts/walkthrough-ledger-api/memory_extraction.yaml`) per batch; proposals with
+  `generalization_score < 0.7` are dropped. Result `{candidates_uri, sha256, proposals, non_candidates}`; the
+  extracted envelope is written once to `tenants/<t>/jobs/<j>/steps/memory.c<cycle>.n1/memory_candidates/extracted.json`.
+  `memory.write_candidates` posts it to memory-service `POST /internal/v1/candidates` and returns `{written,
+  merged, conflicts, blocked}`. Every candidate waits for an admin (no auto-activation).
+
+## MEM-PR-01 (PR-loop agent -> memory, WORKER, github-integration, 2026-10-27): PR feedback payload, triage doc
+
+- **pr.event feedback** (github-integration -> ReplicantJob): C-MSG `replicant.msg.pr-event/v1` with `event`
+  `review_submitted` | `issue_comment_created` | `replicant_command`, `actor.{principal_id, repo_permission, linked}`,
+  `comment_refs`. Payload `tenants/<t>/jobs/<j>/events/pr/<delivery>.json`: `{schema: replicant.pr-event-payload/v1,
+  delivery_id, event, repo, pr_number, review_state, received_at, actor: {id, login, principal_id, repo_permission},
+  comments: [{comment_id, kind: review_body|review_comment|issue_comment, body (<= 8 KiB), review_id?, path?, line?,
+  url?, no_memory, remember, command_only}]}`.
+- **Triage doc** (`feedback.triage` -> `refs.feedback_triage_uri`, `steps/triage.c<cycle>.n1/feedback_triage.json`):
+  `{schema: replicant.feedback-triage/v1, job_id, tenant_id, cycle, prompt_sha256, outcome, deliveries, items}`; `items`
+  carry exactly the MEM-01 fields plus `confidence`, `summary`, `kind`, `path`, `line`, `author_login`, `command_only`.
+- **`memory.extract_candidates`** additionally receives a top-level `addressed: bool` when a triage doc exists (false:
+  treat every item as `addressed: false`). See MEM-PR-D8.
+- **`github.post_reply`** additionally receives `repair_budget: {used, max}` and `qa_verdict`.
+- **Worker LLM helper** `replicant_worker/activities/llm.py complete(tenant_id, job_id, script_key, system, user, model,
+  max_tokens) -> text` (header `X-Replicant-Script-Key`; scripted fixtures `tests/fixtures/gateway-scripts/
+  walkthrough-ledger-api/<script_key>.yaml`).

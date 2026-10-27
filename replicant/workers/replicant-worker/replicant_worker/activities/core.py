@@ -39,7 +39,10 @@ async def load_bundle_core(a: dict[str, Any]) -> dict[str, Any]:
 async def graph_compose(a: dict[str, Any]) -> dict[str, Any]:
     b = bundles.load(a["release_bundle_id"])
     wt = a["workflow_type"]
-    pin, doc = b.graph_for(wt)  # CONFIG: through the bundle's spec.graphs mapping
+    if local_bundle.REPO_SCAN_LABEL in (a.get("labels") or []) and wt == "docs":
+        pin, doc = b.graph_variant(local_bundle.REPO_SCAN_GRAPH)  # MEM repo scan (MEM-D7)
+    else:
+        pin, doc = b.graph_for(wt)  # CONFIG: through the bundle's spec.graphs mapping
     base = parse_definition(doc, version=pin["version"], digest=pin["digest"])
     cat = registry.catalog_entries()
     g = compose(base, [], catalog=cat)  # no codebase bindings (graph modifiers) in M1
@@ -130,38 +133,7 @@ async def router_parse_intent(a: dict[str, Any]) -> dict[str, Any]:
     raise ApplicationError("LLM intent parsing is off in v0", type="IntentParsingDisabled", non_retryable=True)
 
 
-# ------------------------------------------------------------------------------------------------ memory (pinned empty)
-@implements("memory.create_snapshot")
-async def memory_create_snapshot(a: dict[str, Any]) -> dict[str, Any]:
-    """plan.md §1.3: a pinned empty snapshot under the default policy (no memory-service in M1). The ID is derived
-    from the job, so every call (create and revocation_filter) returns the same pinned snapshot."""
-    return {"memory_snapshot_id": a.get("base_snapshot_id") or ids.derived("msnap", a["job_id"]), "entries": 0,
-            "mode": a.get("mode", "create"), "empty": True}
-
-
-@implements("memory.record_outcome")
-async def memory_record_outcome(a: dict[str, Any]) -> dict[str, Any]:
-    return {"recorded": False, "reason": "memory-service not in v0"}
-
-
-@implements("memory.write_episode")
-async def memory_write_episode(a: dict[str, Any]) -> dict[str, Any]:
-    return {"written": False, "reason": "memory-service not in v0"}
-
-
-@implements("memory.extract_candidates")
-async def memory_extract_candidates(a: dict[str, Any]) -> dict[str, Any]:
-    return {"candidates_uri": None, "sha256": None, "proposals": 0, "non_candidates": 0}
-
-
-@implements("memory.write_candidates")
-async def memory_write_candidates(a: dict[str, Any]) -> dict[str, Any]:
-    return {"written": 0}
-
-
-@implements("memory.feedback_signals")
-async def memory_feedback_signals(a: dict[str, Any]) -> dict[str, Any]:
-    return {"ok": True}
+# memory.* live in activities/memory.py (memory-service client, MEM)
 
 
 # ------------------------------------------------------------------------------------------------ budget / cost

@@ -72,3 +72,25 @@ def test_review_and_comment():
                     "issue": {"number": 2, "title": "x"}, "comment": {"id": 11, "body": "/replicant status", "user": ALICE}},
                    host=HOST)
     assert ev.kind == "issue_comment.created" and ev.issue.is_pull and ev.comment.id == 11
+
+
+def test_gitea_review_and_pr_comment_headers():
+    """Gitea 1.2x as observed: a submitted review is event `pull_request_comment` + type `pull_request_review_comment`;
+    a plain PR comment is event `issue_comment` + type `pull_request_comment` (must not be read as a review)."""
+    ev = normalize({"X-Gitea-Event": "pull_request_comment", "X-Gitea-Event-Type": "pull_request_review_comment",
+                    "X-Gitea-Delivery": "d-6"},
+                   {"action": "reviewed", "repository": REPO, "sender": ALICE, "review": {"content": "use decimal"},
+                    "pull_request": {"number": 2, "state": "open", "head": {"ref": "replicant/x"}, "base": {}}}, host=HOST)
+    assert ev.kind == "pull_request_review.submitted" and ev.review_state == "commented"
+    assert ev.comment.body == "use decimal" and ev.pull_request.number == 2
+    ev = normalize({"X-Gitea-Event": "pull_request_rejected", "X-Gitea-Event-Type": "pull_request_review_rejected",
+                    "X-Gitea-Delivery": "d-7"},
+                   {"action": "reviewed", "repository": REPO, "sender": ALICE, "review": {"content": "no"},
+                    "pull_request": {"number": 2, "state": "open", "head": {}, "base": {}}}, host=HOST)
+    assert ev.review_state == "changes_requested"
+    ev = normalize({"X-Gitea-Event": "issue_comment", "X-Gitea-Event-Type": "pull_request_comment",
+                    "X-Gitea-Delivery": "d-8"},
+                   {"action": "created", "repository": REPO, "sender": ALICE,
+                    "issue": {"number": 2, "title": "x", "pull_request": {"merged": False}},
+                    "comment": {"id": 12, "body": "please rename", "user": ALICE}}, host=HOST)
+    assert ev.kind == "issue_comment.created" and ev.issue.is_pull and ev.comment.body == "please rename"

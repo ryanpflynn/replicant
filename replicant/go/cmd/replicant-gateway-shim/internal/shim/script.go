@@ -30,6 +30,9 @@ type Script struct {
 
 // Turn is one scripted response.
 type Turn struct {
+	// Match (service callers only, e.g. worker_llm): a regexp tried against the request body; the first turn
+	// whose Match hits (or that has no Match) answers. Stateless: no per-run cursor.
+	Match   string   `yaml:"match"`
 	Expect  *Expect  `yaml:"expect"`
 	Respond *Respond `yaml:"respond"`
 	Fault   *Fault   `yaml:"fault"`
@@ -151,7 +154,13 @@ func (b *ScriptBackend) Resolve(d *DataRequest) (*Script, []string, error) {
 	if d.Policy != nil && d.Policy.Stub != nil {
 		stub = d.Policy.Stub
 	} else if b.cfg.ScriptDefaultSet != "" {
-		stub = &Stub{Root: "scripts", Set: b.cfg.ScriptDefaultSet, Key: d.Role}
+		key := d.Role
+		if d.Header != nil {
+			if k := d.Header.Get("X-Replicant-Script-Key"); k != "" && reSafe.MatchString(k) {
+				key = k // service callers name their script (feedback_triage, memory_extraction); falls back to the purpose
+			}
+		}
+		stub = &Stub{Root: "scripts", Set: b.cfg.ScriptDefaultSet, Key: key}
 	}
 	if stub == nil {
 		return nil, nil, fmt.Errorf("no stub in the run policy and REPLICANT_GATEWAY_SCRIPT_DEFAULT_SET unset")
@@ -305,6 +314,28 @@ func (b *ScriptBackend) Serve(w http.ResponseWriter, r *http.Request, d *DataReq
 	}
 	vars["repo"] = vars["cwd"]
 
+	// Service callers (no run policy: worker_llm, eval_judge) are tool-less by rule: answer with the first turn whose
+	// Match regexp hits the request body (a turn without Match is the default). Stateless and deterministic.
+	if d.Policy == nil && len(req.Tools) == 0 {
+		for i := range script.Turns {
+			t := &script.Turns[i]
+			if t.Respond == nil {
+				continue
+			}
+			if t.Match != "" {
+				re, err := regexp.Compile(t.Match)
+				if err != nil {
+					return b.miss(w, d, fmt.Sprintf("turn %d: bad match regexp: %v", i, err), nil)
+				}
+				if !re.Match(d.Body) {
+					continue
+				}
+			}
+			return b.render(w, d, &req, t.Respond, "svc"+strconv.Itoa(i), vars, script)
+		}
+		return b.miss(w, d, fmt.Sprintf("script %s: no turn matches the request", script.Name),
+			map[string]any{"script": script.Name})
+	}
 	// Auxiliary requests (no tools: titles, summaries, classifiers) never consume a turn.
 	if len(req.Tools) == 0 {
 		return b.render(w, d, &req, &Respond{Text: "OK."}, "aux", vars, script)

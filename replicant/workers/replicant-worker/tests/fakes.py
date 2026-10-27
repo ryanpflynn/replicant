@@ -43,6 +43,10 @@ class FakeS3:
         self.puts.append((Bucket, Key))
         return {}
 
+    def list_objects_v2(self, Bucket: str, Prefix: str = "", **kw: Any) -> dict[str, Any]:  # noqa: N803
+        return {"Contents": [{"Key": k} for (b, k) in sorted(self.objs) if b == Bucket and k.startswith(Prefix)],
+                "IsTruncated": False}
+
     def copy_object(self, Bucket: str, Key: str, CopySource: dict[str, str]) -> dict[str, Any]:  # noqa: N803
         self.objs[(Bucket, Key)] = self.objs[(CopySource["Bucket"], CopySource["Key"])]
         return {}

@@ -78,7 +78,8 @@ class PlanRun(_AgentRun):
     role = "planner"
     run_role = "planner"
     default_workload = "review"
-    output_refs = {"plan": "plan_uri", "handoff": "latest_handoff_uri"}
+    output_refs = {"plan": "plan_uri", "handoff": "latest_handoff_uri",
+                   "memory_candidates": "memory_candidates_uri"}  # MEM: repo scan proposals
     description = "Read-only planning run; produces a plan artifact (acceptance criteria per XD-05-05)."
 
 
@@ -441,6 +442,8 @@ class Publisher(NodeType):
         else:
             pr = await ctx.act("publisher.push_update", args, effect="push")
             s.pr = {**(s.pr or {}), **pr}
+            if isinstance(s.exports.get("__feedback__"), dict):
+                s.exports["__feedback__"]["pushed"] = True  # the memory node marks this batch's fixes as addressed
             h.emit("pr.updated", f"PR #{s.pr['number']} updated", node_key=ctx.node_key)
         return NodeResult(outcome="published")
 
@@ -476,7 +479,9 @@ class PrFeedbackWait(NodeType):
                 "job_id": s.job_id, "tenant_id": s.tenant_id, "repo": ctx.host.primary_repo(),
                 "actors": sorted({b["actor"]["github_user_id"] for b in batch})})
             authorized = [b for b in batch if b["actor"]["github_user_id"] in set(allowed["allowed_user_ids"])]
-        if not authorized:
+        if not authorized or all(b.get("event") == "replicant_command" for b in authorized):
+            # command-only comments (`/replicant no-memory|remember`) never start a repair cycle on their own; they
+            # apply to comments of the same batch (feedback.triage)
             return NodeResult(outcome="ignored")
         if s.repair_used >= s.repair_max:
             return NodeResult(outcome="budget_exhausted")
@@ -523,6 +528,8 @@ class PostReply(NodeType):
         await ctx.act("github.post_reply", {"job_id": s.job_id, "repo": ctx.host.primary_repo(), "pr": s.pr,
                                             "template": config["template"], "cycle": s.cycle,
                                             "triage_uri": s.refs.get("feedback_triage_uri"),
+                                            "repair_budget": {"used": s.repair_used, "max": s.repair_max},
+                                            "qa_verdict": s.last_qa_verdict,
                                             "in_reply_to": [b["delivery_id"] for b in s.exports.get("__feedback__", {}).get("batch", [])]},
                       effect="post_reply")
         return NodeResult(outcome="posted")
@@ -543,6 +550,9 @@ class MemoryWriter(NodeType):
         ex = await ctx.act("memory.extract_candidates", {
             "job_id": s.job_id, "tenant_id": s.tenant_id, "cycle": s.cycle,
             "candidates_uri": s.refs.get("memory_candidates_uri"), "triage_uri": s.refs.get("feedback_triage_uri"),
+            # MEM-01: false when this cycle's repair was not pushed (failed repair, no_action, rejected push gate)
+            **({"addressed": bool(s.exports["__feedback__"].get("pushed"))}
+               if isinstance(s.exports.get("__feedback__"), dict) and s.refs.get("feedback_triage_uri") else {}),
             "memory_snapshot_id": s.memory_snapshot_id}, effect="extract")
         r = await ctx.act("memory.write_candidates", {  # extract returns {candidates_uri, sha256, ...} (XD-FIX-R1-100)
             "job_id": s.job_id, "tenant_id": s.tenant_id, "cycle": s.cycle,

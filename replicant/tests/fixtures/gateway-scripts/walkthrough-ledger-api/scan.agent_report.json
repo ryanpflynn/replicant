@@ -1,0 +1,15 @@
+{
+  "outcome": "completed",
+  "summary": "Repo scan of ledger-api: money is int64 minor units, rounding is half-even through the internal/ledger helpers, tests are table-driven next to the code. Three convention candidates were written to /replicant/out/memory_candidates.json for the memory admin queue.",
+  "steps": [
+    {"id": "s1", "title": "Read CLAUDE.md, README.md, go.mod and the package layout", "files": ["CLAUDE.md", "README.md", "go.mod"], "rationale": "The repository's stated conventions and structure."},
+    {"id": "s2", "title": "Propose convention candidates with example files", "files": ["internal/ledger/ledger.go", "internal/ledger/prorate.go", "internal/ledger/ledger_test.go"], "rationale": "Each candidate points to files that follow it."}
+  ],
+  "acceptance_criteria": [
+    {"id": "ac1", "text": "memory_candidates.json lists the repository conventions with sources.", "verifiable_by": "manual"}
+  ],
+  "risks": [],
+  "estimated_scope": {"files": 0, "lines": 0},
+  "touches_services": ["ledger-api"],
+  "expected_ui_changes": []
+}

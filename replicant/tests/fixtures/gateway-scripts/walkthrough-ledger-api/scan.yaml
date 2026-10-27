@@ -1,0 +1,58 @@
+# replicant.gateway-script/v1: the canned repo scan (MEM, graph repo-scan, node `scan`, agent scanner-claude, role
+# planner, read-only). WORKER sends stub key scan.c<cycle>.n<ordinal>; the shim falls back to "scan", i.e. this file.
+# It reads the repo's agent instructions and README, writes a short summary to /replicant/out/plan.md and the
+# convention candidates to /replicant/out/memory_candidates.json (replicant.memory-candidates/v1 proposals, collected
+# as output memory_candidates), then ends with the planner StructuredOutput (scan.agent_report.json).
+schema: replicant.gateway-script/v1
+name: walkthrough-ledger-api-scan
+protocol: anthropic_messages
+finish: "Conventions written to /replicant/out/memory_candidates.json."
+turns:
+  - expect: {tools: [Read, Bash]}
+    respond:
+      text: "I'll read the repository's own agent instructions first."
+      tool_use: {name: Read, input: {file_path: "${cwd}/CLAUDE.md"}}
+      usage: {input_tokens: 6000, output_tokens: 40}
+  - respond:
+      tool_use: {name: Bash, input: {command: "cd ${cwd} && cat README.md go.mod && ls -R internal | head -40", description: "Read README, go.mod and the package layout"}}
+      usage: {input_tokens: 7000, output_tokens: 40}
+  - respond:
+      text: "Writing the convention candidates."
+      tool_use:
+        name: Bash
+        input:
+          description: "Write the summary and the memory candidates"
+          command: |
+            OUT="${REPLICANT_OUT_DIR:-/replicant/out}"; mkdir -p "$OUT" && cat > "$OUT/plan.md" <<'PLAN'
+            # ledger-api conventions (repo scan)
+
+            - Money: integer minor units (int64), never floating point; rounding half-even through internal/ledger helpers.
+            - Tests: table-driven with t.Run per case, next to the code; go vet and go test before finishing.
+            - Errors: returned to the caller, wrapped with context.
+            PLAN
+            cat > "$OUT/memory_candidates.json" <<'JSON'
+            {"schema": "replicant.memory-candidates/v1", "producer": {"kind": "repo_scan"},
+             "proposals": [
+              {"memory_type": "rule", "proposed_scope": {"level": "repo"}, "subject_key": "money.representation",
+               "title": "Money is integer minor units",
+               "statement": "Represent money as int64 minor units and never use float32/float64 for amounts.",
+               "rationale": "Stated in CLAUDE.md; ledger.Charge and ledger.Entry use AmountMinor int64.",
+               "source": {"text": "CLAUDE.md: Money is integer minor units (int64); never use floating point for amounts.", "files": ["CLAUDE.md", "internal/ledger/ledger.go"]}},
+              {"memory_type": "rule", "proposed_scope": {"level": "path", "path_globs": ["internal/ledger/**"]}, "subject_key": "money.rounding",
+               "title": "Round half-even with the ledger helpers",
+               "statement": "Round money half-even only through the internal/ledger helpers such as Prorate; do not hand-roll rounding.",
+               "rationale": "CLAUDE.md and internal/ledger/prorate.go.",
+               "source": {"text": "CLAUDE.md: Rounding is half-even, through the helpers in internal/ledger (Prorate).", "files": ["internal/ledger/prorate.go"]}},
+              {"memory_type": "procedure", "proposed_scope": {"level": "repo"}, "subject_key": "testing.layout",
+               "title": "Table-driven tests next to the code",
+               "statement": "Write table-driven Go tests with one t.Run per case, in a _test.go file next to the code under test.",
+               "rationale": "CLAUDE.md; internal/ledger/ledger_test.go follows it.",
+               "source": {"text": "CLAUDE.md: Tests are table-driven (t.Run per case) and live next to the code.", "files": ["internal/ledger/ledger_test.go"]}}
+             ]}
+            JSON
+            echo "wrote $OUT/plan.md and $OUT/memory_candidates.json"
+      usage: {input_tokens: 8000, output_tokens: 600}
+  - respond:
+      text: "Three conventions proposed for the memory admin queue."
+      structured_output_from: scan.agent_report.json
+      usage: {input_tokens: 8500, output_tokens: 300}

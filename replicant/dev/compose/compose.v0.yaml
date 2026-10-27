@@ -184,7 +184,8 @@ services:
       REPLICANT_NOTIFY_QUIET_HOURS: ${REPLICANT_NOTIFY_QUIET_HOURS:-20:00-08:00,weekends}
       REPLICANT_NOTIFY_DELIVERY_TOKEN_FILE: /run/secrets/notify_delivery_token
       REPLICANT_SLACK_INTEGRATION_URL: http://slack-integration:8080
-    secrets: [notify_delivery_token]
+      REPLICANT_MEMORY_TOKEN_FILE: /run/secrets/memory_cpa_token      # MEM: /v1/admin/memory proxy, job memory view
+    secrets: [notify_delivery_token, memory_cpa_token]
   replicant-projector:
     environment:
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://alloy:4318/v1/traces
@@ -200,6 +201,17 @@ services:
   # X-Replicant-Dev-User header (no Dex/BFF in v0).
   control-plane-web:
     profiles: [core, v0]
+
+  # MEM (DEVIATIONS MEM-D1): memory-service joins v0 without identity-service (admin membership comes signed from
+  # control-plane-api and is re-checked here) and without embeddings or the memory MCP (MEM-D2). Static caller
+  # tokens: memory_internal_callers (control-plane-api memory_cpa_token, replicant-worker replicant_worker_cp_token).
+  memory-service:
+    profiles: [core, v0]
+    depends_on: !reset {}
+    environment:
+      REPLICANT_MEMORY_CALLER_TOKENS_FILE: /run/secrets/memory_internal_callers
+      REPLICANT_GATEWAY_URL: http://gateway-shim:8420
+    secrets: [memory_internal_callers]
 
   # NOTIFY: Slack DMs through slack-integration against slack-mock (spec services, profile v0 added in compose.yaml).
   slack-integration:
@@ -277,3 +289,5 @@ secrets:
   replicant_worker_cp_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/replicant_worker_cp_token"}
   notify_delivery_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/notify_delivery_token"}
   slack_integration_cp_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/slack_integration_cp_token"}
+  memory_cpa_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/memory_cpa_token"}
+  memory_internal_callers: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/memory_internal_callers"}

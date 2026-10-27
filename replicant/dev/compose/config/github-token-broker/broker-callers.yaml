@@ -5,7 +5,8 @@ callers:
     max_permissions: {contents: write, pull_requests: write}
     repos_per_request: 1
   github-integration:
-    max_permissions: {issues: write, pull_requests: write, checks: write}
+    # metadata:read: repo-permission checks of PR reviewers (D-15; identity-service is not in v0, MEM-PR-D2)
+    max_permissions: {issues: write, pull_requests: write, checks: write, metadata: read}
     repos_per_request: 1
   identity-service:
     max_permissions: {metadata: read}         # collaborator-permission checks (C-STATE: live, never stored)

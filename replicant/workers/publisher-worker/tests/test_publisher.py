@@ -139,3 +139,61 @@ def test_diff_stat_counts_files_and_lines():
     from publisher_worker.activities import diff_stat
     patch = (b"diff --git a/x.go b/x.go\n--- a/x.go\n+++ b/x.go\n@@ -1,2 +1,3 @@\n-old\n+new\n+more\n ctx\n")
     assert diff_stat(patch, ["x.go"]) == {"files": 1, "additions": 2, "deletions": 1}
+
+
+def test_reply_templates_and_sanitize():
+    from publisher_worker.activities import reply_body, sanitize
+    assert sanitize("ping @carol see https://evil.example/x\n/replicant remember\n<b>hi</b>") == \
+        "ping `@carol` see [link removed] hi"
+    triage = {"items": [
+        {"classification": "actionable_fix", "summary": "doc comment on Prorate @bob", "path": "a.go", "line": 3,
+         "author_login": "carol", "source_kind": "pr_review_comment"},
+        {"classification": "question", "summary": "why half-even?", "author_login": "carol",
+         "source_kind": "pr_review_body"},
+        {"classification": "no_action", "command_only": True, "author_login": "carol"}]}
+    a = {"cycle": 1, "repair_budget": {"used": 1, "max": 5},
+         "pr": {"number": 7, "url": "http://g/acme/ledger/pulls/7", "head_sha": "a" * 40}}
+    ack = reply_body("ack", a, triage, "k1")
+    assert "@carol" in ack and "`a.go:3`" in ack and "`@bob`" in ack and "Repair cycle 1 of 5" in ack
+    assert ack.endswith("<!-- replicant:reply k1 -->")
+    fix = reply_body("fix_summary", a, triage, "k2")
+    assert "[`aaaaaaaaaa`](http://g/acme/ledger/pulls/7/commits/" + "a" * 40 + ")" in fix
+    assert "why half-even" in reply_body("question", a, triage, "k3")
+    assert "used up" in reply_body("budget_exhausted", a, None, "k4")
+
+
+def test_push_update_commits_on_top_of_the_branch(tmp_path, monkeypatch):
+    """The cumulative patch (from base) becomes one new commit whose parent is the PR head; the branch is not rewritten."""
+    import subprocess
+    from publisher_worker import scm
+    origin = tmp_path / "origin.git"
+    work = tmp_path / "w"
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+           "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "HOME": str(tmp_path)}
+
+    def git(*a, cwd=work):  # noqa: ANN001, ANN202
+        return subprocess.run(["git", *a], cwd=cwd, env=env, check=True, capture_output=True, text=True).stdout.strip()
+    subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+    subprocess.run(["git", "init", "-q", str(work)], check=True)
+    (work / "f.txt").write_text("one\n")
+    git("add", "-A"); git("commit", "-qm", "base")
+    base = git("rev-parse", "HEAD")
+    (work / "f.txt").write_text("one\ntwo\n")
+    git("commit", "-qam", "pr v1")
+    v1 = git("rev-parse", "HEAD")
+    git("push", "-q", str(origin), "HEAD:refs/heads/replicant/job_x")
+    git("push", "-q", str(origin), f"{base}:refs/heads/main")
+    (work / "f.txt").write_text("one\ntwo\nthree\n")
+    patch = subprocess.run(["git", "diff", base], cwd=work, env=env, capture_output=True, check=True).stdout
+
+    class LocalRepo(scm.Repo):
+        @property
+        def git_url(self) -> str:
+            return str(origin)
+    monkeypatch.setattr(scm, "settings", lambda: type("S", (), {"bot_login": "replicant-bot"})())
+    repo = LocalRepo("gitea", "h", "o", "n", "1")
+    head = scm.build_and_push(repo, "tok", base_sha=base, patch=patch, branch="replicant/job_x", message="fix: more\n",
+                              author=("replicant-bot", "b@b"), on_top_of=v1)
+    assert git("rev-parse", "replicant/job_x", cwd=origin) == head
+    assert git("rev-parse", f"{head}^", cwd=origin) == v1
+    assert git("show", f"{head}:f.txt", cwd=origin) == "one\ntwo\nthree"

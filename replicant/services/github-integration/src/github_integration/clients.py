@@ -47,11 +47,13 @@ class Broker:
         self.s = s
         self._transport = transport
 
-    async def token(self, installation_id: int, repo_id: str, purpose: str, job_id: str | None = None) -> str:
+    async def token(self, installation_id: int, repo_id: str, purpose: str, job_id: str | None = None,
+                    permissions: dict[str, str] | None = None) -> str:
         tok = read_secret(self.s.token_broker_token_file)
         headers = {"Authorization": f"Bearer {tok}"} if tok else {}
         body: dict[str, Any] = {"installation_id": installation_id, "repository_ids": [int(repo_id)],
-                                "permissions": {"issues": "write", "pull_requests": "write"}, "purpose": purpose}
+                                "permissions": permissions or {"issues": "write", "pull_requests": "write"},
+                                "purpose": purpose}
         if job_id:
             body["job_id"] = job_id
         async with httpx.AsyncClient(base_url=self.s.token_broker_url, timeout=15, transport=self._transport) as c:

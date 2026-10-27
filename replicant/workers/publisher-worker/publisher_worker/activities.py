@@ -83,9 +83,10 @@ def _gate(a: dict[str, Any]) -> None:
         raise ApplicationError("Publishing paused by operators", type="PublishingPaused")  # retryable (C-MSG 1.5.0)
 
 
-def commit_message(a: dict[str, Any], task: dict[str, Any], key: str, diff_sha: str) -> str:
+def commit_message(a: dict[str, Any], task: dict[str, Any], key: str, diff_sha: str, update: bool = False) -> str:
     title = (task.get("title") or f"Replicant change for {a['job_id']}")[:120]
-    lines = [f"fix: {title}", "", f"Replicant job {a['job_id']}.", ""]
+    head = f"fix: address review feedback on {title}"[:160] if update else f"fix: {title}"
+    lines = [head, "", f"Replicant job {a['job_id']}.", ""]
     if task.get("requester_login"):
         lines.append(f"Requested-by: @{task['requester_login']}")
     lines += [f"Replicant-Job: {a['job_id']}"]
@@ -136,8 +137,14 @@ async def _push(a: dict[str, Any], *, open_pr: bool) -> dict[str, Any]:
         if f"Replicant-Activity: {key}" in msg:
             head = existing["commit"]["id"]  # an earlier attempt got this far (§10.1 step 6.1)
     if head is None:
+        on_top = None
+        if not open_pr:  # push_update: a new commit on top of the PR head (MEM-PR-D3)
+            if not existing:
+                raise ApplicationError(f"PR branch {branch} not found", type="PullRequestClosed", non_retryable=True)
+            on_top = existing["commit"]["id"]
         head = await build_and_push_async(repo, tok, base_sha=base_sha, patch=patch, branch=branch,
-                                          message=commit_message(a, task, key, diff_sha), author=BOT)
+                                          message=commit_message(a, task, key, diff_sha, update=not open_pr),
+                                          author=BOT, on_top_of=on_top)
     if not open_pr:
         return {"head_sha": head, "branch": branch}
     title = ("WIP: " if a.get("draft") else "") + (task.get("title") or f"Replicant change for {a['job_id']}")[:200]
@@ -210,23 +217,96 @@ async def publisher_close_pr(a: dict[str, Any]) -> dict[str, Any]:
     return {"state": "closed"}
 
 
-TEMPLATES = {"ack": "Thanks, Replicant is working on this feedback.",
-             "fix_summary": "The Replicant pushed an update addressing the feedback.",
-             "no_action": "The Replicant reviewed the feedback and made no change.",
-             "question": "Replicant has a question about this feedback; see the job page.",
-             "budget_exhausted": "Replicant's repair budget for this PR is used up; a human needs to take over."}
+REPLY_LINK_HOSTS: tuple[str, ...] = ()  # model text keeps no links (pr-replies.md §6 allowlist is empty locally)
+
+
+def sanitize(text: str, cap: int = 200) -> str:
+    """pr-replies.md §6 for model-written fragments (triage summaries): no @-mentions (code-formatted), no links, no
+    `/replicant` command lines, no HTML, one line, capped."""
+    t = re.sub(r"<[^>]*>", "", text or "")
+    t = "\n".join(ln for ln in t.splitlines() if not ln.strip().startswith("/replicant"))
+    t = re.sub(r"https?://\S+", "[link removed]", t)
+    t = re.sub(r"(?<![\w`])@([A-Za-z0-9_.-]+)", r"`@\1`", t)
+    t = " ".join(t.split())
+    return t[:cap] + ("…" if len(t) > cap else "")
+
+
+def _where(i: dict[str, Any]) -> str:
+    if i.get("path"):
+        return f"`{i['path']}{':' + str(i['line']) if i.get('line') else ''}`"
+    return {"pr_review_body": "review", "pr_issue_comment": "comment"}.get(i.get("source_kind", ""), "comment")
+
+
+def _lines(items: list[dict[str, Any]]) -> list[str]:
+    return [f"- {_where(i)}: {sanitize(i.get('summary') or i.get('text', ''), 160)}" for i in items]
+
+
+def reply_body(template: str, a: dict[str, Any], triage: dict[str, Any] | None, marker: str) -> str:
+    """Fixed templates filled with structured data (never model text verbatim). `marker` makes the post idempotent."""
+    items = [i for i in (triage or {}).get("items", []) if not i.get("command_only")]
+    by_cls: dict[str, list[dict[str, Any]]] = {}
+    for i in items:
+        by_cls.setdefault(i.get("classification", "no_action"), []).append(i)
+    authors = sorted({i["author_login"] for i in items if i.get("author_login")})
+    who = ", ".join(f"@{x}" for x in authors[:5])
+    budget = a.get("repair_budget") or {}
+    cyc = f"Repair cycle {budget.get('used', a.get('cycle', 0))} of {budget['max']}" if budget.get("max") else \
+        f"Repair cycle {a.get('cycle', 0)}"
+    pr = a.get("pr") or {}
+    sha = str(pr.get("head_sha") or "")
+    out: list[str] = []
+    if template == "ack":
+        fixes = by_cls.get("actionable_fix", [])
+        out = [f"**Replicant is working on your feedback**{' · ' + who if who else ''}", "",
+               f"{len(fixes)} comment(s) will be addressed in a repair run:", *_lines(fixes)]
+        others = by_cls.get("question", []) + by_cls.get("optional_suggestion", [])
+        if others:
+            out += ["", f"Not part of this repair ({len(others)}): questions and optional suggestions are left for you."]
+        out += ["", f"<sub>{cyc}. The update is pushed to this PR after QA and verification.</sub>"]
+    elif template == "fix_summary":
+        fixes = by_cls.get("actionable_fix", [])
+        link = f"[`{sha[:10]}`]({str(pr.get('url', '')).rstrip('/')}/commits/{sha})" if sha else "a new commit"
+        out = [f"**Fixed in {link}**{' · ' + who if who else ''}", "", "Addressed:", *_lines(fixes)]
+        qa = a.get("qa_verdict")
+        if qa:
+            out += ["", f"QA: `{qa}`"]
+        out += ["", f"<sub>{cyc}. Review the new commit; reply here if anything still needs changing.</sub>"]
+    elif template == "question":
+        qs = by_cls.get("question", [])
+        out = [f"**Replicant needs a clarification before changing the code**{' · ' + who if who else ''}", "",
+               "These comments are ambiguous or ask a question:", *_lines(qs), "",
+               "Reply with the concrete change you want; Replicant will pick it up as new feedback."]
+    elif template == "no_action":
+        out = [f"**Replicant made no change for this feedback**{' · ' + who if who else ''}", ""]
+        if items:
+            out += ["Read as not requiring a code change:", *_lines(items), ""]
+        out += ["If a change is needed, reply with what to change."]
+    elif template == "budget_exhausted":
+        out = ["**Replicant's repair budget for this PR is used up.**", "",
+               f"{cyc}. A human needs to take over the remaining feedback."]
+    else:
+        out = ["Replicant received the feedback."]
+    return "\n".join(out) + f"\n\n<!-- replicant:reply {marker} -->"
 
 
 @activity.defn(name="github.post_reply")
 async def github_post_reply(a: dict[str, Any]) -> dict[str, Any]:
+    """PR-level reply from a template (pr-replies.md §2/§3), as replicant-bot with a broker token. Idempotent per
+    activity: a comment carrying this activity's marker is reused."""
+    import json
     pr = a.get("pr") or {}
     if not pr.get("number"):
         raise ApplicationError("no PR to reply on", type="InvalidInput", non_retryable=True)
     repo = Repo.of(a["repo"])
-    _, aid, _ = _ids()
+    _, aid, key = _ids()
+    triage = json.loads(storage.get_uri(a["triage_uri"])) if a.get("triage_uri") else None
     g = Gitea(repo, await token(repo, purpose="github.post_reply", job_id=a.get("job_id"), activity_id=aid,
                                 permissions={"pull_requests": "write"}))
-    c = await g.comment(int(pr["number"]), TEMPLATES.get(a["template"], TEMPLATES["ack"]))
+    marker = f"<!-- replicant:reply {key} -->"
+    for c in await g.comments(int(pr["number"])):
+        if marker in (c.get("body") or ""):
+            return {"comment_id": c.get("id"), "duplicate": True}
+    c = await g.comment(int(pr["number"]), reply_body(a["template"], a, triage, key))
     return {"comment_id": c.get("id")}
 
 

@@ -139,7 +139,7 @@ def test_local_bundle_documents_are_contract_valid() -> None:
     errs = fakes.errors(__import__("jsonschema").Draft202012Validator(rb), full)
     assert not errs, errs
     pol = local_bundle.policies()
-    assert pol["repair_limits"]["repair_cycles"]["default"] == 0
+    assert pol["repair_limits"]["repair_cycles"]["default"] == 2  # bounded PR review loop (MEM-PR-D9)
     assert pol["router_rules"]["llm_risk_review"] is False
 
 
@@ -482,8 +482,10 @@ def test_notifications(env) -> None:
 
 
 def test_memory_snapshot_is_pinned_and_empty() -> None:
-    a = run(core.memory_create_snapshot, {"job_id": JOB, "tenant_id": T, "mode": "create"})
-    b = run(core.memory_create_snapshot, {"job_id": JOB, "tenant_id": T, "mode": "revocation_filter",
+    """memory-service unreachable locally: the pinned empty snapshot (memory never blocks a job)."""
+    from replicant_worker.activities import memory
+    a = run(memory.memory_create_snapshot, {"job_id": JOB, "tenant_id": T, "mode": "create"})
+    b = run(memory.memory_create_snapshot, {"job_id": JOB, "tenant_id": T, "mode": "revocation_filter",
                                           "base_snapshot_id": a["memory_snapshot_id"]})
     assert a["memory_snapshot_id"] == b["memory_snapshot_id"] == ids.derived("msnap", JOB) and a["entries"] == 0
 

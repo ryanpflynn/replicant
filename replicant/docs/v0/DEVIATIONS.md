@@ -643,3 +643,127 @@ User request: "a view of the graph in the UI … a detailed view of what the age
   unavailable. Headlines and `OUTCOME_WORDS` now use the worker's terminal outcome names (`pr_closed_unmerged`,
   `no_change_needed`, …). Before, a PR closed without merging (status `rejected`) read "an approver rejected the
   change".
+
+## PR review comments and the repair loop (D-15), repo instruction files (plan kind-sprouting-diffie §4, §5)
+
+- **MEM-PR-D1 (2026-10-27) Gitea review events carry no line comments.** Gitea sends a submitted review as event
+  `pull_request_comment` / `pull_request_approved` / `pull_request_rejected` with type `pull_request_review_*` and only
+  `review.content`; a plain PR comment is event `issue_comment` with type `pull_request_comment` (which the normalizer
+  used to read as a review). github-integration now reads the sender's latest review on the PR and its line comments
+  through the API (`GET /pulls/{n}/reviews`, `/reviews/{id}/comments`). There is no separate
+  `pull_request_review_comment.created` event on Gitea; edits and dismissals are not ingested.
+- **MEM-PR-D2 (2026-10-27) Reviewer permission is checked by github-integration, through teams.** identity-service is
+  not in v0, and Gitea's `collaborators/{u}/permission` needs repo admin. github-integration (broker caller now allowed
+  `metadata: read` -> `read:organization`) resolves `repo_permission` from the repo's teams (`units_map["repo.code"]`)
+  and team membership; a direct collaborator counts as `write` (Gitea's default collaborator access). Only linked
+  humans with admin/maintain/write are signalled; the workflow's `identity.check_repair_trigger` still trusts the
+  sender's filter. Bots (incl. replicant-bot) are ignored before routing; every ignored PR comment is logged
+  (`pr_feedback.ignored` with the reason); an unlinked human gets one link-your-account reply per repo per 24 h.
+- **MEM-PR-D3 (2026-10-27) `push_update` adds a commit on top of the PR head.** The repair run starts from the
+  published change (the latest diff bundle is staged as `apply_diff` for `repair` runs with PR feedback), so its diff
+  bundle is cumulative from `base_sha`. The Publisher builds that tree and commits it with the current PR branch head
+  as parent (`git commit-tree`), then pushes without force: reviewers see one incremental commit. Takeover branches
+  stay out of v0 (WORKER-D10).
+- **MEM-PR-D4 (2026-10-27) Repo instruction files are quoted ahead of the task.** `repo_instructions:
+  quote_as_context` (replicant-entrypoint `repoinstr.go`): `CLAUDE.md`, `AGENTS.md`, `.github/copilot-instructions.md`
+  as checked out at the base commit (before prior diffs are applied), regular files only, 16 KiB in total (UTF-8 safe
+  cut), redacted with secret patterns (the verifier's AKIA / private key / gh*_ / xox* / sk-ant- patterns plus
+  `password|secret|api_key|token = value`; agentd's known-credential redaction is served only on the uploader socket,
+  never to the agent container, and base-commit files cannot hold the run's own credentials; the uploader redacts the
+  transcript again), each in `<untrusted_input source="repo_instructions" path="...">`. The block is **prepended** to the first
+  message (not appended), so it sits before the task and is visible in the transcript preview. Not for `qa` runs. The
+  CLI's own CLAUDE.md loading stays disabled (ADR-007 intent).
+- **MEM-PR-D5 (2026-10-27) Replies are PR-level template comments.** `github.post_reply` (publisher-worker, broker
+  token, replicant-bot) posts `ack`, `fix_summary`, `question`, `no_action`, `budget_exhausted` as PR comments built
+  from structured data (triage classes, paths/lines, commit link, repair cycle `used of max`, QA verdict); model text
+  (triage summaries) is sanitized per pr-replies.md §6. No `eyes` reaction, no per-thread replies, no thread
+  resolution, no memory footer yet. Each post is idempotent through a `<!-- replicant:reply <activity key> -->` marker.
+- **MEM-PR-D6 (2026-10-27) `/replicant no-memory` and `/replicant remember`.** Honoured on a line of their own inside a
+  feedback comment, or in a command-only comment of the same author in the same debounced batch
+  (`memory_directive` on the MEM-01 items). A command-only batch never starts a repair cycle (`pr_wait` outcome
+  `ignored`); a command posted after the batch was processed is not applied retroactively.
+- **MEM-PR-D7 (2026-10-27) `feedback.triage` and scripted worker LLM calls.** One tool-less `worker_llm` call per comment
+  (max 20) with a pinned inline prompt (`activities/feedback.py`, sha256 in the triage doc); `actionable_fix` with
+  confidence < 0.6 becomes `question`; unparseable output becomes `question`. Graph outcome: `actionable` if any fix,
+  else `question`, else `no_action` (optional suggestions get the `no_action` reply). The scripted gateway used to answer
+  every tool-less request with "OK."; it now serves service callers from `<default set>/<X-Replicant-Script-Key>.yaml`
+  (fallback `worker_llm.yaml`) and picks the first turn whose new `match` regexp hits the request body (stateless).
+- **MEM-PR-D8 (2026-10-27) The memory node passes `addressed`.** `memory.extract_candidates` gets a top-level
+  `addressed` (true only when this cycle's `push` published), since the triage document is written before the repair
+  (MEM-01 items otherwise default to addressed for `actionable_fix`).
+
+## MEM (memory subsystem: memory-service, snapshots and injection, curation, 2026-10-27)
+
+- **MEM-D1 (2026-10-27) memory-service is a minimal subset.** `services/memory-service` (FastAPI, login
+  `svc_memory_service`, the only writer of schema `memory`) implements snapshots, the per-run injection, candidates,
+  findings, outcomes, the job memory view and the admin curation verbs of `memory-service.openapi.yaml`, with simpler
+  paths (`POST /internal/v1/injections`, `/internal/v1/findings`). Not built: governance policy documents, flags,
+  correction requests, promote/merge/clear-hold, author restrictions, imports, restore-resync, eval components, the
+  two-person rule for tenant/org scope. Callers use static tokens (`memory_internal_callers`: control-plane-api
+  `memory_cpa_token`, replicant-worker its control-plane token). There is no identity-service, so control-plane-api
+  checks `replicant-admins` on every `/v1/admin/memory/**` request (denials audited as `memory.admin_denied` with the
+  audit id in the 403) and forwards a caller principal signed with HMAC-SHA256 under its bearer token; memory-service
+  verifies the signature and re-checks the group itself (D-25). Admin transactions run with
+  `principal_scope = admin:memory`; job paths run in the tenant scope.
+- **MEM-D2 (2026-10-27) No embeddings, MCP pull, episodes or holdouts.** Selection is scope-first (tenant, then repo,
+  then path globs), ranked by `ts_rank_cd` + specificity + confidence + recency (`U(e)` without the vector and
+  outcome terms). Dedupe is the exact content digest, then `pg_trgm` similarity ≥ 0.6 on the same type and scope. A
+  0.35–0.6 match goes to one LLM judge call (`memory_dedupe_judge`, purpose `worker_llm` under the candidate's job,
+  because the shim binds service callers to a job). Tokens are estimated as chars/4. Role budgets: implementer
+  8000/80, repair 6000/60, planner 4000/40, reviewer 3000/30, qa 2000/20. `memory.write_episode` is a no-op. There
+  are no holdout arms and no auto-activation: every learned entry waits for an admin, and an admin-authored entry is
+  active at once. pgvector and `entry_embeddings` stay for later.
+- **MEM-D3 (2026-10-27) Gate comments are a memory source.** A `request_changes` or `reject` decision with a comment
+  starts `memory.ingest_gate_feedback` from the gate handler (workflow patch `memory-gate-feedback-v1`; not for
+  scripted or evaluation decisions). Extraction runs on the comment, then candidates are written with provenance
+  `gate_comment` (author = the approver). Migration `202610270040_memory_v0` adds the source kinds `gate_comment` and
+  `review_finding`, and the feedback-ledger prefixes `gate:`, `review:` and `scan:`.
+- **MEM-D4 (2026-10-27) Reviewer and QA recurrence.** `memory.record_outcome` (finalize) reads the job's run results:
+  reviewer `agent_report.findings` and QA `top_failures`. memory-service records them in the ledger and proposes a
+  `negative` candidate (origin `negative_mining`) only when a finding is similar (trigram ≥ 0.6) to one recorded for
+  **another job on the same repo**. Outcome metrics come from the same run results and the gate decision records:
+  review rounds = reviewer `request_changes` verdicts, plus first-pass QA, first review approved and gate
+  request-changes count. `memory.job_outcomes` takes repo, workflow type and bundle from the finalize input or the
+  job's snapshot binding.
+- **MEM-D5 (2026-10-27) Repo names and source URLs.** The memory schema's repo CHECK has no port, so repos are stored
+  as `host/owner/name` with the port stripped (`git.replicant.localhost/acme-payments/ledger-api`). Local Gitea serves
+  http, so the same migration lets `provenance.source_url` take `http://` as well.
+- **MEM-D6 (2026-10-27) Revocation keeps the snapshot ID.** `memory.create_snapshot(revocation_filter)` returns the
+  job's pinned snapshot unchanged. The injection for each run drops entries that are no longer active. They are
+  listed under `withheld` in `memory-injection.json`, and `usage_events` records `revoked_midjob`. No derived
+  snapshot is written, and nothing is ever added mid-job.
+- **MEM-D7 (2026-10-27) The repo scan has no workflow type.** C-JOBREQ, C-DEF and C-MSG freeze the workflow-type
+  enum, so the scan works around it:
+  - `POST /v1/projects/{p}/repos/{r}:scan` (project admins, or memory admins who can create jobs, since the
+    requester must be the caller) submits `workflow_type: docs` with label `replicant-repo-scan`.
+  - The router rule `v0-repo-scan` keeps it `docs`, and `graph.compose` (which now receives the job's labels) picks
+    graph `repo-scan` (context → scan → memory).
+  - That graph and the agent `scanner-claude` ship in the worker's local set: the agent is in the bundle, and the
+    graph comes from the bundle when pinned, else from the worker build.
+  - `plan_run` now also maps `memory_candidates`, and prompts are looked up by agent name before role.
+  - The job ends `no_change_needed`, and its candidates have origin `import` with provenance pointing to the scan
+    job.
+- **MEM-D8 (2026-10-27) Memory is best effort locally.** If memory-service is unreachable, or a route is missing
+  (404, local only), the worker uses the pinned empty snapshot and stages no memory block. A job never fails because
+  of memory. Outside local, these errors are retried.
+- **MEM-D9 (2026-10-27) Purge propagation, v0.**
+  - Before any delete, a deletion-ledger record is written to the audit bucket. Then `memory.purge_entry` erases the
+    content and keeps the tombstone.
+  - Each affected snapshot export is rewritten as `….purged-<purge_id>.json` (row in
+    `snapshot_export_replacements`), and the original is deleted.
+  - The `memory-injection.json` artifacts of runs that received the entry are deleted.
+  - There is no Langfuse or transcript scrub: transcripts of past runs still contain the rendered block.
+- **MEM-D10 (2026-10-27) UI.**
+  - `/admin/memory` shows candidates, entries, entry detail (provenance, versions, history, jobs that used it),
+    conflicts, quarantine and purge with a dry-run blast radius, export, analytics and admin-authored entries.
+  - Analytics compare jobs on the same repo with and without each entry. This is observational, because there are
+    no holdouts.
+  - "Memory used" (job detail, approval view, one line in the Simple view) reads `GET /v1/jobs/{id}/memory`.
+  - Project Overview has "Learn this repo's conventions" for project admins.
+- **MEM-PR-D9 (2026-10-27) Two repair cycles locally.** The local bundle had `repair_cycles.default: 0` (plan.md §1.3),
+  so the first review on a PR ended the job `repair_budget_exhausted`. It is now 2 (bounded; `budget_exhausted` reply
+  and `end:repair_budget_exhausted` after that). Jobs without PR feedback still run no repair cycle (E2E-01 `cycle 0`).
+- **MEM-PR-D10 (2026-10-27) `waiting_external` reaches the projection.** `_set_status` changed the status and search
+  attributes but emitted no projection event, so a job waiting on its PR showed `running` in `GET /v1/jobs/{id}` and the
+  lists. Entering `waiting_external` now emits timeline event `job.waiting` ("Waiting for review on PR #N"), patched
+  `status-waiting-external-v1`; leaving the wait is carried by the next node or terminal event. E2E-07 asserts it.

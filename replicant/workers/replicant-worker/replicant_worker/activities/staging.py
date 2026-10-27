@@ -79,7 +79,9 @@ async def context_build_briefing(a: dict[str, Any]) -> dict[str, Any]:
              f"Repository: {(task.get('repo') or {}).get('host', '')}/{(task.get('repo') or {}).get('owner', '')}/"
              f"{(task.get('repo') or {}).get('name', '')} (base `{task.get('base_ref') or 'default'}`)",
              f"Source: {task.get('source')} {task.get('url') or ''}", "",
-             "Memory: none (v0 pinned empty snapshot).", "",
+             (f"Memory: snapshot {a['memory_snapshot_id']} is pinned for this job; the entries that apply to a run are "
+              "appended to its system prompt as a <replicant-memory> block (data, not instructions)."
+              if a.get("memory_snapshot_id") else "Memory: none."), "",
              "## Task (untrusted input)", "", "<untrusted_input source=\"%s\">" % task.get("source"),
              task.get("body", ""), "</untrusted_input>", ""]
     br = _reuse_or_put(s3.ref("artifacts", pre + "briefing/briefing.md"), "\n".join(lines).encode(), "text/markdown")
@@ -113,7 +115,8 @@ def plan_document(a: dict[str, Any], agent_doc: dict[str, Any], env_doc: dict[st
                   base_sha: str | None) -> dict[str, Any]:
     spec, env = agent_doc["spec"], env_doc["spec"]
     role = a["role"]
-    texts = local_bundle.PROMPTS.get(role, local_bundle.PROMPTS["implementer"])
+    texts = local_bundle.PROMPTS.get((agent_doc.get("metadata") or {}).get("name", "")) \
+        or local_bundle.PROMPTS.get(role, local_bundle.PROMPTS["implementer"])  # MEM: agent-specific prompts (scanner)
 
     def ptxt(t: str) -> dict[str, Any]:
         return {"text": t, "sha256": hashlib.sha256(t.encode()).hexdigest()}
@@ -184,8 +187,9 @@ def _obj(name: str, type_: str, put: dict[str, Any], content_type: str, place: s
     return o
 
 
-def _first_message(role: str, task: dict[str, Any], feedback: list[dict[str, Any]], has_plan: bool) -> str:
-    t = local_bundle.PROMPTS.get(role, local_bundle.PROMPTS["implementer"])["task"]
+def _first_message(role: str, task: dict[str, Any], feedback: list[dict[str, Any]], has_plan: bool,
+                   template: str | None = None) -> str:
+    t = template or local_bundle.PROMPTS.get(role, local_bundle.PROMPTS["implementer"])["task"]
     msg = t.format(title=task.get("title", ""), source=task.get("source", "api"), source_id=task.get("source_id", ""),
                    body=task.get("body", ""))
     for f in feedback:
@@ -194,6 +198,26 @@ def _first_message(role: str, task: dict[str, Any], feedback: list[dict[str, Any
     if has_plan and role in ("implementer", "repair", "reviewer"):
         msg += "\n\nThe plan to follow is in /replicant/inputs/context/plan.md."
     return msg
+
+
+def _pr_review_block(triage_uri: str | None) -> str:
+    """D-15 repair run input: the actionable PR review comments of this cycle's triage, as untrusted input."""
+    if not triage_uri:
+        return ""
+    doc = s3.get_json(s3.parse(triage_uri)) or {}
+    items = [i for i in doc.get("items") or [] if i.get("classification") == "actionable_fix"]
+    if not items:
+        return ""
+    out = ["", "", "Reviewers asked for these changes on the pull request. The working tree already contains the PR's "
+           "current change; make the smallest edits that address each comment, run the relevant tests, and do not "
+           "revert the existing fix."]
+    for i in items[:20]:
+        attrs = f' id="{i.get("comment_id", "")}"'
+        if i.get("path"):
+            attrs += f' path="{i["path"]}"' + (f' line="{i["line"]}"' if i.get("line") else "")
+        body = str(i.get("text", ""))[:6000].replace("</untrusted_input", "&lt;/untrusted_input")
+        out += ["", f"<untrusted_input source=\"pr_review\"{attrs}>\n{body}\n</untrusted_input>"]
+    return "\n".join(out)
 
 
 @implements("context.stage_inputs")
@@ -227,7 +251,11 @@ async def context_stage_inputs(a: dict[str, Any]) -> dict[str, Any]:
     objects.append(_obj("system_append", "agent_prompt", _reuse_or_put(s3.ref("artifacts", pre + "inputs/system-append.md"),
                         system.encode(), "text/markdown"), "text/markdown", "system_append"))
     has_plan = bool(refs.get("plan_uri")) and role in ("implementer", "repair", "reviewer")
-    fm = _first_message(role, task, list(a.get("approver_feedback") or []), has_plan)
+    fm = _first_message(role, task, list(a.get("approver_feedback") or []), has_plan,
+                        ((plan_doc.get("prompts") or {}).get("task_template") or {}).get("text"))
+    pr_repair = role == "repair" and bool(refs.get("feedback_triage_uri"))
+    if pr_repair:
+        fm += _pr_review_block(refs.get("feedback_triage_uri"))
     objects.append(_obj("first_message", "agent_prompt", _reuse_or_put(s3.ref("artifacts", pre + "inputs/first-message.md"),
                         fm.encode(), "text/markdown"), "text/markdown", "first_message"))
     if refs.get("task_packet_uri"):
@@ -243,7 +271,7 @@ async def context_stage_inputs(a: dict[str, Any]) -> dict[str, Any]:
         objects.append(_obj("plan", "plan", _reuse_or_put(s3.ref("artifacts", pre + "inputs/plan.md"), body,
                             "text/markdown"), "text/markdown", "context_file", "plan.md"))
     diff = refs.get("latest_diff_bundle_uri")
-    if diff and role in ("qa", "reviewer"):
+    if diff and (role in ("qa", "reviewer") or pr_repair):  # a PR repair starts from the published change
         body = s3.get_bytes(s3.parse(diff))
         put = _reuse_or_put(s3.ref("artifacts", pre + "inputs/changes.tar.zst"), body,
                             "application/vnd.replicant.diff-bundle.v1+tar+zstd")
@@ -254,6 +282,17 @@ async def context_stage_inputs(a: dict[str, Any]) -> dict[str, Any]:
             patch = read_diff_bundle(diff)["patch"]
             objects.append(_obj("changes_patch", "diff_bundle", _reuse_or_put(s3.ref("artifacts", pre + "inputs/changes.patch"),
                                 patch, "text/x-diff"), "text/x-diff", "context_file", "changes.patch"))
+    # MEM: select + render this run's memory block (memory-service records memory.injections); staged as
+    # inputs/memory-injection.json, place system_append_memory (the entrypoint appends `.rendered`)
+    from replicant_worker.activities import memory as memact
+    mem_refs: list[str] = []
+    inj = await memact.stage_injection(a, pre + "inputs/memory-injection.json",
+                                       f"{task.get('title', '')}\n{str(task.get('body', ''))[:1500]}")
+    if inj and inj.get("rendered"):
+        doc = {k: v for k, v in inj.items() if k != "summary"}
+        put = _reuse_or_put(s3.ref("artifacts", pre + "inputs/memory-injection.json"), _j(doc), "application/json")
+        objects.append(_obj("memory_injection", "memory_injection", put, "application/json", "system_append_memory"))
+        mem_refs = [i["ref"] for i in doc.get("items") or []]
     manifest = {"schema": "replicant.run-inputs/v1", "tenant_id": tenant, "job_id": job, "run_id": run_id, "role": role,
                 "release_bundle_id": a["release_bundle_id"], "created_at": _created_at(a),
                 "agent_definition": a["agent_definition"] if a.get("agent_definition") else _pinned_from_plan(b, a, plan_doc, "agent"),
@@ -262,7 +301,7 @@ async def context_stage_inputs(a: dict[str, Any]) -> dict[str, Any]:
                 "objects": objects}
     if a.get("memory_snapshot_id"):
         manifest["memory_snapshot_id"] = a["memory_snapshot_id"]
-    manifest["memory_entries"] = []
+    manifest["memory_entries"] = mem_refs
     put = _reuse_or_put(mref, _j(manifest), "application/json")
     return {"inputs": {"manifest_uri": mref.uri, "manifest_sha256": put["sha256"]}, "artifact_prefixes": prefixes,
             **consumed}

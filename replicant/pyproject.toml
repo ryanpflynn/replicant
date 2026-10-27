@@ -28,6 +28,7 @@ members = [
   "services/control-plane-api/replicant-dev-auth",
   "services/github-integration",
   "services/github-token-broker",
+  "services/memory-service",
   "libs/python/replicant-cdef",
   "services/slack-integration",
   "tools/slack-mock",

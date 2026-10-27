@@ -88,7 +88,12 @@ def normalize(headers: Mapping[str, str], payload: Mapping[str, Any], *, host: s
                   raw_action=action, org_login=(payload.get("organization") or {}).get("username")
                   or (repo.owner if repo else None))
 
-    if event_type in _REVIEW_EVENTS or (event == "pull_request" and event_type in _REVIEW_EVENTS):
+    # A plain comment on a PR arrives as event `issue_comment` with type `pull_request_comment`, which is also a review
+    # type name: the event header decides first. A submitted review arrives as event `pull_request_comment` (or
+    # `pull_request_approved` / `pull_request_rejected`) with type `pull_request_review_*`; its line comments are not
+    # in the payload (Gitea 1.2x), only `review.content`.
+    if event != "issue_comment" and (event_type in _REVIEW_EVENTS or event in _REVIEW_EVENTS):
+        event_type = event_type if event_type in _REVIEW_EVENTS else event
         review = payload.get("review") or {}
         return NormalizedEvent(kind="pull_request_review.submitted", pull_request=_pr(payload.get("pull_request")),
                                review_state=_REVIEW_EVENTS[event_type],
@@ -171,6 +176,25 @@ class GiteaClient:
 
     async def edit_issue_comment(self, owner: str, name: str, comment_id: int, body: str) -> dict[str, Any]:
         return await self._req("PATCH", f"/repos/{owner}/{name}/issues/comments/{comment_id}", json={"body": body})
+
+    # pull request reviews (line comments of a submitted review are not in the webhook payload)
+    async def list_pull_reviews(self, owner: str, name: str, number: int) -> list[dict[str, Any]]:
+        return await self._req("GET", f"/repos/{owner}/{name}/pulls/{number}/reviews", params={"limit": 50}) or []
+
+    async def review_comments(self, owner: str, name: str, number: int, review_id: int) -> list[dict[str, Any]]:
+        return await self._req("GET", f"/repos/{owner}/{name}/pulls/{number}/reviews/{review_id}/comments") or []
+
+    # repository permission of a user, readable with a read:repository + read:organization token (no repo admin)
+    async def is_collaborator(self, owner: str, name: str, login: str) -> bool:
+        r = await self._c.get(f"/repos/{owner}/{name}/collaborators/{login}")
+        return r.status_code == 204
+
+    async def repo_teams(self, owner: str, name: str) -> list[dict[str, Any]]:
+        return await self._req("GET", f"/repos/{owner}/{name}/teams") or []
+
+    async def is_team_member(self, team_id: int, login: str) -> bool:
+        r = await self._c.get(f"/teams/{team_id}/members/{login}")
+        return r.status_code in (200, 204)
 
     # tokens (broker backend; requires basic auth as the token's owner)
     async def create_token(self, user: str, name: str, scopes: list[str]) -> dict[str, Any]:

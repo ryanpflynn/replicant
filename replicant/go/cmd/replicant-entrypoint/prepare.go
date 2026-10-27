@@ -178,6 +178,14 @@ func prepare(ctx context.Context) error {
 	if err := checkout(ctx, bs, plan); err != nil {
 		return err
 	}
+	// repo instruction files at the base commit, before any prior diff is applied or the agent edits anything
+	if plan.RepoInstructions == "quote_as_context" && plan.Role != "qa" {
+		if q := quoteRepoInstructions(ctx, sandbox.RepoDir, patternRedactor); q != "" {
+			if err := os.WriteFile(filepath.Join(in, repoInstructionsFile), []byte(q), 0o444); err != nil {
+				return fail(exitInputs, "write %s: %v", repoInstructionsFile, err)
+			}
+		}
+	}
 	for _, d := range diffs {
 		if err := applyDiff(ctx, d); err != nil {
 			return fail(exitDiffApply, "%v", err)

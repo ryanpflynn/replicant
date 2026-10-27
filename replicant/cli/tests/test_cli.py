@@ -43,7 +43,7 @@ def test_interpolate():
 
 def test_v0_profile_services():
     svcs = compose.load_services(Paths(ROOT), "v0")
-    assert len(svcs) == 26 and "sbx-edge" in svcs and "temporal-schema" not in svcs and "dex" not in svcs
+    assert len(svcs) == 27 and "sbx-edge" in svcs and "memory-service" in svcs and "temporal-schema" not in svcs and "dex" not in svcs
     assert {"control-plane-web", "slack-integration", "slack-mock"} <= set(svcs)          # RENAME-D6, NOTIFY
     assert svcs["migrate"].dockerfile.name == "Dockerfile.migrate"
 

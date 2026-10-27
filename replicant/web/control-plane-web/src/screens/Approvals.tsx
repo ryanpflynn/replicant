@@ -1,3 +1,4 @@
+import { MemoryUsed } from "../components/MemoryUsed";
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { TopBar } from "../components/Shell";
@@ -221,10 +222,7 @@ function PacketView({ gateId }: { gateId: string }) {
               <dt>Eligible</dt><dd className="small"><span className="mono">{g.eligible?.okta_groups?.join(", ") ?? "—"}</span></dd>
             </dl>
           </div>
-          <div className="section">
-            <div className="section-h"><h3>Memory used</h3><span className="t3 small">read-only</span></div>
-            <p className="small t3">No entries. memory-service is not part of the v0 stack, so jobs pin an empty snapshot{snap?.memory_snapshot_id ? <> (<span className="mono">{snap.memory_snapshot_id.slice(0, 16)}…</span>)</> : null}.</p>
-          </div>
+          {snap?.job_id ? <MemoryUsed jobId={snap.job_id} snapshotId={snap.memory_snapshot_id} /> : null}
         </aside>
       </div>
       <DecisionBar d={d} onDecided={onDecided} />

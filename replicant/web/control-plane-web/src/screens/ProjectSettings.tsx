@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { TopBar } from "../components/Shell";
 import { Banner, Empty, ErrorBanner } from "../components/bits";
 import { Dialog } from "../components/Dialog";
-import { ApiError, get, request } from "../lib/api";
+import { ApiError, get, post, request } from "../lib/api";
 import { useMe, useSession } from "../lib/session";
 import { dateTime } from "../lib/format";
 import { GraphSvg } from "./JobGraph";
@@ -208,10 +208,29 @@ function Overview({ p, c }: { p: ProjectDoc; c: ConfigDoc }) {
       <dt>Project</dt><dd><b>{p.name}</b> <span className="mono t3">{p.project_id}</span></dd>
       <dt>Tenant</dt><dd>{p.tenant_id}</dd>
       <dt>Owners</dt><dd className="mono">{p.owners_group ?? "—"}</dd>
-      <dt>Repositories</dt><dd>{p.repos.length ? p.repos.map((r) => <div key={r.repo_id} className="mono">{r.full_name} <span className="t3">({r.host}, id {r.repo_id})</span></div>) : <span className="t3">none</span>}</dd>
+      <dt>Repositories</dt><dd>{p.repos.length ? p.repos.map((r) => <div key={r.repo_id} className="mono">{r.full_name} <span className="t3">({r.host}, id {r.repo_id})</span>
+        {p.permissions.includes("tenant:policy:edit") || p.permissions.includes("memory:admin") ? <ScanButton project={p.project_id} repo={r.repo_id} /> : null}</div>) : <span className="t3">none</span>}</dd>
       <dt>Configuration</dt><dd>version {c.version}{c.history[0] ? <span className="t3"> · {dateTime(c.history[0].created_at)} · {c.history[0].reason}</span> : null}</dd>
       <dt>Your access</dt><dd className="small">{p.permissions.join(", ") || "none"}</dd>
     </dl>
+  );
+}
+
+// MEM: "Learn this repo's conventions" starts a repo scan job; its proposals land in the memory candidates queue.
+function ScanButton({ project, repo }: { project: string; repo: string }) {
+  const [res, setRes] = useState<{ job_id?: string; error?: string } | null>(null);
+  const run = async () => {
+    try {
+      const r = await post<{ job_id: string }>(`/v1/projects/${project}/repos/${repo}:scan`, {});
+      setRes({ job_id: r.data.job_id });
+    } catch (e) { setRes({ error: e instanceof ApiError ? `${e.status} ${e.code}` : String(e) }); }
+  };
+  return (
+    <span className="row g1" style={{ display: "inline-flex", marginLeft: 8 }}>
+      <button className="btn sm" onClick={() => void run()}>Learn this repo's conventions</button>
+      {res?.job_id ? <span className="small">scan <Link to={`/jobs/${res.job_id}`}>{res.job_id.slice(0, 14)}…</Link> · proposals go to <Link to="/admin/memory?tab=candidates">memory candidates</Link></span> : null}
+      {res?.error ? <span className="small danger">{res.error}</span> : null}
+    </span>
   );
 }
 

@@ -1,0 +1,14 @@
+# replicant.gateway-script/v1: feedback.triage (worker_llm, script key feedback_triage) for the scripted gateway.
+# Service-caller scripts are stateless: the first turn whose `match` regexp hits the request body answers; the last
+# turn (no match) is the default. Matches look only inside the untrusted comment block, never at the pinned prompt.
+schema: replicant.gateway-script/v1
+name: walkthrough-ledger-api-feedback-triage
+protocol: anthropic_messages
+turns:
+  - match: 'pr_review[^<]*(?i:\bwhy\b|what does|could you explain)'
+    respond: {text: '{"classification": "question", "confidence": 0.85, "summary": "asks for an explanation"}'}
+  - match: 'pr_review[^<]*(?i:\bnit\b|optional|non-blocking)'
+    respond: {text: '{"classification": "optional_suggestion", "confidence": 0.8, "summary": "optional suggestion"}'}
+  - match: 'pr_review[^<]*(?i:\blgtm\b|looks good|thanks)'
+    respond: {text: '{"classification": "no_action", "confidence": 0.9, "summary": "acknowledgement"}'}
+  - respond: {text: '{"classification": "actionable_fix", "confidence": 0.92, "summary": "add a comment explaining the prorated FX fee reversal"}'}
