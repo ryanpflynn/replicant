@@ -68,7 +68,17 @@ export const GATE_KIND_SHORT: Record<string, string> = {
 };
 
 /** Terminal outcome in words (JobSnapshot.terminal.outcome). */
+// Terminal outcomes as the worker reports them (replicant_worker/workflows/state.py TERMINAL_STATUS_FOR_OUTCOME).
 export const OUTCOME_WORDS: Record<string, string> = {
-  pr_merged: "PR merged", pr_closed: "PR closed without merge", no_changes: "no changes needed",
-  cancelled: "cancelled", rejected: "rejected at a gate", expired: "expired at a gate",
+  pr_merged: "PR merged", pr_closed_unmerged: "PR closed without merging", no_change_needed: "no changes needed",
+  docs_published: "docs published", qa_completed: "tests completed", repair_pushed: "fixes pushed to the PR",
+  ready_to_publish: "ready to publish", dry_run_completed: "dry run completed",
+  rejected_at_gate: "rejected at an approval", clarification_rejected: "question declined",
+  gate_expired: "nobody approved it in time", pr_wait_expired: "the PR waited too long", pause_expired: "paused too long",
+  cancelled_by_user: "cancelled", taken_over: "taken over by a person", qa_failed: "the tests kept failing",
+  repair_budget_exhausted: "out of repair attempts", loop_limit_exceeded: "too many attempts",
+  policy_violation: "blocked by a policy check", node_failed: "a step failed", budget_exhausted: "out of budget",
+  // older names, kept for jobs recorded before the rename
+  pr_closed: "PR closed without merging", no_changes: "no changes needed", cancelled: "cancelled",
+  rejected: "rejected at a gate", expired: "expired at a gate",
 };

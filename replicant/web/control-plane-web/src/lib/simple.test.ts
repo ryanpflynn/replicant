@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { headline, milestones, simpleSteps, stageStates } from "./simple";
+import { headline, milestones, simpleSteps, simpleStepsFromGraph, stageStates } from "./simple";
+import type { GraphNode } from "./graph";
 import type { JobSnapshot, TimelineEvent } from "./types";
 
 let seq = 0;
@@ -53,6 +54,10 @@ describe("simple view steps", () => {
     const s = snap({ status: "succeeded", pull_request: { ...pr, state: "merged" }, terminal: { at: "", outcome: "pr_merged" } });
     expect(states(full(), s)).toEqual(["done", "done", "done", "done", "done", "done"]);
     expect(headline(s, [])).toBe("Done: PR #24 was merged.");
+    const closed = snap({ status: "rejected", pull_request: { ...pr, state: "closed" }, terminal: { at: "", outcome: "pr_closed_unmerged" } });
+    expect(headline(closed, [])).toBe("Finished: PR #24 was closed without merging.");
+    expect(headline(snap({ status: "succeeded", terminal: { at: "", outcome: "no_change_needed" } }), [])).toBe("Done: no changes were needed.");
+    expect(headline(snap({ status: "rejected", terminal: { at: "", outcome: "rejected_at_gate" } }), [])).toBe("Stopped: an approver rejected the change.");
   });
   it("plan gate not required is not shown as a stop; failure marks the step", () => {
     const s = snap({ status: "failed", terminal: { at: "", outcome: "failed" } });
@@ -81,5 +86,49 @@ describe("milestones", () => {
       ev("job.terminal", "job rejected (rejected)")];
     expect(milestones(tl, s).map((m) => [m.text, m.family])).toEqual([
       ["Tests found problems", "warning"], ["Rejected", "danger"], ["Stopped: rejected at a gate", "danger"]]);
+  });
+});
+
+describe("steps from the job's graph", () => {
+  const n = (phase: string, status: GraphNode["status"] = "pending") => ({ phase, status });
+  const run = { status: "running" } as Pick<JobSnapshot, "status">;
+
+  it("hides steps the workflow has no node for (qa_only)", () => {
+    const st = simpleStepsFromGraph([n("context", "succeeded"), n("qa", "running")], run, "qa_only");
+    expect(st.map((x) => x.label)).toEqual(["Requested", "Running the tests"]);
+    expect(st.map((x) => x.st)).toEqual(["done", "now"]);
+  });
+
+  it("hotfix has no planning step and checks without the planning label", () => {
+    const st = simpleStepsFromGraph([n("context", "succeeded"), n("implementing", "running"), n("qa"), n("review"),
+      n("verify"), n("publish_gate"), n("publishing"), n("pr_review")], run, "hotfix");
+    expect(st.map((x) => x.key)).toEqual(["requested", "change", "checking", "approval", "pr"]);
+    expect(st[1].st).toBe("now");
+  });
+
+  it("pr_repair makes its change in the repair phase and updates the PR", () => {
+    const st = simpleStepsFromGraph([n("context", "succeeded"), n("repairing", "succeeded"), n("qa", "succeeded"),
+      n("verify", "succeeded"), n("publish_gate", "waiting"), n("publishing"), n("memory")],
+    { status: "waiting_human" }, "pr_repair");
+    expect(st.map((x) => x.label)).toEqual(["Requested", "Making the fixes", "Checking (tests)", "Approval",
+      "Updating the pull request"]);
+    expect(st.map((x) => x.st)).toEqual(["done", "done", "done", "wait", ""]);
+  });
+
+  it("an unentered step before a reached one is shown as not needed", () => {
+    const st = simpleStepsFromGraph([n("context", "succeeded"), n("plan_gate"), n("implementing", "running")], run, "bugfix");
+    expect(st.map((x) => x.st)).toEqual(["done", "skip", "now"]);
+  });
+
+  it("a failed node marks its step failed", () => {
+    const st = simpleStepsFromGraph([n("context", "succeeded"), n("implementing", "succeeded"), n("qa", "failed")],
+      { status: "failed" }, "feature");
+    expect(st.find((x) => x.key === "checking")?.st).toBe("fail");
+  });
+
+  it("milestones read node types, not node keys", () => {
+    const tl = [{ seq: 1, at: "t", type: "node.completed", summary: "fix_it: completed", refs: { node_key: "fix_it" } }] as TimelineEvent[];
+    expect(milestones(tl, { status: "running" } as JobSnapshot, new Map([["fix_it", "implement_run"]]))[0].text)
+      .toBe("Change written");
   });
 });

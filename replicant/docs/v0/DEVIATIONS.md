@@ -631,3 +631,15 @@ User request: "a view of the graph in the UI … a detailed view of what the age
   schema minimum, unchanged); new rows start at 2, and a row written earlier at version 1 is still updatable with
   version 1. The web UI has no notification settings page, so no client change. Test:
   `test_db_integration.py::test_notification_preferences_versioned`.
+- **WEB-UIPREF-D5 (2026-10-27) Simple view follows the job's workflow.** The plain steps come from the job's own graph
+  (`GET /v1/jobs/{id}/graph`), not a fixed bugfix list. Each node's C-DEF `phase` maps to a step, and steps with no
+  node are hidden:
+  - qa_only shows Requested and Running the tests;
+  - hotfix has no Planning step;
+  - pr_repair shows Making the fixes and Updating the pull request.
+
+  An unentered step before a reached one shows as not needed. Milestones are named by node type
+  (implement_run, qa_run, …), not node key. The bugfix phase track remains the fallback when the graph is
+  unavailable. Headlines and `OUTCOME_WORDS` now use the worker's terminal outcome names (`pr_closed_unmerged`,
+  `no_change_needed`, …). Before, a PR closed without merging (status `rejected`) read "an approver rejected the
+  change".

@@ -9,7 +9,8 @@ import { DecisionBar } from "./Approvals";
 import { ApiError, get } from "../lib/api";
 import { personName, useDirectory, useJobView, useMe, useSession } from "../lib/session";
 import { useJobDetail, useTimeline } from "../lib/jobs";
-import { headline, milestones, simpleSteps, stageStates, type SimpleStep } from "../lib/simple";
+import { headline, milestones, simpleSteps, simpleStepsFromGraph, stageStates, type SimpleStep } from "../lib/simple";
+import type { GraphDoc } from "../lib/graph";
 import { dateTime, humanize, timeLeft } from "../lib/format";
 import { jobStatus, TERMINAL } from "../lib/status";
 import { browserGitUrl, repoName } from "../lib/config";
@@ -122,8 +123,20 @@ export function JobSimple({ jobId }: { jobId: string }) {
   const job = useJobDetail(jobId);
   const tl = useTimeline(jobId, job.isSuccess);
   const s = job.data?.snapshot;
-  const steps = useMemo(() => (s && tl.data ? simpleSteps(stageStates(tl.data, s), s) : []), [s, tl.data]);
-  const ms = useMemo(() => (s && tl.data ? milestones(tl.data, s).reverse() : []), [s, tl.data]);
+  const { user } = useSession();
+  // The job's own graph (same query as the Graph tab): steps follow its workflow; the bugfix track is the fallback.
+  const graph = useQuery({
+    queryKey: ["graph", user, jobId], queryFn: () => get<GraphDoc>(`/v1/jobs/${jobId}/graph`), enabled: !!s,
+    refetchInterval: s && TERMINAL.has(s.status) ? false : 4000,
+  });
+  const nodes = graph.data?.graph?.nodes;
+  const steps = useMemo(() => {
+    if (!s) return [];
+    if (nodes?.length) return simpleStepsFromGraph(nodes, s, s.workflow_type);
+    return tl.data && (graph.isError || graph.data) ? simpleSteps(stageStates(tl.data, s), s) : [];
+  }, [s, tl.data, nodes, graph.isError, graph.data]);
+  const typeOf = useMemo(() => new Map((nodes ?? []).map((n) => [n.key, n.type])), [nodes]);
+  const ms = useMemo(() => (s && tl.data ? milestones(tl.data, s, typeOf).reverse() : []), [s, tl.data, typeOf]);
 
   const crumbs = (
     <>
