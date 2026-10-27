@@ -1,0 +1,52 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ConnectOnlyAsBreakGlassReadRoleWhileTicketActive",
+      "Effect": "Allow",
+      "Action": "rds-db:connect",
+      "Resource": "arn:aws:rds-db:us-east-1:111111111111:dbuser:cluster-*/bg_readonly",
+      "Condition": {
+        "StringLike": {
+          "aws:PrincipalTag/breakglass-ticket": "INC-*"
+        },
+        "DateLessThan": {
+          "aws:CurrentTime": "${aws:PrincipalTag/breakglass-expires-at}"
+        }
+      }
+    },
+    {
+      "Sid": "ConnectAsWriteRoleOnlyWithSecondApprover",
+      "Effect": "Allow",
+      "Action": "rds-db:connect",
+      "Resource": "arn:aws:rds-db:us-east-1:111111111111:dbuser:cluster-*/bg_write",
+      "Condition": {
+        "StringLike": {
+          "aws:PrincipalTag/breakglass-ticket": "INC-*",
+          "aws:PrincipalTag/breakglass-second-approver": "usr_*"
+        },
+        "DateLessThan": {
+          "aws:CurrentTime": "${aws:PrincipalTag/breakglass-expires-at}"
+        }
+      }
+    },
+    {
+      "Sid": "ReachDatabaseOnlyThroughAuditedSsmPortForward",
+      "Effect": "Allow",
+      "Action": "ssm:StartSession",
+      "Resource": [
+        "arn:aws:ec2:us-east-1:111111111111:instance/i-0b9a8c7d6e5f40312",
+        "arn:aws:ssm:us-east-1::document/AWS-StartPortForwardingSessionToRemoteHost"
+      ]
+    },
+    {
+      "Sid": "TerminateOwnSessionsOnly",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:TerminateSession",
+        "ssm:ResumeSession"
+      ],
+      "Resource": "arn:aws:ssm:*:111111111111:session/${aws:userid}-*"
+    }
+  ]
+}

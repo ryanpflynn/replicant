@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Releases · replicant</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="app.css">
+<style>
+  .tip { position: absolute; display: none; top: 18px; padding: 6px 8px; background: var(--c-bg-raised); box-shadow: var(--shadow-popover); border-radius: var(--r-sm); font-size: 12px; color: var(--c-text); pointer-events: none; white-space: nowrap; }
+</style>
+</head>
+<body data-page="releases" data-admin="true">
+<div class="shell">
+  <aside class="rail" data-auto></aside>
+  <header class="topbar">
+    <div class="crumbs"><b>Releases</b><span class="sep">/</span><span>Bundles</span><span class="t3">· prod · replicant-worker deployment</span></div>
+    <div class="search" role="button"><span>Jump to job, PR, run, bundle…</span><kbd>⌘K</kbd></div>
+    <button class="iconbtn" aria-label="Toggle theme"><svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.25"><circle cx="7" cy="7" r="5"/><path d="M7 2v10a5 5 0 0 0 0-10z" fill="currentColor"/></svg></button>
+  </header>
+
+  <main class="main">
+    <div class="rel">
+      <div>
+        <div class="chart" style="position:relative">
+          <div class="row" style="margin-bottom:2px">
+            <h3 style="font-size:var(--fs-body)">Failed jobs by bundle</h3>
+            <span class="t3 small">share of jobs reaching <span class="mono">failed</span>, hourly, last 24 h · all tenants</span>
+          </div>
+          <div class="row" style="margin-bottom:6px">
+            <div class="legend"><span><i style="background:var(--c-info-solid)"></i>rb_k7wq0f2e9n (canary)</span><span><i style="background:var(--c-neutral-solid)"></i>rb_ds5p3wmcj (default)</span><a href="#" class="t2">Table view</a></div>
+          </div>
+          <svg viewBox="0 0 720 150" role="img" aria-label="Failure rate per hour. Default bundle steady near 4 percent. Canary bundle rises from 4 percent at 02:00 to 9.7 percent by 10:00 after the 10 percent stage began at 05:00; guardrail R3 paused the canary at 06:40." data-tip="tip1"
+               data-series='[["11:00",4.1,0],["12:00",3.8,0],["13:00",4.6,0],["14:00",3.9,0],["15:00",4.4,0],["16:00",5.0,0],["17:00",4.2,0],["18:00",3.6,0],["19:00",4.0,0],["20:00",4.8,0],["21:00",4.3,0],["22:00",3.9,0],["23:00",4.1,0],["00:00",4.4,0],["01:00",3.7,0],["02:00",4.2,3.9],["03:00",4.5,4.8],["04:00",3.9,5.6],["05:00",4.6,7.1],["06:00",4.1,8.4],["07:00",4.3,9.2],["08:00",4.0,9.9],["09:00",4.4,9.6],["10:00",4.3,9.7]]'>
+            <line class="gridl" x1="36" x2="708" y1="34" y2="34"/><line class="gridl" x1="36" x2="708" y1="82" y2="82"/>
+            <line class="axis" x1="36" x2="708" y1="130" y2="130"/>
+            <text x="28" y="133" text-anchor="end">0%</text><text x="28" y="85" text-anchor="end">10%</text><text x="28" y="37" text-anchor="end">20%</text>
+            <text x="36" y="146">11:00</text><text x="211" y="146" text-anchor="middle">17:00</text><text x="386" y="146" text-anchor="middle">23:00</text><text x="562" y="146" text-anchor="middle">05:00</text><text x="708" y="146" text-anchor="end">10:00</text>
+            <line class="marker" x1="474.3" x2="474.3" y1="14" y2="130"/><text x="478" y="20">ring-early</text>
+            <line class="marker" x1="561.9" x2="561.9" y1="14" y2="130"/>
+            <line class="marker" x1="610.6" x2="610.6" y1="14" y2="130" style="stroke:var(--c-warning-solid);stroke-dasharray:none"/><text x="614" y="32" style="fill:var(--c-warning-fg)">R3 pause 06:40</text><text x="566" y="20">10%</text>
+            <polyline class="s-base" stroke-linejoin="round" points="36.0,110.3 65.2,111.8 94.4,107.9 123.7,111.3 152.9,108.9 182.1,106.0 211.3,109.8 240.5,112.7 269.7,110.8 299.0,107.0 328.2,109.4 357.4,111.3 386.6,110.3 415.8,108.9 445.0,112.2 474.3,109.8 503.5,108.4 532.7,111.3 561.9,107.9 591.1,110.3 620.3,109.4 649.6,110.8 678.8,108.9 708.0,109.4"/>
+            <polyline class="s-cand" stroke-linejoin="round" points="474.3,111.3 503.5,107.0 532.7,103.1 561.9,95.9 591.1,89.7 620.3,85.8 649.6,82.5 678.8,83.9 708.0,83.4"/>
+            <circle cx="708" cy="83.4" r="3.5" fill="var(--c-info-solid)" stroke="var(--c-bg)" stroke-width="2"/>
+            <circle cx="708" cy="109.4" r="3.5" fill="var(--c-neutral-solid)" stroke="var(--c-bg)" stroke-width="2"/>
+            <text class="lbl-cand" x="702" y="72" text-anchor="end">9.7%</text>
+            <text class="lbl-base" x="702" y="124" text-anchor="end">4.3%</text>
+            <line class="xhair" x1="0" x2="0" y1="10" y2="130" stroke="var(--c-text-3)" style="display:none"/>
+          </svg>
+          <div class="tip" id="tip1"></div>
+        </div>
+
+        <div class="scroll-x"><table class="t" aria-label="Release bundles">
+          <thead><tr><th>Bundle</th><th class="p3">Version</th><th>State</th><th>Assignment</th><th class="right">Running</th><th class="right p2">Waiting</th><th class="right">Failed 24h</th><th class="right hide-md">Eval Δ</th></tr></thead>
+          <tbody>
+            <tr class="sel"><td><span class="row g1"><i class="g f-info" data-g="ring-spin"></i><span class="mono">rb_k7wq0f2e9n</span></span></td><td class="mono p3">2026.10.24-5</td><td><span class="pill warning"><i class="g" data-g="bars"></i>canary · held</span></td><td>canary <b class="num">10%</b> <span class="t3">· held</span></td><td class="right num">41</td><td class="right p2 num">12</td><td class="right num delta-bad">9.7%</td><td class="right num hide-md">−0.9 pt</td></tr>
+            <tr><td><span class="row g1"><i class="g f-success" data-g="dot"></i><span class="mono">rb_ds5p3wmcj</span></span></td><td class="mono p3">2026.10.24-3</td><td><span class="pill success"><i class="g" data-g="dot"></i>promoted</span></td><td><b>default</b></td><td class="right num">96</td><td class="right p2 num">63</td><td class="right num delta-ok">4.3%</td><td class="right num hide-md">+0.4 pt</td></tr>
+            <tr><td><span class="row g1"><i class="g f-neutral" data-g="ring-half"></i><span class="mono">rb_c4m8p2r6t0</span></span></td><td class="mono p3">2026.10.17-2</td><td><span class="pill neutral"><i class="g" data-g="dot-hollow"></i>deprecated</span></td><td class="t3">draining · held: treasury</td><td class="right num">3</td><td class="right p2 num">18</td><td class="right num delta-ok">5.1%</td><td class="right num hide-md">—</td></tr>
+            <tr><td><span class="row g1"><i class="g f-neutral" data-g="dot-hollow"></i><span class="mono">rb_9hf2xw1d3m</span></span></td><td class="mono p3">2026.10.09-1</td><td><span class="pill neutral"><i class="g" data-g="dot-hollow"></i>deprecated</span></td><td class="t3">drained · retire eligible</td><td class="right num t3">0</td><td class="right p2 num t3">0</td><td class="right num t3">—</td><td class="right num hide-md">—</td></tr>
+            <tr><td><span class="row g1"><i class="g f-danger" data-g="cross"></i><span class="mono">rb_2tq8v0kz4p</span></span></td><td class="mono p3">2026.10.23-1</td><td><span class="pill danger"><i class="g" data-g="cross"></i>eval_failed</span></td><td class="t3">not assignable</td><td class="right num t3">0</td><td class="right p2 num t3">0</td><td class="right num t3">—</td><td class="right num hide-md delta-bad">−4.8 pt</td></tr>
+            <tr class="grouphead"><td colspan="8">Tenant-derived bundles · 37 across 31 tenants · grouped under their base · <a href="#">expand</a></td></tr>
+          </tbody>
+        </table></div>
+
+        <div class="section">
+          <div class="section-h"><h3>Worker deployment <span class="mono">replicant-worker</span></h3><span class="t3 small">Temporal routing: current <span class="mono">b20261024-3f9a1c2e7d4b</span> · candidate <span class="mono">b20261024-8d2e44a1c09f</span> registered on all task queues (canary pins start on it; bundle ramps[] do the traffic split, C-DEF 3.0.0)</span></div>
+          <table class="t">
+            <thead><tr><th>Build</th><th>Status</th><th class="right">Pinned jobs</th><th class="right p3">Pollers</th><th class="p3">Oldest pinned</th><th></th></tr></thead>
+            <tbody>
+              <tr><td class="mono">b20261024-8d2e44a1c09f</td><td>registered · ramp slot 0</td><td class="right num">53</td><td class="right num p3">6</td><td class="t3 p3">5 h ago</td><td class="right t3">bundles k7wq…</td></tr>
+              <tr><td class="mono">b20261024-3f9a1c2e7d4b</td><td>current</td><td class="right num">159</td><td class="right num p3">12</td><td class="t3 p3">1 d ago</td><td class="right t3">ds5p… + 31 derived</td></tr>
+              <tr><td class="mono">b20261017-a17c3e9b2f40</td><td>draining</td><td class="right num">21</td><td class="right num p3">2</td><td class="t3 p3">8 d ago</td><td class="right"><button class="btn sm">Offer migration</button></td></tr>
+              <tr><td class="mono">b20261009-0e6b5d8c71aa</td><td>drained</td><td class="right num t3">0</td><td class="right num p3">2</td><td class="t3 p3">—</td><td class="right"><button class="btn sm">Retire</button></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <aside class="side">
+        <div class="section">
+          <div class="caps">Bundle</div>
+          <div class="row" style="margin-top:4px"><h2 class="mono" style="font-size:var(--fs-title-sm)">rb_k7wq0f2e9n</h2><span class="t2">2026.10.24-5</span></div>
+          <p class="t2 small" style="margin-top:4px">implementer prompt v22; claude-code 2.1.244; go-service env 13. Parent <span class="mono">rb_ds5p3wmcj</span>. Passed T2 evals (comparison <span class="mono">cmp_01m5kz…</span>); canary started 01:40, change author Lena Fischer.</p>
+        </div>
+        <div class="section">
+          <div class="section-h"><h3>Pipeline</h3><span class="t3 small mono">rpl_01m5m2v8q4</span><span class="t3 small">· policy promotion-default@4</span></div>
+          <div class="track" style="padding:0 0 4px;grid-template-columns:repeat(4,minmax(0,1fr))">
+            <div class="st done"><i></i><span>ring-early 24 h</span></div>
+            <div class="st wait"><i></i><span>10% · held</span></div>
+            <div class="st gate"><i></i><span>50% → sign-off</span></div>
+            <div class="st"><i></i><span>full</span></div>
+          </div>
+          <div class="banner warning" style="margin:10px 0 0;padding:8px 10px;border:0;border-radius:var(--r-sm)"><span class="t"><b>Guardrail R3 held the canary at 06:40 (release.hold: stage progression frozen).</b> Job failure rate 9.7% vs 4.3% in the concurrent control cohort (+5.4 pt, P(worse) = 0.993, n = 62). Rolls back automatically at 10:40 unless resumed. 9 of 11 failures: <span class="mono">AgentResultInvalid</span> on the implementer.</span></div>
+          <div class="row" style="margin-top:10px;flex-wrap:wrap">
+            <button class="btn primary">Roll back…<kbd>⇧R</kbd></button>
+            <button class="btn">Resume with reason</button>
+            <button class="btn ghost danger">Abort pipeline</button>
+          </div>
+          <dl class="kv small" style="margin-top:10px">
+            <dt>Rollback target</dt><dd><span class="mono">rb_ds5p3wmcj</span> (previous default)</dd>
+            <dt>Running jobs</dt><dd>41 pinned · 12 waiting <span class="t3">· choose: keep pinned, offer migration, or require it</span></dd>
+            <dt>Sign-off at 50%</dt><dd>2 signers required (prompt and worker code changed) · author Lena Fischer excluded</dd>
+          </dl>
+        </div>
+        <div class="section">
+          <div class="section-h"><h3>Changes vs parent</h3><a class="aside small t2" href="#">Full bundle diff</a></div>
+          <ul class="chg">
+            <li><span class="k">~</span><span>prompt/implementer-system <span class="old">21</span> → <span class="new">22</span></span></li>
+            <li><span class="k">~</span><span>cli claude-code <span class="old">2.1.240</span> → <span class="new">2.1.244</span></span></li>
+            <li><span class="k">~</span><span>environment/go-service <span class="old">@12</span> → <span class="new">@13</span></span></li>
+            <li><span class="k">~</span><span>worker <span class="old">…3f9a1c2e7d4b</span> → <span class="new">…8d2e44a1c09f</span></span></li>
+            <li><span class="k">=</span><span class="t3">31 other refs unchanged</span></li>
+          </ul>
+        </div>
+        <div class="section">
+          <div class="section-h"><h3>Evaluation</h3><span class="t3 small">golden-bugfix-go v14 · 120 tasks</span></div>
+          <dl class="kv">
+            <dt>Pass rate</dt><dd class="num">82.1% <span class="t3">vs 83.0%</span></dd>
+            <dt>Cost / task</dt><dd class="num">$4.10 <span class="t3">vs $3.70</span></dd>
+            <dt>Median time</dt><dd class="num">21 m <span class="t3">vs 22 m</span></dd>
+            <dt>Result-schema</dt><dd class="num">0 invalid <span class="t3">in eval</span></dd>
+          </dl>
+        </div>
+      </aside>
+    </div>
+  </main>
+</div>
+<div class="dialog" role="dialog" aria-labelledby="rbk-title">
+  <div class="dh"><h2 id="rbk-title">Roll back prod to rb_ds5p3wmcj?</h2><span class="t3 small">POST /v1/releases/prod/assignment:rollback</span></div>
+  <div class="db">
+    <p class="t2">New jobs resolve to <span class="mono">rb_ds5p3wmcj</span> (2026.10.24-3) from the next intake transaction. Canary <span class="mono">rb_k7wq0f2e9n</span> becomes <b>rolled_back</b>; pipeline <span class="mono">rpl_01m5m2v8q4</span> ends.</p>
+    <div class="facts" style="margin-top:10px"><span class="fact">Blast radius: 41 running · 7 at a gate · 5 in PR review · 3 tenants (payments 38, identity 11, risk 4) · 2 derived bundles</span></div>
+    <fieldset class="opts"><legend class="caps">Jobs already on rb_k7wq0f2e9n · preselected by the server because this rollback ends a failed canary (suggested_migrate_running)</legend>
+      <label class="opt on"><span class="radio on"></span><span><b>Migrate them now</b> <span class="mono small t3">required_by_operator</span><br><span class="t3 small">Revokes the canary; every pinned job moves to rb_ds5p3wmcj at its next safe point without waiting for requesters, and open packets are re-issued. Needs release:revoke.</span></span></label>
+      <label class="opt"><span class="radio"></span><span><b>Offer migration</b> <span class="mono small t3">offer</span><br><span class="t3 small">Requesters get a migration gate and may decline. Open gates on this bundle stay blocked until migrated or overridden.</span></span></label>
+      <label class="opt"><span class="radio"></span><span><b>Keep them pinned</b> <span class="mono small t3">none</span><br><span class="t3 small">They finish on the canary bundle. Their gates still show the rolled-back banner and stay blocked.</span></span></label>
+    </fieldset>
+    <div class="comment" style="margin-top:12px">Reason (required): R3 paused canary; AgentResultInvalid on implementer after prompt v22</div>
+  </div>
+  <div class="df"><span class="t3 small">Audited · reversible by re-ramping</span><span class="grow"></span><button class="btn ghost">Cancel</button><button class="btn primary">Roll back now</button></div>
+</div>
+<div class="scrim"></div><div class="palette"></div>
+<script src="app.js"></script>
+</body>
+</html>

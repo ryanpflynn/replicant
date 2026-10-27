@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/ws04/memory-candidates/v1.json",
+  "title": "Memory candidate proposals",
+  "description": "WS-04. Two producers share this envelope. (1) Artifact type `memory_candidates` (C-ART §4) written by a run (run_result.outputs.memory_candidates): the agent proposes candidates, which are UNTRUSTED and can only ever create candidate entries with origin agent_proposal and the lowest prior. (2) The request body of memory-service POST /internal/v1/candidates built by activity memory.write_candidates from the extraction activity's output. Every proposal must cite a source; proposals from feedback must reference the authorized comment they generalize.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "tenant_id", "job_id", "producer", "proposals"],
+  "properties": {
+    "schema": { "const": "replicant.memory-candidates/v1" },
+    "tenant_id": { "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$" },
+    "job_id": { "type": "string", "pattern": "^job_[0-9a-hjkmnp-tv-z]{26}$" },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["agent_run", "feedback_extraction", "episode_writer", "playbook_miner", "negative_miner"] },
+        "run_id": { "type": "string", "pattern": "^run_[0-9a-hjkmnp-tv-z]{26}$" },
+        "logical_activity_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,40}\\.c[0-9]{1,3}\\.n[0-9]{1,3}\\.[a-z][a-z0-9_]{0,30}$" },
+        "extraction_prompt": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._/-]{0,199}@[1-9][0-9]*$" },
+        "extraction_model": { "type": "string", "maxLength": 200 },
+        "trace_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+        "release_bundle_id": { "type": "string", "pattern": "^rb_[0-9a-hjkmnp-tv-z]{26}$" }
+      }
+    },
+    "proposals": {
+      "type": "array",
+      "maxItems": 50,
+      "items": { "$ref": "#/$defs/proposal" }
+    },
+    "non_candidates": {
+      "description": "Feedback items the extractor judged not generalizable (recorded in memory.feedback_items for the ledger).",
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["source", "decision"],
+        "properties": {
+          "source": { "$ref": "#/$defs/source" },
+          "decision": { "type": "string", "enum": ["not_generalizable", "opted_out", "question_not_rule", "pr_specific", "praise_or_noise"] },
+          "reason": { "type": "string", "maxLength": 500 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["pr_review_comment", "pr_review_body", "pr_issue_comment", "replicant_command", "job_outcome", "qa_failure", "repair_rejection", "agent_proposal"] },
+        "repo": { "type": "string", "maxLength": 455 },
+        "pr_number": { "type": "integer", "minimum": 1 },
+        "comment_id": { "type": "integer", "minimum": 1 },
+        "review_id": { "type": "integer", "minimum": 1 },
+        "delivery_id": { "type": "string", "maxLength": 64 },
+        "comment_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "author_principal_id": { "type": "string", "pattern": "^usr_[0-9a-hjkmnp-tv-z]{26}$" },
+        "url": { "type": "string", "maxLength": 2048, "pattern": "^https://" }
+      }
+    },
+    "proposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["memory_type", "proposed_scope", "statement", "source", "generalization"],
+      "properties": {
+        "memory_type": { "type": "string", "enum": ["rule", "procedure", "negative", "preference", "episode"] },
+        "proposed_scope": {
+          "type": "object", "additionalProperties": false, "required": ["level"],
+          "properties": {
+            "level": { "type": "string", "enum": ["service_group", "repo", "path"], "description": "Writers can never propose tenant or org scope; promotion beyond service_group is admin-only (scoping.md §5)." },
+            "repo": { "type": "string", "maxLength": 455 },
+            "service_group": { "type": "string", "maxLength": 63 },
+            "path_globs": { "type": "array", "maxItems": 20, "items": { "type": "string", "maxLength": 300 } },
+            "languages": { "type": "array", "maxItems": 10, "items": { "type": "string", "maxLength": 32 } },
+            "frameworks": { "type": "array", "maxItems": 10, "items": { "type": "string", "maxLength": 64 } },
+            "workflow_types": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 32 } },
+            "roles": { "type": "array", "maxItems": 5, "items": { "type": "string", "enum": ["planner", "implementer", "qa", "reviewer", "repair"] } }
+          }
+        },
+        "subject_key": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9_]+){0,6}$", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 120 },
+        "statement": { "type": "string", "minLength": 10, "maxLength": 600 },
+        "rationale": { "type": "string", "maxLength": 1000 },
+        "structured": { "type": "object" },
+        "examples": {
+          "type": "array", "maxItems": 4,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["kind", "code"],
+            "properties": {
+              "kind": { "type": "string", "enum": ["good", "bad"] },
+              "language": { "type": "string", "maxLength": 32 },
+              "code": { "type": "string", "maxLength": 1200 }
+            }
+          }
+        },
+        "source": { "$ref": "#/$defs/source" },
+        "generalization": {
+          "description": "Scores from the generalization test (write-path.md §2). All in [0,1].",
+          "type": "object", "additionalProperties": false,
+          "required": ["prescriptive", "pr_independence", "recurrence", "counterfactual_examples"],
+          "properties": {
+            "prescriptive": { "type": "number", "minimum": 0, "maximum": 1 },
+            "pr_independence": { "type": "number", "minimum": 0, "maximum": 1 },
+            "recurrence": { "type": "number", "minimum": 0, "maximum": 1 },
+            "counterfactual_examples": { "type": "array", "minItems": 0, "maxItems": 3, "items": { "type": "string", "maxLength": 300 } },
+            "explicit_remember": { "type": "boolean" },
+            "hedged": { "type": "boolean" },
+            "tool_enforceable": { "type": "boolean" }
+          }
+        }
+      }
+    }
+  }
+}

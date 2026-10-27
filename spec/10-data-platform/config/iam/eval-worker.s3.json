@@ -1,0 +1,92 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "EvalBucketReadWrite",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging",
+        "s3:GetObject",
+        "s3:GetObjectTagging"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-eval/*"
+    },
+    {
+      "Sid": "ListEvalBucket",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-eval"
+    },
+    {
+      "Sid": "StageHarnessInputsInEvalTenantOnly",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/replicant-eval/jobs/*/runs/*/inputs/*"
+    },
+    {
+      "Sid": "ReadEvalTenantResults",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectTagging"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/replicant-eval/jobs/*"
+    },
+    {
+      "Sid": "ReadKillSwitchMirror",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-ops/kill-switches/v1/state.json"
+    },
+    {
+      "Sid": "EvalAndEvalTenantKeysViaS3",
+      "Effect": "Allow",
+      "Action": [
+        "kms:GenerateDataKey",
+        "kms:Decrypt"
+      ],
+      "Resource": "arn:aws:kms:us-east-1:111111111111:key/*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "s3.us-east-1.amazonaws.com"
+        },
+        "ForAnyValue:StringEquals": {
+          "aws:ResourceTag/replicant-key-class": [
+            "eval"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "EvalTenantKeyViaS3",
+      "Effect": "Allow",
+      "Action": [
+        "kms:GenerateDataKey",
+        "kms:Decrypt"
+      ],
+      "Resource": "arn:aws:kms:us-east-1:111111111111:key/*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "s3.us-east-1.amazonaws.com"
+        },
+        "ForAnyValue:StringEquals": {
+          "kms:ResourceAliases": "alias/replicant/prod/tenant/replicant-eval"
+        }
+      }
+    },
+    {
+      "Sid": "NoDeletesNoSigning",
+      "Effect": "Deny",
+      "Action": [
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion",
+        "kms:Sign"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

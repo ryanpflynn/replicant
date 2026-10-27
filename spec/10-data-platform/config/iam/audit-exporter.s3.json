@@ -1,0 +1,83 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "WriteExportsAndHistory",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-audit/org/audit-exports/*",
+        "arn:aws:s3:::acme-replicant-prod-audit/tenants/*/jobs/*/history/*.skeleton.json.zst",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/history/*.json.zst",
+        "arn:aws:s3:::acme-replicant-prod-audit/tenants/*/jobs/*/gates/*/decision-*.json"
+      ]
+    },
+    {
+      "Sid": "ExportsWriteOnce",
+      "Effect": "Deny",
+      "Action": "s3:PutObject",
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-audit/org/audit-exports/*",
+        "arn:aws:s3:::acme-replicant-prod-audit/tenants/*/jobs/*/history/*.skeleton.json.zst",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/history/*.json.zst",
+        "arn:aws:s3:::acme-replicant-prod-audit/tenants/*/jobs/*/gates/*/decision-*.json"
+      ],
+      "Condition": {
+        "Null": {
+          "s3:if-none-match": "true"
+        },
+        "Bool": {
+          "s3:ObjectCreationOperation": "true"
+        }
+      }
+    },
+    {
+      "Sid": "ReadApprovalRecords",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-audit/tenants/*/jobs/*/gates/*/decision-*.json"
+    },
+    {
+      "Sid": "ListEventExports",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-audit",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": [
+            "org/audit-exports/events/*"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "ReadOwnEventExports",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-audit/org/audit-exports/events/*"
+    },
+    {
+      "Sid": "TenantAndAuditKeysViaS3",
+      "Effect": "Allow",
+      "Action": [
+        "kms:GenerateDataKey",
+        "kms:Decrypt"
+      ],
+      "Resource": "arn:aws:kms:us-east-1:111111111111:key/*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "s3.us-east-1.amazonaws.com"
+        },
+        "ForAnyValue:StringEquals": {
+          "aws:ResourceTag/replicant-key-class": [
+            "tenant",
+            "audit"
+          ]
+        }
+      }
+    }
+  ]
+}

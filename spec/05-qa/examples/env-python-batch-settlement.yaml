@@ -1,0 +1,242 @@
+# EnvironmentDefinition: Python 3.13 batch pipeline with Postgres and an S3-compatible sidecar (WS-05 example).
+# S3 is satisfied by Adobe S3Mock 5.2.3 (MinIO no longer publishes community images; verification log V05-29).
+# Non-QA fields follow WS-03's kind schema; spec.qa follows replicant.env-qa/v1. Image digests are illustrative.
+apiVersion: replicant.example.com/v1
+kind: EnvironmentDefinition
+metadata:
+  name: python-batch-settlement
+  scope:
+    level: tenant
+    tenant_id: finance-data
+  owners:
+    - finance-data-eng
+  description: Python 3.13 batch pipelines (uv, pandas, SQLAlchemy) that read S3 objects and write Postgres tables.
+  labels:
+    replicant.codebase-type: python_pipeline
+spec:
+  codebaseType: python_pipeline
+  image:
+    build:
+      base: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/base-python@sha256:a541c835810820840e18171d05f75c316e43bb0f1a3f981a536ffd43bb87cb5b
+      platform: linux/amd64
+      packages:
+        apt: [postgresql-client, jq, zstd]
+        pipx:
+          - uv==0.9.5
+      steps:
+        - name: qa-tools-check
+          run: uv --version && pg_isready --version
+          workingDir: /tmp
+    resolved:
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/env-python-batch-settlement@sha256:aecdf77a13fdb7ff32d471620959c71198a301643af76b1db629845c5c95f72f
+      buildSpecDigest: sha256:e46574e17f496592d8d781838438b988f52fdf381aa213f2021fbc9b1911d998
+      builtAt: '2026-10-22T13:05:30Z'
+  repo:
+    fetchDepth: 50
+  env:
+    UV_CACHE_DIR: /workspace/.cache/uv
+    PYTHONHASHSEED: '0'
+  packageMirrors: [pypi]
+  bootstrap:
+    forRoles: [implementer, repair, reviewer]
+    steps:
+      - name: uv-sync
+        run: uv sync --frozen --all-extras
+        timeoutSeconds: 600
+  caches:
+    - name: uv
+      path: /workspace/.cache/uv
+      kind: workspace
+  services:
+    - name: postgres
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/svc-postgres@sha256:7cf3db853f6e121ab0a65e30deea9ed273833fba95e4f49a2cb9cdf2360d880c
+      command: [docker-entrypoint.sh]
+      args: [postgres, -c, listen_addresses=127.0.0.1, -c, fsync=off, -c, synchronous_commit=off, -c, full_page_writes=off]
+      env:
+        POSTGRES_USER: settle
+        POSTGRES_PASSWORD: qa-local-only
+        POSTGRES_DB: settlement
+      data: {env: PGDATA, subdir: pgdata, sizeEstimate: 3Gi}   # XD-FIX-R1-074: the controller sets PGDATA under /workspace/.services/<name>
+      ports:
+        - {name: pg, port: 5432}
+      readiness:
+        exec: [pg_isready, -h, 127.0.0.1, -U, settle]
+        periodSeconds: 1
+        failureThreshold: 60
+      resources:
+        requests: {cpu: 500m, memory: 512Mi, ephemeralStorage: 256Mi}
+        limits: {cpu: '1', memory: 1Gi, ephemeralStorage: 1Gi}
+      forRoles: [qa, implementer, repair]
+      seed:
+        name: migrate
+        run: uv run alembic upgrade head
+        timeoutSeconds: 180
+    - name: s3
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/mirror/adobe/s3mock@sha256:e46574e17f496592d8d781838438b988f52fdf381aa213f2021fbc9b1911d998
+      env:
+        COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: qa-settlement-input,qa-settlement-output
+        COM_ADOBE_TESTING_S3MOCK_STORE_RETAIN_FILES_ON_EXIT: 'false'
+      data: {env: COM_ADOBE_TESTING_S3MOCK_STORE_ROOT, sizeEstimate: 1Gi}   # XD-FIX-R1-074: the controller sets COM_ADOBE_TESTING_S3MOCK_STORE_ROOT under /workspace/.services/<name>
+      ports:
+        - {name: http, port: 9090}
+        - {name: https, port: 9191}
+      readiness:
+        httpGet: {port: 9090, path: /qa-settlement-input}
+        periodSeconds: 2
+        failureThreshold: 45
+      resources:
+        requests: {cpu: 250m, memory: 384Mi, ephemeralStorage: 256Mi}
+        limits: {cpu: 500m, memory: 512Mi, ephemeralStorage: 1Gi}
+      forRoles: [qa, implementer, repair]
+  resourceProfiles:
+    default:
+      requests: {cpu: '2', memory: 6Gi, ephemeralStorage: 15Gi}
+      limits: {cpu: '4', memory: 10Gi, ephemeralStorage: 20Gi}
+      workspace:
+        sizeLimit: 20Gi
+        overflow: {policy: local_only}
+      derivation:
+        method: provisional
+        reason: First python_pipeline baseline pending (WS-03 section 5.2).
+        expiresAt: '2027-01-31T00:00:00Z'
+    qa:
+      requests: {cpu: '2', memory: 4Gi, ephemeralStorage: 15Gi}
+      limits: {cpu: '4', memory: 8Gi, ephemeralStorage: 20Gi}
+      workspace:
+        sizeLimit: 20Gi
+        overflow: {policy: local_only}
+      derivation:
+        method: provisional
+        reason: Planning values (WS-05) until the qa baseline runs.
+        expiresAt: '2027-01-31T00:00:00Z'
+  profileByRole:
+    implementer: default
+    repair: default
+    reviewer: default
+    qa: qa
+  isolationHint:
+    coding: kata-clh
+    qa_build: kata-clh
+  networkProfile:
+    coding: coding-default
+    qa_build: qa-with-mirror
+  qa:
+    schema: replicant.env-qa/v1
+    enabled: true
+    appKind: batch
+    privacy:
+      realData: false
+      traceDomSnapshots: false
+    timeouts:
+      totalSeconds: 2400
+      reserveSeconds: 180
+    env:
+      SETTLEMENT_DB_URL: postgresql+psycopg://settle:qa-local-only@127.0.0.1:5432/settlement
+      SETTLEMENT_S3_ENDPOINT: http://127.0.0.1:9090
+      SETTLEMENT_S3_ACCESS_KEY: qa-local-only
+      SETTLEMENT_S3_SECRET_KEY: qa-local-only
+      S3_INPUT_BUCKET: qa-settlement-input
+      S3_OUTPUT_BUCKET: qa-settlement-output
+      SETTLEMENT_RUN_DATE: '2026-10-01'
+    steps:
+      useBootstrap: true
+      unit:
+        - id: pytest_unit
+          run: uv run pytest -m "not integration" -p no:cacheprovider --junitxml=/workspace/.qa/out/pytest_unit.xml -q
+          timeoutSeconds: 900
+          report: {format: junit, path: /workspace/.qa/out/pytest_unit.xml}
+          listCommand: uv run pytest -m "not integration" --collect-only -q -p no:cacheprovider
+          rerun:
+            command: uv run pytest -p no:cacheprovider --junitxml=/workspace/.qa/out/pytest_unit_rerun.xml -q {tests}
+            selectorStyle: pytest-nodeid
+      integration:
+        - id: pytest_integration
+          run: uv run pytest -m integration -p no:cacheprovider --junitxml=/workspace/.qa/out/pytest_integration.xml -q
+          timeoutSeconds: 1200
+          report: {format: junit, path: /workspace/.qa/out/pytest_integration.xml}
+          listCommand: uv run pytest -m integration --collect-only -q -p no:cacheprovider
+          rerun:
+            command: uv run pytest -p no:cacheprovider --junitxml=/workspace/.qa/out/pytest_integration_rerun.xml -q {tests}
+            selectorStyle: pytest-nodeid
+      build:
+        - id: wheel
+          run: uv build --wheel --out-dir /workspace/.qa/dist
+          timeoutSeconds: 300
+        - id: lint
+          run: uv run ruff check .
+          required: false
+          alsoOnBase: false
+    imageBuild:
+      enabled: false
+    serviceOptions:
+      - name: postgres
+        resetBetweenPasses: command
+        resetCommand: uv run alembic downgrade base && uv run alembic upgrade head
+      - name: s3
+        wrapLogs: false            # S3Mock declares no command; its log arrives via sandbox_log
+        readinessTimeoutSeconds: 90
+    seed:
+      - id: upload_inputs
+        run: >-
+          uv run python -m settlement_pipeline.tools.qa_seed
+          --bucket "$S3_INPUT_BUCKET" --fixtures tests/fixtures/qa/2026-10-01
+        fixtures: [tests/fixtures/qa/2026-10-01]
+    contractCompat:
+      enabled: false
+    app:
+      start:
+        mode: process
+        command: >-
+          uv run python -m settlement_pipeline.run --run-date "$SETTLEMENT_RUN_DATE"
+          --input "s3://$S3_INPUT_BUCKET/acquirer=*/date=$SETTLEMENT_RUN_DATE/"
+          --output-table settlements_daily --output-s3 "s3://$S3_OUTPUT_BUCKET/reports/"
+      health:
+        startupTimeoutSeconds: 30
+        readiness:
+          - name: started
+            probe: {type: log, logPattern: '"event": "pipeline_started"'}
+        failurePatterns:
+          - pattern: '^Traceback \(most recent call last\):'
+          - pattern: '"level": "error"'
+          - pattern: 'SettingWithCopyWarning|FutureWarning'
+            severity: warn
+        completion:
+          expectExitCode: 0
+          maxRuntimeSeconds: 600
+          outputs:
+            - name: rows_written
+              type: sql
+              service: postgres
+              query: SELECT count(*) FROM settlements_daily WHERE run_date = DATE '2026-10-01'
+              expectRows: {equalsScalar: 1284}
+            - name: no_negative_net
+              type: sql
+              service: postgres
+              query: SELECT count(*) FROM settlements_daily WHERE net_amount_minor < 0 AND kind <> 'chargeback'
+              expectRows: {equalsScalar: 0}
+            - name: totals_balance
+              type: sql
+              service: postgres
+              query: >-
+                SELECT abs(sum(gross_amount_minor) - sum(fee_amount_minor) - sum(net_amount_minor))
+                FROM settlements_daily WHERE run_date = DATE '2026-10-01'
+              expectRows: {equalsScalar: 0}
+            - name: report_object
+              type: exec
+              command: [uv, run, python, -m, settlement_pipeline.tools.qa_check_report, --bucket, qa-settlement-output, --prefix, reports/2026-10-01/, --min-bytes, '1024']
+            - name: idempotent_rerun
+              type: exec
+              command: [uv, run, python, -m, settlement_pipeline.tools.qa_rerun_and_compare, --run-date, '2026-10-01', --table, settlements_daily]
+    flake:
+      changeReruns: 2
+      baseReruns: 3
+      newFlakeBlocks: true
+    agent:
+      enabled: true
+      tasks: [diagnose_failures]
+      maxCostUsd: 3
+      maxWallSeconds: 420
+    variants:
+      hotfix:
+        skip: [agent]
+        totalSeconds: 1500

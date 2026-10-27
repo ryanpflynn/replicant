@@ -1,0 +1,7 @@
+{
+  "outcome": "completed",
+  "verdict": "approve",
+  "summary": "The fix is minimal and correct: ApplyRefund now reverses Prorate(c.FXFeeMinor, refundMinor, c.AmountMinor) instead of the whole FX fee. Prorate uses integer arithmetic with half-even rounding, as the issue requires, and a full refund (refundMinor == AmountMinor) still reverses the whole fee. The previously failing TestApplyRefund cases cover the change.",
+  "findings": [],
+  "scope_ok": true
+}

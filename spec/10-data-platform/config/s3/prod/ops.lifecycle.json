@@ -1,0 +1,41 @@
+{
+  "Rules": [
+    {
+      "ID": "exec-revocations-90d",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "exec-revocations/prod/"
+      },
+      "Expiration": {
+        "Days": 90
+      },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 1
+      },
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 2
+      }
+    },
+    {
+      "ID": "kill-switch-history-400d",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "kill-switches/"
+      },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 400
+      }
+    },
+    {
+      "ID": "expired-delete-markers",
+      "Status": "Enabled",
+      "Filter": {},
+      "Expiration": {
+        "ExpiredObjectDeleteMarker": true
+      },
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 2
+      }
+    }
+  ]
+}

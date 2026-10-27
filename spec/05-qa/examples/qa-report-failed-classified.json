@@ -1,0 +1,524 @@
+{
+  "schema": "replicant.qa-report/v1",
+  "report_stage": "classified",
+  "tenant_id": "payments",
+  "job_id": "job_01m5p7x7r0bt69j0h0fbxepw90",
+  "run_id": "run_chxtsxqzcpds1fc1c4dvw9e4em",
+  "context": {
+    "node_key": "qa",
+    "cycle": 0,
+    "ordinal": 1,
+    "workflow_type": "bugfix",
+    "trigger": "initial"
+  },
+  "subject": {
+    "repo": "github.com/acme-payments/ledger-api",
+    "base_sha": "8c1e4f2a9b7d3c6e5f0a1b2c3d4e5f6a7b8c9d0e",
+    "head_tree_sha": "5d2b7e9f0a3c4e6b8d1f2a3c5e7b9d0f1a2c4e6b",
+    "diff_bundle": {
+      "key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/diff_bundle/changes.tar.zst",
+      "sha256": "1e3a5c7b9d0f2e4a6c8b0d1f3e5a7c9b2d4f6e8a0c3b5d7f9e1a2c4b6d8f0e3a",
+      "files_changed": 3
+    },
+    "environment_definition": {
+      "name": "go-grpc-ledger",
+      "version": 4,
+      "digest": "sha256:f87fc92356d784988038202520f3fbb9a1c92d03a8903da31c3bb455d1c1fe48"
+    },
+    "release_bundle_id": "rb_ds5p3wmcj4dag2e9a8ncp4py6k"
+  },
+  "runtime": {
+    "isolation": "kata-clh",
+    "harness_version": "replicant-qa 1.0.0",
+    "qa_image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/env-go:1.25.3-qa@sha256:581bacd7bb765d1c38668740687ffd7e03554e3db03a87ffa10af6f062b418b8",
+    "cpu_limit": "8.75",
+    "memory_limit": "12928Mi",
+    "workspace_limit": "40Gi",
+    "peak_workspace_bytes": 19864223744,
+    "peak_memory_bytes": 7301234688
+  },
+  "timing": {
+    "started_at": "2026-10-24T08:26:31Z",
+    "finished_at": "2026-10-24T08:41:02Z",
+    "wall_seconds": 871,
+    "budget_seconds": 2700,
+    "budget_exhausted": false
+  },
+  "verdict": {
+    "value": "fail",
+    "reason_code": "regression",
+    "summary_text": "1 blocking failure (unit, caused by the change); 1 known flaky test; image built; app healthy"
+  },
+  "stages": [
+    {
+      "stage": "prepare",
+      "status": "passed",
+      "variant": "change",
+      "duration_seconds": 4.2
+    },
+    {
+      "stage": "services",
+      "status": "passed",
+      "duration_seconds": 11.8,
+      "checks_total": 2,
+      "checks_failed": 0
+    },
+    {
+      "stage": "stubs",
+      "status": "passed",
+      "duration_seconds": 3.1,
+      "checks_total": 1,
+      "checks_failed": 0
+    },
+    {
+      "stage": "install",
+      "status": "passed",
+      "variant": "change",
+      "duration_seconds": 38.4,
+      "checks_total": 1,
+      "checks_failed": 0,
+      "log": {
+        "type": "build_log",
+        "bucket_class": "artifacts",
+        "key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_chxtsxqzcpds1fc1c4dvw9e4em/build_log/install-go_mod_download.log.zst"
+      }
+    },
+    {
+      "stage": "unit",
+      "status": "failed",
+      "variant": "change",
+      "duration_seconds": 214.7,
+      "checks_total": 412,
+      "checks_failed": 2,
+      "log": {
+        "type": "build_log",
+        "bucket_class": "artifacts",
+        "key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_chxtsxqzcpds1fc1c4dvw9e4em/build_log/unit-go_unit.log.zst"
+      }
+    },
+    {
+      "stage": "seed",
+      "status": "passed",
+      "duration_seconds": 21.0,
+      "checks_total": 3,
+      "checks_failed": 0
+    },
+    {
+      "stage": "integration",
+      "status": "passed",
+      "variant": "change",
+      "duration_seconds": 233.5,
+      "checks_total": 64,
+      "checks_failed": 0
+    },
+    {
+      "stage": "build",
+      "status": "warning",
+      "variant": "change",
+      "duration_seconds": 49.9,
+      "checks_total": 2,
+      "checks_failed": 1
+    },
+    {
+      "stage": "image_build",
+      "status": "passed",
+      "duration_seconds": 96.2,
+      "checks_total": 1,
+      "checks_failed": 0
+    },
+    {
+      "stage": "sbom",
+      "status": "passed",
+      "duration_seconds": 12.6,
+      "checks_total": 1,
+      "checks_failed": 0
+    },
+    {
+      "stage": "app_start",
+      "status": "passed",
+      "duration_seconds": 3.4,
+      "checks_total": 1,
+      "checks_failed": 0
+    },
+    {
+      "stage": "health",
+      "status": "passed",
+      "duration_seconds": 34.8,
+      "checks_total": 7,
+      "checks_failed": 0,
+      "log": {
+        "type": "health_log",
+        "bucket_class": "artifacts",
+        "key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_chxtsxqzcpds1fc1c4dvw9e4em/health_log/app.log.zst"
+      }
+    },
+    {
+      "stage": "smoke",
+      "status": "passed",
+      "duration_seconds": 1.9,
+      "checks_total": 3,
+      "checks_failed": 0
+    },
+    {
+      "stage": "shutdown",
+      "status": "passed",
+      "duration_seconds": 1.2,
+      "checks_total": 1,
+      "checks_failed": 0
+    },
+    {
+      "stage": "agent",
+      "status": "passed",
+      "duration_seconds": 141.0,
+      "checks_total": 0,
+      "checks_failed": 0
+    }
+  ],
+  "checks": [
+    {
+      "stage": "unit",
+      "test_id": "go:github.com/acme-payments/ledger-api/internal/ledger.TestApplyRefund/partial_eur_fx_fee",
+      "name": "TestApplyRefund/partial_eur_fx_fee",
+      "step_id": "go_unit",
+      "status": "failed",
+      "required": true,
+      "attempts": [
+        {
+          "variant": "change",
+          "n": 1,
+          "status": "failed",
+          "duration_ms": 41,
+          "started_at": "2026-10-24T08:28:02Z"
+        },
+        {
+          "variant": "change",
+          "n": 2,
+          "status": "failed",
+          "duration_ms": 39,
+          "started_at": "2026-10-24T08:31:40Z"
+        },
+        {
+          "variant": "base",
+          "n": 1,
+          "status": "passed",
+          "duration_ms": 37,
+          "started_at": "2026-10-24T08:31:55Z"
+        },
+        {
+          "variant": "change",
+          "n": 3,
+          "status": "failed",
+          "duration_ms": 40,
+          "started_at": "2026-10-24T08:32:09Z"
+        },
+        {
+          "variant": "base",
+          "n": 2,
+          "status": "passed",
+          "duration_ms": 38,
+          "started_at": "2026-10-24T08:32:20Z"
+        },
+        {
+          "variant": "base",
+          "n": 3,
+          "status": "passed",
+          "duration_ms": 36,
+          "started_at": "2026-10-24T08:32:31Z"
+        }
+      ],
+      "classification": {
+        "cause": "code",
+        "rule": "C1",
+        "confidence": "high"
+      },
+      "blocking": true,
+      "history": {
+        "runs": 214,
+        "failures": 0,
+        "flaky_runs": 0,
+        "quarantined": false
+      },
+      "failure": {
+        "message": "ledger_test.go:188: fx_fee_reversal amount = EUR 0.48, want EUR 0.19 (40% of 0.48 prorated, rounded half-even)",
+        "stack_excerpt": "--- FAIL: TestApplyRefund/partial_eur_fx_fee (0.00s)\n    ledger_test.go:188: fx_fee_reversal amount = EUR 0.48, want EUR 0.19",
+        "file": "internal/ledger/ledger_test.go",
+        "line": 188,
+        "in_diff": false,
+        "expected": "EUR 0.19",
+        "actual": "EUR 0.48"
+      },
+      "evidence": [
+        {
+          "type": "junit_xml",
+          "bucket_class": "artifacts",
+          "key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_chxtsxqzcpds1fc1c4dvw9e4em/junit_xml/go_unit.xml",
+          "name": "go_unit (change, attempt 1)"
+        },
+        {
+          "type": "junit_xml",
+          "bucket_class": "artifacts",
+          "key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_chxtsxqzcpds1fc1c4dvw9e4em/junit_xml/go_unit-reruns.xml",
+          "name": "go_unit reruns (change and base)"
+        }
+      ]
+    },
+    {
+      "stage": "unit",
+      "test_id": "go:github.com/acme-payments/ledger-api/internal/outbox.TestPublisherReconnect",
+      "name": "TestPublisherReconnect",
+      "step_id": "go_unit",
+      "status": "flaky",
+      "required": true,
+      "attempts": [
+        {
+          "variant": "change",
+          "n": 1,
+          "status": "failed",
+          "duration_ms": 5012,
+          "started_at": "2026-10-24T08:28:40Z"
+        },
+        {
+          "variant": "change",
+          "n": 2,
+          "status": "passed",
+          "duration_ms": 1203,
+          "started_at": "2026-10-24T08:31:44Z"
+        }
+      ],
+      "classification": {
+        "cause": "flaky_known",
+        "rule": "F1",
+        "confidence": "high"
+      },
+      "blocking": false,
+      "history": {
+        "runs": 214,
+        "failures": 11,
+        "flaky_runs": 11,
+        "quarantined": true
+      },
+      "failure": {
+        "message": "outbox_test.go:77: timed out after 5s waiting for reconnect",
+        "file": "internal/outbox/outbox_test.go",
+        "line": 77,
+        "in_diff": false
+      },
+      "evidence": [
+        {
+          "type": "junit_xml",
+          "bucket_class": "artifacts",
+          "key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_chxtsxqzcpds1fc1c4dvw9e4em/junit_xml/go_unit.xml"
+        }
+      ]
+    },
+    {
+      "stage": "build",
+      "test_id": "step:build/go_vet",
+      "name": "go vet ./...",
+      "step_id": "go_vet",
+      "status": "failed",
+      "required": false,
+      "attempts": [
+        {
+          "variant": "change",
+          "n": 1,
+          "status": "failed",
+          "duration_ms": 18233
+        }
+      ],
+      "classification": {
+        "cause": "code",
+        "rule": "C6",
+        "confidence": "medium"
+      },
+      "blocking": false,
+      "failure": {
+        "message": "internal/ledger/refund.go:142:3: fmt.Sprintf format %d has arg amt of wrong type decimal.Decimal",
+        "file": "internal/ledger/refund.go",
+        "line": 142,
+        "in_diff": true
+      },
+      "evidence": [
+        {
+          "type": "build_log",
+          "bucket_class": "artifacts",
+          "key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_chxtsxqzcpds1fc1c4dvw9e4em/build_log/build-go_vet.log.zst"
+        }
+      ]
+    },
+    {
+      "stage": "health",
+      "test_id": "health:readiness/grpc_health",
+      "status": "passed",
+      "required": true,
+      "attempts": [
+        {
+          "variant": "change",
+          "n": 1,
+          "status": "passed",
+          "duration_ms": 2410
+        }
+      ],
+      "classification": {
+        "cause": "none",
+        "rule": "P0",
+        "confidence": "high"
+      },
+      "blocking": false
+    },
+    {
+      "stage": "smoke",
+      "test_id": "smoke:apply_partial_refund",
+      "status": "passed",
+      "required": true,
+      "attempts": [
+        {
+          "variant": "change",
+          "n": 1,
+          "status": "passed",
+          "duration_ms": 61
+        }
+      ],
+      "classification": {
+        "cause": "none",
+        "rule": "P0",
+        "confidence": "high"
+      },
+      "blocking": false
+    }
+  ],
+  "services": [
+    {
+      "name": "postgres",
+      "kind": "service",
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/mirror/docker.io/library/postgres:17.11@sha256:7cf3db853f6e121ab0a65e30deea9ed273833fba95e4f49a2cb9cdf2360d880c",
+      "status": "ready",
+      "ready_after_seconds": 4.9,
+      "log": {
+        "type": "health_log",
+        "bucket_class": "artifacts",
+        "key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_chxtsxqzcpds1fc1c4dvw9e4em/health_log/services/postgres.log.zst"
+      }
+    },
+    {
+      "name": "kafka",
+      "kind": "service",
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/mirror/docker.io/apache/kafka:4.4.0@sha256:71f49e81f00688af741c33c41add17781e66fb8e9d8a7753713f1912d83dea4f",
+      "status": "ready",
+      "ready_after_seconds": 11.8,
+      "log": {
+        "type": "health_log",
+        "bucket_class": "artifacts",
+        "key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_chxtsxqzcpds1fc1c4dvw9e4em/health_log/services/kafka.log.zst"
+      }
+    },
+    {
+      "name": "fx-rates",
+      "kind": "stub",
+      "status": "ready",
+      "ready_after_seconds": 3.1,
+      "contract": {
+        "service": "fx-rates",
+        "name": "acme.fx.v1",
+        "digest": "sha256:034cc2d09bd25e0d931376f0b26c697fc65e378abf49b1289ece3b3f211d5db7",
+        "resolved_from": "deployed_prod"
+      }
+    }
+  ],
+  "image": {
+    "builder": "buildkit",
+    "digest": "sha256:44a7cf163a7bbc3915870ccb04b1e9e8a365dc22a569d13ece7ded89017d4b09",
+    "size_bytes": 28311552,
+    "platform": "linux/amd64",
+    "base_images": [
+      "123456789012.dkr.ecr.us-east-1.amazonaws.com/mirror/gcr.io/distroless/static-debian12:nonroot@sha256:373d35d8b05e1a3fb7d6c2056080a1b1f4bb4130463e3d986d833e1832bd4b3a"
+    ],
+    "metadata": {
+      "type": "image_metadata",
+      "bucket_class": "artifacts",
+      "key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_chxtsxqzcpds1fc1c4dvw9e4em/image_metadata/image.json"
+    },
+    "sbom": {
+      "type": "sbom",
+      "bucket_class": "artifacts",
+      "key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_chxtsxqzcpds1fc1c4dvw9e4em/sbom/image.spdx.json"
+    }
+  },
+  "base_pass": {
+    "performed": true,
+    "scope": "targeted_tests",
+    "reasons": [
+      "failed_tests"
+    ],
+    "duration_seconds": 61.3
+  },
+  "agent": {
+    "used": true,
+    "tasks": [
+      {
+        "task": "diagnose_failures",
+        "outcome": "completed",
+        "wall_seconds": 141.0,
+        "cost_usd_reported": 0.62,
+        "output": {
+          "type": "qa_report",
+          "bucket_class": "artifacts",
+          "key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_chxtsxqzcpds1fc1c4dvw9e4em/qa_report/diagnosis.json"
+        }
+      }
+    ]
+  },
+  "classification_summary": {
+    "blocking": 1,
+    "by_cause": {
+      "code": 2,
+      "flaky_new": 0,
+      "flaky_known": 1,
+      "pre_existing": 0,
+      "environment": 0,
+      "test_defect": 0,
+      "unknown": 0
+    }
+  },
+  "history_snapshot": {
+    "source": "postgres:qa.test_stats_30d",
+    "as_of": "2026-10-24T08:41:20Z",
+    "lookback_days": 30,
+    "available": true
+  },
+  "warnings": [
+    {
+      "code": "non_required_step_failed",
+      "message": "go_vet failed (required: false); reported to the implementer as a non-blocking finding"
+    }
+  ],
+  "redaction": {
+    "ruleset_version": "redact-2026.10.1",
+    "findings_count": 0
+  },
+  "classification_facts": {
+    "verdict": "fail",
+    "reason_code": "regression",
+    "oscillation": false,
+    "env_signature_transient": false,
+    "agentrun_exit_class": "fail",
+    "risk_floor_hint": "medium",
+    "feedback_key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/steps/qa.c0.n1/qa_report/feedback.json"
+  },
+  "test_inventory": {
+    "method": "listed",
+    "base_count": 476,
+    "head_count": 476,
+    "tests_removed": [],
+    "tests_removed_total": 0,
+    "tests_skipped_added": [],
+    "tests_skipped_added_total": 0,
+    "deleted_test_files": [],
+    "skip_markers_added": [],
+    "deleted_or_skipped": false
+  },
+  "checkpoints": {
+    "written": 9,
+    "reused": []
+  }
+}

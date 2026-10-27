@@ -1,0 +1,383 @@
+{
+  "uid": "replicant-qa",
+  "title": "QA/QE",
+  "tags": [
+    "replicant",
+    "qa"
+  ],
+  "timezone": "utc",
+  "schemaVersion": 41,
+  "version": 1,
+  "editable": false,
+  "graphTooltip": 1,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "templating": {
+    "list": [
+      {
+        "name": "tenant",
+        "label": "Tenant",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "mimir"
+        },
+        "query": {
+          "query": "label_values(replicant_qa_runs_total, tenant)",
+          "refId": "tenant"
+        },
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "current": {}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "QA runs by verdict",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "description": "Which verdicts QA produces (WS-05 replicant_qa_runs_total).",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "sum by (outcome) (increase(replicant_qa_runs_total{tenant=~\"$tenant\"}[1h]))",
+          "legendFormat": "{{outcome}}",
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 2,
+      "title": "QA first-pass rate by workflow type (1 d)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "description": "Single emitter: replicant-projector (R1-201).",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "sum by (workflow_type) (increase(replicant_qa_first_pass_total{outcome=\"pass\",tenant=~\"$tenant\"}[1d])) / clamp_min(sum by (workflow_type) (increase(replicant_qa_first_pass_total{tenant=~\"$tenant\"}[1d])), 1)",
+          "legendFormat": "{{workflow_type}}",
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 3,
+      "title": "Stage duration p95 by qa_stage",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "description": "Where QA time goes (C-IDS qa_stage, CCR-05-03).",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, qa_stage) (rate(replicant_qa_stage_duration_seconds_bucket{tenant=~\"$tenant\"}[1h])))",
+          "legendFormat": "{{qa_stage}}",
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 4,
+      "title": "Failing checks by stage and cause",
+      "type": "barchart",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "description": "Which checks fail and why.",
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "sort_desc(sum by (qa_stage, reason) (increase(replicant_qa_checks_total{tenant=~\"$tenant\"}[1d])))",
+          "legendFormat": "{{qa_stage}} {{reason}}",
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 5,
+      "title": "Environment failures (operator-facing)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "description": "Failures caused by the environment, not the change.",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "sum by (reason) (increase(replicant_qa_environment_failures_total{tenant=~\"$tenant\"}[1h]))",
+          "legendFormat": "{{reason}}",
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 6,
+      "title": "Flake reruns and fix iterations",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "description": "Flakiness and QA-driven repair loops.",
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "sum by (outcome) (increase(replicant_qa_flake_reruns_total{tenant=~\"$tenant\"}[1h]))",
+          "legendFormat": "rerun {{outcome}}",
+          "exemplar": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "histogram_quantile(0.9, sum by (le) (rate(replicant_qa_fix_iterations_bucket{tenant=~\"$tenant\"}[1d])))",
+          "legendFormat": "fix iterations p90",
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 7,
+      "title": "QA run wall time p95 by isolation",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "description": "Runtime comparison for QA workloads (D-06).",
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, isolation) (rate(replicant_qa_run_duration_seconds_bucket{tenant=~\"$tenant\"}[1h])))",
+          "legendFormat": "{{isolation}}",
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 8,
+      "title": "Tests deleted or newly skipped",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "description": "QA runs whose test inventory shows removed tests or new skips (R2-006, XD-W2-05-02).",
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "sum by (workflow_type) (increase(replicant_qa_tests_deleted_or_skipped_total{tenant=~\"$tenant\"}[1d]))",
+          "legendFormat": "{{workflow_type}}",
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 9,
+      "title": "Checkpoint stages reused on retry",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "description": "QA stages skipped on a retry by checkpoint reuse (R2-033, XD-W2-05-02).",
+      "gridPos": {
+        "x": 12,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "sum by (qa_stage) (increase(replicant_qa_checkpoint_stages_reused_total{tenant=~\"$tenant\"}[1d]))",
+          "legendFormat": "{{qa_stage}}",
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {}
+    }
+  ],
+  "links": [],
+  "annotations": {
+    "list": [
+      {
+        "name": "Job terminal (failed)",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "replicant-pg"
+        },
+        "enable": false,
+        "iconColor": "#c4162a",
+        "rawQuery": "SELECT terminal_at AS time, job_id AS text FROM jobs_read.jobs WHERE terminal_outcome = 'failed' AND $__timeFilter(terminal_at)"
+      }
+    ]
+  }
+}

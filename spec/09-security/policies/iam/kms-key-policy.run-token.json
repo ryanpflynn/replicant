@@ -1,0 +1,53 @@
+{
+  "Version": "2012-10-17",
+  "Id": "replicant-prod-run-token-signing",
+  "Statement": [
+    {
+      "Sid": "MetadataForAccount",
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:aws:iam::222222222222:root" },
+      "Action": ["kms:DescribeKey", "kms:GetKeyPolicy", "kms:ListResourceTags", "kms:GetPublicKey"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "OnlyRunnerApiSignsEs256",
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:aws:iam::222222222222:role/replicant-prod-runner-api" },
+      "Action": ["kms:Sign", "kms:GetPublicKey"],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": { "kms:SigningAlgorithm": "ECDSA_SHA_256", "kms:MessageType": "RAW" }
+      }
+    },
+    {
+      "Sid": "VerifiersMayFetchPublicKey",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": [
+          "arn:aws:iam::222222222222:role/replicant-prod-repo-mirror",
+          "arn:aws:iam::111111111111:role/replicant-prod-memory-service",
+          "arn:aws:iam::111111111111:role/replicant-prod-context-mcp"
+        ]
+      },
+      "Action": ["kms:GetPublicKey", "kms:DescribeKey"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenySignToEveryoneElse",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "kms:Sign",
+      "Resource": "*",
+      "Condition": {
+        "ArnNotEquals": { "aws:PrincipalArn": "arn:aws:iam::222222222222:role/replicant-prod-runner-api" }
+      }
+    },
+    {
+      "Sid": "AdminWithoutUse",
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:aws:iam::222222222222:role/replicant-prod-platform-deployer" },
+      "Action": ["kms:Create*", "kms:Describe*", "kms:Enable*", "kms:List*", "kms:Put*", "kms:Update*", "kms:Disable*", "kms:Get*", "kms:TagResource", "kms:UntagResource"],
+      "Resource": "*"
+    }
+  ]
+}

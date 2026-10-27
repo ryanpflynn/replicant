@@ -1,0 +1,47 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SignAppJwtWithActiveAndNextKeysOnly",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Sign",
+        "kms:DescribeKey"
+      ],
+      "Resource": "arn:aws:kms:us-east-1:111111111111:key/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/replicant-key-class": "github-app",
+          "aws:ResourceTag/github-app-registration": "prod"
+        }
+      }
+    },
+    {
+      "Sid": "ReadBrokerConfigSecretsOnly",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret"
+      ],
+      "Resource": "arn:aws:secretsmanager:us-east-1:111111111111:secret:replicant/prod/github-token-broker/*"
+    },
+    {
+      "Sid": "ReadRepoOptInColumnsOnly",
+      "Effect": "Allow",
+      "Action": "rds-db:connect",
+      "Resource": "arn:aws:rds-db:us-east-1:111111111111:dbuser:cluster-*/svc_github_token_broker"
+    },
+    {
+      "Sid": "DenyEverythingElse",
+      "Effect": "Deny",
+      "NotAction": [
+        "kms:Sign",
+        "kms:DescribeKey",
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret",
+        "rds-db:connect"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

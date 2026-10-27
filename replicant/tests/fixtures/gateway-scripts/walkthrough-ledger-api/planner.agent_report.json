@@ -1,0 +1,17 @@
+{
+  "outcome": "completed",
+  "summary": "ApplyRefund reverses the whole FX fee on every refund. Prorate the reversal with the existing Prorate(c.FXFeeMinor, refundMinor, c.AmountMinor) helper (integer arithmetic, half-even rounding); a full refund still reverses the whole fee. One line in internal/ledger/ledger.go.",
+  "steps": [
+    {"id": "s1", "title": "Prorate the FX fee reversal in ApplyRefund with Prorate(c.FXFeeMinor, refundMinor, c.AmountMinor)", "files": ["internal/ledger/ledger.go"], "rationale": "The helper already implements half-even integer proration; no float64 for money."},
+    {"id": "s2", "title": "Run go vet and the unit tests", "files": ["internal/ledger/ledger_test.go"], "rationale": "TestApplyRefund/partial_eur_fx_fee and partial_half_even cover the bug; full_eur_fx_fee guards the full-refund case."}
+  ],
+  "acceptance_criteria": [
+    {"id": "ac1", "text": "A partial refund of EUR 40.00 on a EUR 100.00 charge with a EUR 0.48 FX fee posts fx_fee_reversal EUR -0.19.", "verifiable_by": "unit_test"},
+    {"id": "ac2", "text": "A full refund still reverses the whole FX fee.", "verifiable_by": "unit_test"},
+    {"id": "ac3", "text": "go vet ./..., go build ./... and go test ./... pass.", "verifiable_by": "unit_test"}
+  ],
+  "risks": ["Half-even rounding: repeated partial refunds can differ by one minor unit in total from the original fee."],
+  "estimated_scope": {"files": 1, "lines": 1},
+  "touches_services": ["ledger-api"],
+  "expected_ui_changes": []
+}

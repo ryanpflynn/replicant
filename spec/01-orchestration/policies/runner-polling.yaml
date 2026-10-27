@@ -1,0 +1,14 @@
+# Policy (policyType runner_polling; WS-01 owns: ../schemas/policy-runner-polling.v1.json)
+apiVersion: replicant.example.com/v1
+kind: Policy
+metadata:
+  name: runner-polling
+  scope:
+    level: global
+  owners: [replicant-platform]
+  description: "Run completion wait: Signal hint plus timer polling (ADR-002, C-RUNNER)"
+spec:
+  policyType: runner_polling
+  pending_interval_seconds: 15     # while Pending or Provisioning
+  running_interval_seconds: 120    # while Running, Finalizing, Cancelling (bounded 10..600)
+  deadline_slack_seconds: 300      # orchestrator deadline = startup + active + finalize + slack

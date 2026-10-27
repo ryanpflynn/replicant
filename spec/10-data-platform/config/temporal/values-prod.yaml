@@ -1,0 +1,95 @@
+# WS-10 · Temporal server persistence (Helm chart temporalio/temporal 1.7.0, appVersion 1.32.0;
+# server image pinned to 1.32.1). Only the persistence-relevant keys are shown; WS-01 owns the
+# rest of the values (TLS, authorizer, dynamic config, namespaces).
+# Chart keys verified against helm-charts main (2026-10-23 clone): `numHistoryShards`,
+# `datastores.<name>.sql.{pluginName,databaseName,connectAddr,user,passwordCommand,maxConns,
+# maxIdleConns,maxConnLifetime,tls,createDatabase,manageSchema}`
+# [verified: https://github.com/temporalio/helm-charts/blob/main/charts/temporal/values.yaml, 2026-10-24].
+# Validated: YAML parse, 2026-10-24.
+server:
+  image:
+    repository: 111111111111.dkr.ecr.us-east-1.amazonaws.com/replicant/temporal-server-rdsiam
+    # temporalio/server:1.32.1 + /usr/local/bin/rds-iam-token (static Go binary, aws-sdk-go-v2
+    # feature/rds/auth BuildAuthToken). Built by replicant CI; digest pinned.
+    tag: "1.32.1-rdsiam.1"
+  config:
+    persistence:
+      defaultStore: default
+      visibilityStore: visibility
+      # FIXED FOREVER at first start (temporal-persistence.md §4). "You can't change this value
+      # after the first run" [verified: https://docs.temporal.io/references/service-configuration, 2026-10-24].
+      numHistoryShards: 512
+      datastores:
+        default:
+          sql:
+            createDatabase: false      # databases are created by the temporal-schema Job (IAM auth)
+            manageSchema: false        # schema managed by our PreSync Job, not the chart's password-based hook
+            pluginName: postgres12_pgx
+            driverName: postgres12_pgx
+            databaseName: temporal
+            connectAddr: "temporal-prod.cluster-h2kq8vmc1ytr.us-east-1.rds.amazonaws.com:5432"
+            connectProtocol: tcp
+            user: temporal_server
+            # Server >= 1.31: run per new physical connection; stdout is the password. RDS IAM tokens
+            # live 15 min but are only checked at connect, so maxConnLifetime need not be < 15 min;
+            # 30 min spreads reconnects after an Aurora failover. [verified source:
+            # https://raw.githubusercontent.com/temporalio/temporal/v1.32.1/common/config/config.go,
+            # 2026-10-24 — undocumented on docs.temporal.io; fallback in temporal-persistence.md §6]
+            passwordCommand:
+              command: /usr/local/bin/rds-iam-token
+              args: ["--host", "temporal-prod.cluster-h2kq8vmc1ytr.us-east-1.rds.amazonaws.com", "--port", "5432",
+                     "--user", "temporal_server", "--region", "us-east-1"]
+              timeout: 10s
+            maxConns: 40               # per pod; see connection budget (temporal-persistence.md §5)
+            maxIdleConns: 40
+            maxConnLifetime: "30m"
+            tls:
+              enabled: true
+              caFile: /etc/ssl/rds/global-bundle.pem
+              serverName: temporal-prod.cluster-h2kq8vmc1ytr.us-east-1.rds.amazonaws.com
+              enableHostVerification: true   # -> sslmode=verify-full
+        visibility:
+          sql:
+            createDatabase: false
+            manageSchema: false
+            pluginName: postgres12_pgx
+            driverName: postgres12_pgx
+            databaseName: temporal_visibility
+            connectAddr: "temporal-prod.cluster-h2kq8vmc1ytr.us-east-1.rds.amazonaws.com:5432"
+            connectProtocol: tcp
+            user: temporal_server
+            passwordCommand:
+              command: /usr/local/bin/rds-iam-token
+              args: ["--host", "temporal-prod.cluster-h2kq8vmc1ytr.us-east-1.rds.amazonaws.com", "--port", "5432",
+                     "--user", "temporal_server", "--region", "us-east-1"]
+              timeout: 10s
+            maxConns: 10
+            maxIdleConns: 10
+            maxConnLifetime: "30m"
+            tls:
+              enabled: true
+              caFile: /etc/ssl/rds/global-bundle.pem
+              serverName: temporal-prod.cluster-h2kq8vmc1ytr.us-east-1.rds.amazonaws.com
+              enableHostVerification: true
+  # Replica counts sized in temporal-persistence.md §5 (1 history process per ≤ 500 shards is
+  # Temporal's starting ratio; 3 for AZ spread).
+  history:
+    replicaCount: 3
+    resources:
+      requests: {cpu: "1", memory: 4Gi}
+      limits: {memory: 6Gi}
+  frontend:
+    replicaCount: 3
+  matching:
+    replicaCount: 3
+  worker:
+    replicaCount: 2
+  # No `dynamicConfig` here (R1-242): WS-01 owns dynamic config in
+  # spec/01-orchestration/platform/temporal-dynamicconfig.yaml (dynamicConfigClient.filepath), and a
+  # second source would silently replace it. WS-10's persistence QPS values are handed to WS-01 in
+  # XD-FIX-R1-242: history.persistenceMaxQPS 3000, matching.persistenceMaxQPS 1500,
+  # frontend.persistenceMaxQPS 1000, frontend.visibilityMaxPageSize 1000.
+schema:
+  # Chart hooks disabled for persistence (manageSchema: false above); our Job is
+  # config/temporal/temporal-schema-job.yaml.
+  useHelmHooks: false

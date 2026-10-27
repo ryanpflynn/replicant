@@ -1,0 +1,25 @@
+{
+  "DBClusterParameterGroupName": "langfuse-prod-aurora-pg16",
+  "Parameters": [
+    {
+      "ParameterName": "rds.force_ssl",
+      "ParameterValue": "1",
+      "ApplyMethod": "immediate"
+    },
+    {
+      "ParameterName": "password_encryption",
+      "ParameterValue": "scram-sha-256",
+      "ApplyMethod": "immediate"
+    },
+    {
+      "ParameterName": "log_min_duration_statement",
+      "ParameterValue": "2000",
+      "ApplyMethod": "immediate"
+    },
+    {
+      "ParameterName": "timezone",
+      "ParameterValue": "UTC",
+      "ApplyMethod": "immediate"
+    }
+  ]
+}

@@ -1,0 +1,91 @@
+# GraphDefinition (kind schema: spec/01-orchestration/schemas/graph-definition.v1.json)
+# Authored in the replicant-config repo under graphs/; published to the registry (C-DEF section 4).
+# Shape 3 (graphs/pr-repair.md). The in-job repair loop is the shared tail of every PR-producing graph.
+apiVersion: replicant.example.com/v1
+kind: GraphDefinition
+metadata:
+  name: pr-repair
+  scope:
+    level: global
+  owners: [replicant-platform]
+  description: "standalone repair of an existing PR the Replicant did not open (/replicant command), or of an expired job's PR"
+  labels:
+    workflow-type: pr_repair
+spec:
+  workflowType: pr_repair
+  fglVersion: 1
+  params:
+    single_cycle: true
+  entry: context
+  nodes:
+    - key: context
+      type: context_assembler
+      phase: context
+      config: {briefing: standard}
+    - key: triage
+      type: feedback_triage
+      phase: repairing
+    - key: reply_ack
+      type: post_reply
+      phase: repairing
+      config: {template: ack}
+    - key: repair
+      type: repair_run
+      phase: repairing
+      maxVisits: 3
+      config: {agent: implementer-claude, workloadClass: coding, steering: true}
+    - key: qa_repair
+      type: qa_run
+      phase: qa
+      maxVisits: 3
+      config: {agent: qa-runner, workloadClass: qa_build}
+    - key: verify_repair
+      type: verifier
+      phase: verify
+    - key: risk_repair
+      type: risk_classify
+      phase: verify
+      config: {stage: diff}
+    - key: push_gate
+      type: human_gate
+      phase: publish_gate
+      config: {gateKind: publish_approval}
+    - key: push
+      type: publisher
+      phase: publishing
+      config: {mode: push_update}
+    - key: reply_fix
+      type: post_reply
+      phase: repairing
+      config: {template: fix_summary}
+    - key: reply_no_action
+      type: post_reply
+      phase: repairing
+      config: {template: no_action}
+    - key: memory
+      type: memory_writer
+      phase: memory
+  edges:
+    - {from: context, to: triage}
+    - {from: triage, switch: [{when: "nodes['triage'].outcome == 'actionable'", to: reply_ack}], default: reply_no_action}
+    - {from: reply_ack, to: repair}
+    - {from: repair, switch: [{when: "nodes['repair'].outcome == 'completed'", to: qa_repair}], default: reply_no_action}
+    - from: qa_repair
+      switch:
+        - {when: "nodes['qa_repair'].decision in ['proceed', 'operator_and_gate', 'gate_with_failure']", to: verify_repair}
+        - {when: "nodes['qa_repair'].decision == 'retry_qa'", to: qa_repair}
+        - {when: "nodes['qa_repair'].decision == 'fail_job'", to: "end:qa_failed"}
+      default: repair
+    - {from: verify_repair, switch: [{when: "nodes['verify_repair'].passed", to: risk_repair}], default: "end:policy_violation"}
+    - {from: risk_repair, to: push_gate}
+    - from: push_gate
+      switch:
+        - {when: "nodes['push_gate'].outcome in ['approve', 'not_required']", to: push}
+        - {when: "nodes['push_gate'].outcome == 'request_changes'", to: repair}
+        - {when: "nodes['push_gate'].outcome == 'rerun_qa'", to: qa_repair}
+        - {when: "nodes['push_gate'].outcome == 'expired'", to: "end:gate_expired"}
+      default: "end:rejected_at_gate"
+    - {from: push, to: reply_fix}
+    - {from: reply_fix, to: memory}
+    - {from: reply_no_action, to: memory}
+    - {from: memory, to: "end:repair_pushed"}

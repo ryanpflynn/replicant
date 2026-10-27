@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/ws07/github-app-manifest/v1.json",
+  "title": "GitHub App manifest (replicant profile)",
+  "description": "WS-07. Validates Replicant's GitHub App manifest against the parameters documented at https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest (checked 2026-10-24), plus replicant policy: private app, least privilege, no workflows/administration/secrets permissions. Event/permission compatibility is cross-checked by validate_manifest.py.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "url", "hook_attributes", "redirect_url", "public", "default_permissions", "default_events"],
+  "properties": {
+    "name": {"type": "string", "minLength": 1, "maxLength": 34},
+    "url": {"type": "string", "format": "uri", "pattern": "^https://"},
+    "description": {"type": "string", "maxLength": 1000},
+    "hook_attributes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url"],
+      "properties": {
+        "url": {"type": "string", "format": "uri", "pattern": "^https://"},
+        "active": {"type": "boolean"}
+      }
+    },
+    "redirect_url": {"type": "string", "format": "uri", "pattern": "^(https://|http://localhost(:[0-9]+)?/|http://127\\.0\\.0\\.1(:[0-9]+)?/)"},
+    "callback_urls": {"type": "array", "maxItems": 10, "items": {"type": "string", "format": "uri"}},
+    "setup_url": {"type": "string", "format": "uri"},
+    "setup_on_update": {"type": "boolean"},
+    "request_oauth_on_install": {"const": false, "description": "Replicant policy: identity linking uses its own OAuth link flow from the control plane (identity.md §4.2), not install-time OAuth."},
+    "public": {"const": false, "description": "Replicant policy: registrations are private to the owning org/account."},
+    "default_permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metadata"],
+      "properties": {
+        "metadata": {"const": "read"},
+        "contents": {"enum": ["read", "write"]},
+        "issues": {"enum": ["read", "write"]},
+        "pull_requests": {"enum": ["read", "write"]},
+        "checks": {"enum": ["read", "write"]},
+        "members": {"const": "read"},
+        "statuses": {"enum": ["read", "write"]}
+      },
+      "$comment": "Deliberately absent (forbidden by additionalProperties): workflows, administration, secrets, actions, environments, organization_administration, repository_hooks, emails. Replicant never edits .github/workflows (D-21)."
+    },
+    "default_events": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "issues", "issue_comment", "pull_request", "pull_request_review", "pull_request_review_comment",
+          "pull_request_review_thread", "check_run", "check_suite", "repository", "membership",
+          "organization", "member", "push", "label"
+        ]
+      },
+      "not": {"contains": {"enum": ["installation", "installation_repositories", "github_app_authorization"]}}
+    }
+  }
+}

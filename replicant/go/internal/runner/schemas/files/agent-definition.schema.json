@@ -1,0 +1,1023 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/kinds/agent-definition/v1.json",
+  "title": "AgentDefinition (kind schema v1)",
+  "description": "Owner: WS-03. Validates a complete AgentDefinition document: the C-DEF 3.0.0 envelope plus this spec. An agent definition is a CLI-agnostic description of one coding-agent invocation (D-10, D-11): which native CLI (pinned by image digest), which model (gateway model id), which Langfuse prompts, which tools and MCP servers, which limits, how it reaches the AI gateway, and what it must produce. The sandbox entrypoint (shipped inside cliImage, so its CLI adapter is versioned with the CLI) translates it into CLI flags and user-scope config files. Reference fields carry x-replicant-ref so the bundle resolver can walk them generically (C-DEF Risks).",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://schemas.replicant.example.com/contracts/definition-envelope/v1.json"
+    }
+  ],
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "replicant.example.com/v1"
+    },
+    "kind": {
+      "const": "AgentDefinition"
+    },
+    "spec": {
+      "$ref": "#/$defs/spec"
+    }
+  },
+  "$defs": {
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "roles",
+        "workloadClass",
+        "cli",
+        "cliImage",
+        "model",
+        "prompts",
+        "tools",
+        "mcpServers",
+        "limits",
+        "gateway",
+        "steering",
+        "session",
+        "outputContract"
+      ],
+      "properties": {
+        "roles": {
+          "description": "Run roles this definition may serve. The workflow passes one of them as RunSpec.role; the Runner rejects a mismatch (admission_denied). qa is owned by WS-05 but may reuse this kind.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 7,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/run_role"
+          }
+        },
+        "workloadClass": {
+          "description": "Default RunSpec.workload_class for runs of this agent (drives runtime selection and network profile defaults, WS-02).",
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/workload_class"
+        },
+        "cli": {
+          "description": "Native CLI (D-10). claude-agent-sdk is reserved: v1 bundles use claude-code for every Claude role (WS-03 ADR-002); the value exists so a later SDK runner needs no envelope or bundle change.",
+          "type": "string",
+          "enum": [
+            "claude-code",
+            "claude-agent-sdk",
+            "codex"
+          ]
+        },
+        "cliImage": {
+          "$ref": "#/$defs/cliImage"
+        },
+        "model": {
+          "$ref": "#/$defs/model"
+        },
+        "prompts": {
+          "$ref": "#/$defs/prompts"
+        },
+        "tools": {
+          "$ref": "#/$defs/tools"
+        },
+        "mcpServers": {
+          "description": "MCP servers exposed to the agent. Only replicant services are allowed (no URLs, C-DEF section 2); the entrypoint maps each service to a loopback route on replicant-agentd, which injects the run token (audiences memory-mcp / context-mcp).",
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/mcpServer"
+          }
+        },
+        "limits": {
+          "$ref": "#/$defs/limits"
+        },
+        "gateway": {
+          "$ref": "#/$defs/gateway"
+        },
+        "env": {
+          "description": "Extra non-secret environment for the CLI process. Protected names (common.schema.json#/$defs/protected_env_name) are rejected.",
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/env_map"
+        },
+        "steering": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "live"
+          ],
+          "properties": {
+            "live": {
+              "description": "C-DEF required field. true: the entrypoint can inject steering messages into the running CLI (Claude Code --input-format stream-json; Codex app-server turn/steer). false: Runner returns 409 steering_not_supported and the workflow queues messages for the next node (contracts ADR-010, spec/00-contracts/adr/010-steering-via-runner-inbox.md).",
+              "type": "boolean"
+            }
+          }
+        },
+        "session": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "capture"
+          ],
+          "properties": {
+            "capture": {
+              "description": "Capture the CLI's native session files as artifact cli_session_state at finalize (D-14). always: also on failure and cancel. on_success: only on exit 0. never.",
+              "type": "string",
+              "enum": [
+                "always",
+                "on_success",
+                "never"
+              ]
+            },
+            "resumable": {
+              "description": "Whether a later run of the same job may resume this session (WS-04 decides per node whether to resume or to start fresh with a handoff).",
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
+        "outputContract": {
+          "$ref": "#/$defs/outputContract"
+        },
+        "claudeCode": {
+          "$ref": "#/$defs/claudeCode"
+        },
+        "codex": {
+          "$ref": "#/$defs/codex"
+        },
+        "qaHarness": {
+          "description": "Required for role qa (R1-073, XD-05-17). The CLI image of a QA agent (replicant/cli-claude-code) also ships /opt/replicant/bin/{replicant-qa,replicant-stubgen,replicant-redact,replicant-svc-wrap} and @replicant/qa-web (WS-05, XD-05-19). With REPLICANT_ROLE=qa, replicant-entrypoint runs `replicant-qa run --inputs /replicant/inputs --out /replicant/out/qa --plan /replicant/inputs/run-plan.json` instead of launching the CLI; the CLI is launched only for advisory QA agent tasks (smoke-flow generation, failure diagnosis) when agentTasks is true, through the same adapter and agentd routes.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "agentTasks"
+          ],
+          "properties": {
+            "version": {
+              "description": "replicant-qa version; must equal image label replicant.example.com/replicant-qa-version.",
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+            },
+            "agentTasks": {
+              "type": "boolean"
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "cli": {
+                "const": "codex"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "codex"
+            ],
+            "not": {
+              "required": [
+                "claudeCode"
+              ]
+            },
+            "properties": {
+              "gateway": {
+                "properties": {
+                  "protocol": {
+                    "enum": [
+                      "openai_responses"
+                    ]
+                  }
+                }
+              },
+              "cliImage": {
+                "properties": {
+                  "image": {
+                    "pattern": "/replicant/cli-codex@sha256:"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "cli": {
+                "enum": [
+                  "claude-code",
+                  "claude-agent-sdk"
+                ]
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "codex"
+              ]
+            },
+            "properties": {
+              "gateway": {
+                "properties": {
+                  "protocol": {
+                    "enum": [
+                      "anthropic_messages",
+                      "bedrock_invoke",
+                      "vertex_raw_predict"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "cli": {
+                "const": "claude-code"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "cliImage": {
+                "properties": {
+                  "image": {
+                    "pattern": "/replicant/cli-claude-code@sha256:"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "description": "Live steering is impossible with codex exec (no mid-run input).",
+          "if": {
+            "properties": {
+              "cli": {
+                "const": "codex"
+              },
+              "codex": {
+                "properties": {
+                  "mode": {
+                    "const": "exec"
+                  }
+                }
+              }
+            },
+            "required": [
+              "cli",
+              "codex"
+            ]
+          },
+          "then": {
+            "properties": {
+              "steering": {
+                "properties": {
+                  "live": {
+                    "const": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "description": "Reviewer and planner runs never produce a diff (read-only intent).",
+          "if": {
+            "properties": {
+              "roles": {
+                "items": {
+                  "enum": [
+                    "reviewer",
+                    "planner"
+                  ]
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "outputContract": {
+                "properties": {
+                  "outputs": {
+                    "properties": {
+                      "diff_bundle": {
+                        "const": "forbidden"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "description": "QA agents declare the harness.",
+          "if": {
+            "properties": {
+              "roles": {
+                "contains": {
+                  "const": "qa"
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "qaHarness"
+            ]
+          }
+        }
+      ]
+    },
+    "cliImage": {
+      "description": "D-10: the CLI is pinned by image digest. The image (built by replicant CI, WS-03 environment-definition.md section 7) contains the CLI binary under /opt/replicant/cli/<cli>/<version>/ and the replicant-entrypoint and replicant-agentd binaries under /opt/replicant/bin/, so the CLI adapter ships and is pinned together with the CLI. Image labels org.opencontainers.image.version and replicant.example.com/entrypoint-version must equal version and entrypointVersion; CI and the controller check them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "image",
+        "version",
+        "entrypointVersion"
+      ],
+      "properties": {
+        "image": {
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/image_by_digest"
+        },
+        "version": {
+          "description": "CLI version string as reported by the CLI (claude --version / codex --version). Copied into ReleaseBundle.spec.cli_images[].version.",
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.-]+)?$"
+        },
+        "entrypointVersion": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "primary"
+      ],
+      "properties": {
+        "primary": {
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/gateway_model_id"
+        },
+        "fallbacks": {
+          "description": "Tried in order on overload (Claude Code --fallback-model accepts a comma-separated list). Every entry must be allowed by the tenant's budgets.gatewayAccess.",
+          "type": "array",
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/gateway_model_id"
+          }
+        },
+        "small": {
+          "description": "Model for the CLI's background tasks (Claude Code ANTHROPIC_DEFAULT_HAIKU_MODEL). If absent, background calls use primary.",
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/gateway_model_id"
+        },
+        "subagent": {
+          "description": "Claude Code CLAUDE_CODE_SUBAGENT_MODEL. Absent: subagents use primary.",
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/gateway_model_id"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxOutputTokens": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 128000
+            },
+            "thinkingTokens": {
+              "description": "Claude Code MAX_THINKING_TOKENS.",
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 64000
+            },
+            "reasoningEffort": {
+              "description": "Codex model_reasoning_effort (model-dependent values, e.g. low, medium, high, xhigh). Claude Code: maps to --effort where supported by the pinned CLI version.",
+              "type": "string",
+              "pattern": "^[a-z]{2,16}$"
+            },
+            "reasoningSummary": {
+              "description": "Codex model_reasoning_summary.",
+              "type": "string",
+              "enum": [
+                "auto",
+                "concise",
+                "detailed",
+                "none"
+              ]
+            },
+            "verbosity": {
+              "description": "Codex model_verbosity.",
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "prompts": {
+      "description": "Langfuse prompt references (C-DEF: agent definitions may reference prompts and models only). The worker activity agents.build_run_plan fetches each pinned version (verifying the bundle digest), renders it, and stages the text in the run inputs manifest. The sandbox never calls Langfuse.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "task"
+      ],
+      "properties": {
+        "role": {
+          "description": "Role instructions, first section of the composed system-prompt append. mode replace uses --system-prompt-file (Claude Code) / model_instructions_file (Codex) for the composed file instead of append.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ref",
+            "mode"
+          ],
+          "properties": {
+            "ref": {
+              "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/prompt_selector"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "append",
+                "replace"
+              ]
+            }
+          }
+        },
+        "constraints": {
+          "description": "Replicant-wide non-negotiable constraints. Rendered by agents.build_run_plan into the run plan; context.stage_inputs stages them in system-append.md after the role prompt; the memory block is staged separately as memory-injection.json (place system_append_memory) and the entrypoint joins both on tmpfs at /run/replicant/prompt/system-append.md (XD-W2-04-01). Claude Code: --append-system-prompt-file /run/replicant/prompt/system-append.md. Codex: $CODEX_HOME/AGENTS.md links to the same joined file.",
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/prompt_selector"
+        },
+        "task": {
+          "description": "Template for the first user turn. Variables are filled from the task packet by the worker (Jinja2 sandboxed environment, StrictUndefined). Untrusted text is inserted only inside the delimited <untrusted_input> blocks the template declares (D-21).",
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/prompt_selector"
+        },
+        "finalize": {
+          "description": "Message injected (Claude stream-json input only) when the soft budget or deadline is reached, asking the agent to stop and write its handoff and structured result.",
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/prompt_selector"
+        }
+      }
+    },
+    "tools": {
+      "description": "CLI-agnostic tool capabilities. The entrypoint adapter renders them to Claude Code permission rules (permissions.allow/deny in managed settings, --tools, --disallowedTools) or to Codex sandbox and approval settings. Everything not allowed is denied: Claude Code runs in permission mode dontAsk, which auto-denies anything not pre-approved.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "read",
+        "edit",
+        "shell",
+        "web",
+        "subagents"
+      ],
+      "properties": {
+        "read": {
+          "type": "boolean",
+          "description": "Read inside /workspace and /replicant/inputs (context files are at /replicant/inputs/context/<path>)."
+        },
+        "edit": {
+          "type": "boolean",
+          "description": "Edit/Write/NotebookEdit inside /workspace/repo. Must be false for reviewer and planner roles."
+        },
+        "shell": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "description": "none: no shell tool. allowlist: only commands matching allow (Claude Code Bash(<pattern>) rules; Codex cannot express per-command allowlists, so codex agents must use any). any: shell allowed (the AgentRun is the security boundary, D-06/D-21); deny patterns still apply.",
+              "type": "string",
+              "enum": [
+                "none",
+                "allowlist",
+                "any"
+              ]
+            },
+            "allow": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/shell_pattern"
+              }
+            },
+            "deny": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/shell_pattern"
+              }
+            },
+            "defaultTimeoutSeconds": {
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 3600,
+              "default": 300
+            },
+            "maxTimeoutSeconds": {
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 7200,
+              "default": 1800
+            },
+            "maxOutputChars": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 150000,
+              "default": 30000
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "mode": {
+                    "const": "allowlist"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "allow"
+                ]
+              }
+            }
+          ]
+        },
+        "web": {
+          "description": "Web tools are off by default: sandbox egress is default-deny (D-21) and Claude Code WebSearch is an Anthropic server-side tool that a non-Anthropic gateway may not support.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "fetch",
+            "search"
+          ],
+          "properties": {
+            "fetch": {
+              "const": false
+            },
+            "search": {
+              "const": false
+            }
+          }
+        },
+        "subagents": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Claude Code Task/Agent tool. Subagent spend counts toward the run budget at the gateway."
+            }
+          }
+        },
+        "denyTools": {
+          "description": "Additional CLI tool names removed outright (Claude Code --disallowedTools bare names).",
+          "type": "array",
+          "maxItems": 50,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+          }
+        },
+        "editPaths": {
+          "description": "When edit is true, restrict Edit/Write to these absolute path globs (rendered as Claude Code allow rules Edit(//<glob>) and Write(//<glob>); anything else is denied by dontAsk). Example for qa-runner: /workspace/.qa/generated/**.",
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "maxLength": 256,
+            "pattern": "^/workspace/[A-Za-z0-9._*/-]+$"
+          }
+        }
+      }
+    },
+    "mcpServer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "service"
+      ],
+      "properties": {
+        "name": {
+          "description": "Server name as the CLI sees it (Claude Code tool names become mcp__<name>__<tool>).",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{1,30}$"
+        },
+        "service": {
+          "description": "Replicant MCP service. memory: memory-service MCP (WS-04, audience memory-mcp, scopes memory:read/memory:search). context: context-mcp (WS-04, audience context-mcp, scopes context:read). code_search: the Zoekt-backed tools of context-mcp (scope code_search:read), exposed as a separate server so it can be allowed independently.",
+          "type": "string",
+          "enum": [
+            "memory",
+            "context",
+            "code_search"
+          ]
+        },
+        "tools": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allow": {
+              "type": "array",
+              "maxItems": 50,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{0,63}$"
+              }
+            },
+            "deny": {
+              "type": "array",
+              "maxItems": 50,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{0,63}$"
+              }
+            }
+          }
+        },
+        "required": {
+          "description": "true: the run fails (exit 21, GatewayUnavailable) if the server does not report connected in the CLI init event. false: the run proceeds without it and the result records the degradation.",
+          "type": "boolean",
+          "default": false
+        },
+        "toolTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 600,
+          "default": 60
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxTurns",
+        "maxWallSeconds",
+        "maxCostUsd"
+      ],
+      "properties": {
+        "maxTurns": {
+          "description": "Cumulative turn budget for the whole run (R2-043): the entrypoint counts turns across every stream-json result, including turns started by steering or finalize messages, and stops the CLI at the budget. Claude Code --max-turns is set to the remaining budget at each message only as a backstop (it resets per user message). Codex: counted by agentd model calls (maxModelCalls).",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "maxWallSeconds": {
+          "description": "Upper bound for RunSpec.timeouts.active_deadline_seconds (the workflow uses min(this, policy)).",
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 28800
+        },
+        "maxCostUsd": {
+          "description": "Per-run ceiling. Effective run budget = min(this, budgets policy role cap, remaining job budget); enforced at the gateway (run token budget_usd). Claude Code also receives --max-budget-usd = effective budget as a client-side early stop.",
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 5000
+        },
+        "maxModelCalls": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "maxInputTokens": {
+          "description": "Cumulative input tokens (including cache reads) after which agentd stops forwarding (exit 20).",
+          "type": "integer",
+          "minimum": 1000
+        },
+        "maxOutputTokens": {
+          "type": "integer",
+          "minimum": 1000
+        },
+        "startupSeconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 1800,
+          "default": 300
+        },
+        "finalizeSeconds": {
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 1800,
+          "default": 300
+        },
+        "cliGraceSeconds": {
+          "description": "Time between SIGINT to the CLI and SIGKILL during cancel or deadline finalization.",
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 120,
+          "default": 30
+        }
+      }
+    },
+    "gateway": {
+      "description": "How the CLI reaches the AI gateway (D-11). The CLI always talks to replicant-agentd on loopback (http://127.0.0.1:7800/<route>/); agentd injects the run token and attribution headers and forwards to the Replicant gateway endpoint for this environment. The definition therefore names protocol and behavior, never a URL (C-DEF section 2).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol"
+      ],
+      "properties": {
+        "protocol": {
+          "description": "anthropic_messages: Anthropic Messages API (Claude Code with ANTHROPIC_BASE_URL). openai_responses: OpenAI Responses API (Codex model provider wire_api=responses). bedrock_invoke: Bedrock InvokeModel shape (Claude Code CLAUDE_CODE_USE_BEDROCK=1 + ANTHROPIC_BEDROCK_BASE_URL + CLAUDE_CODE_SKIP_BEDROCK_AUTH=1) for gateways that only front Bedrock. vertex_raw_predict: Vertex shape (CLAUDE_CODE_USE_VERTEX=1 + ANTHROPIC_VERTEX_BASE_URL=http://127.0.0.1:7800/vertex + CLAUDE_CODE_SKIP_VERTEX_AUTH=1); agentd routes /vertex/* to the shim's /vertex/v1/projects/{project}/locations/{location}/publishers/anthropic/models/{model}:{rawPredict|streamRawPredict} (gateway GW-1).",
+          "type": "string",
+          "enum": [
+            "anthropic_messages",
+            "openai_responses",
+            "bedrock_invoke",
+            "vertex_raw_predict"
+          ]
+        },
+        "retry": {
+          "description": "agentd retry policy for 429/529/503 from the gateway, applied before the CLI's own retries see an error.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxAttempts": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 20,
+              "default": 6
+            },
+            "maxCumulativeWaitSeconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 3600,
+              "default": 900
+            },
+            "baseDelayMs": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 60000,
+              "default": 1000
+            },
+            "maxDelayMs": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 300000,
+              "default": 60000
+            }
+          }
+        },
+        "requestTimeoutSeconds": {
+          "description": "Time to first response byte (Claude Code API_TIMEOUT_MS; Codex stream_idle_timeout_ms).",
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 1800,
+          "default": 600
+        },
+        "softBudgetFraction": {
+          "description": "Fraction of the run budget at which agentd raises budget_soft_limit and the entrypoint injects the finalize prompt (live-steerable CLIs only).",
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 0.99,
+          "default": 0.9
+        },
+        "unavailableAfterSeconds": {
+          "description": "Continuous gateway 5xx/connect failure after which the entrypoint stops the CLI and exits 21 (GatewayUnavailable, retryable).",
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 3600,
+          "default": 600
+        }
+      }
+    },
+    "outputContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "roleResultSchema",
+        "structuredResult",
+        "outputs"
+      ],
+      "properties": {
+        "roleResultSchema": {
+          "description": "Schema id of run_result.role_result (run-result.schema.json). WS-03 owns implementer (also used by repair), planner, reviewer, takeover; WS-05 owns qa.",
+          "type": "string",
+          "enum": [
+            "replicant.role-result.implementer/v1",
+            "replicant.role-result.planner/v1",
+            "replicant.role-result.reviewer/v1",
+            "replicant.role-result.takeover/v1",
+            "replicant.role-result.qa/v1"
+          ]
+        },
+        "structuredResult": {
+          "description": "cli_schema: the CLI enforces the agent-produced part of role_result (Claude Code --json-schema -> result.structured_output; Codex --output-schema -> final message). file: the agent writes /replicant/out/agent-result.json and the entrypoint validates it. Either way the entrypoint validates against the role schema before exit 0.",
+          "type": "string",
+          "enum": [
+            "cli_schema",
+            "file"
+          ]
+        },
+        "outputs": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "diff_bundle": {
+              "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/artifact_requirement"
+            },
+            "handoff": {
+              "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/artifact_requirement"
+            },
+            "plan": {
+              "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/artifact_requirement"
+            },
+            "review_report": {
+              "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/artifact_requirement"
+            },
+            "session_state": {
+              "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/artifact_requirement"
+            },
+            "workspace_archive": {
+              "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/artifact_requirement"
+            },
+            "memory_candidates": {
+              "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/artifact_requirement"
+            }
+          }
+        },
+        "diffPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "forbiddenPaths": {
+              "description": "Git pathspec globs that may never appear in a diff. Always includes the D-10 agent-config set (CLAUDE.md, CLAUDE.local.md, AGENTS.md, AGENTS.override.md, .claude/**, .codex/**, .mcp.json, .cursor/**) even if omitted here.",
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "string",
+                "maxLength": 256
+              }
+            },
+            "onForbiddenPath": {
+              "type": "string",
+              "enum": [
+                "strip_and_report",
+                "fail"
+              ],
+              "default": "strip_and_report"
+            },
+            "maxFilesChanged": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000,
+              "default": 500
+            },
+            "maxPatchBytes": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 268435456,
+              "default": 67108864
+            },
+            "allowBinary": {
+              "type": "boolean",
+              "default": false
+            },
+            "allowSubmoduleChanges": {
+              "type": "boolean",
+              "default": false
+            },
+            "allowModeChanges": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
+        "workspaceIntegrity": {
+          "description": "For roles with read-only intent. detect: hash tracked files before the CLI starts and after it exits; any change is reported in role_result.integrity and the verifier discards the verdict. enforce: additionally fail the run (exit 12, AgentResultInvalid) on a change.",
+          "type": "string",
+          "enum": [
+            "off",
+            "detect",
+            "enforce"
+          ],
+          "default": "off"
+        }
+      }
+    },
+    "claudeCode": {
+      "description": "Claude Code specific knobs. Everything security-relevant the entrypoint writes to managed settings (/etc/claude-code/managed-settings.json, read-only mount); these fields may only tighten it.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repoInstructionFiles": {
+          "description": "Whether the target repository's own CLAUDE.md / AGENTS.md / .claude/rules are loaded. ignore (default): pluginConfigs instructionFiles=managed-only plus --setting-sources user plus claudeMdExcludes for /workspace/**; the context assembler may quote them as untrusted context instead (codebase_bindings). load: allowed only for tenant-scoped definitions on repos whose binding sets trustRepoInstructions=true.",
+          "type": "string",
+          "enum": [
+            "ignore",
+            "load"
+          ],
+          "default": "ignore"
+        },
+        "includePartialMessages": {
+          "type": "boolean",
+          "default": false
+        },
+        "propagateTraceparent": {
+          "description": "CLAUDE_CODE_PROPAGATE_TRACEPARENT=1 so model requests carry W3C traceparent through the loopback proxy.",
+          "type": "boolean",
+          "default": true
+        },
+        "telemetry": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "metrics": {
+              "type": "boolean",
+              "default": true
+            },
+            "logs": {
+              "type": "boolean",
+              "default": true
+            },
+            "traces": {
+              "description": "Requires CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1 (beta).",
+              "type": "boolean",
+              "default": false
+            },
+            "logToolDetails": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        },
+        "extraSettings": {
+          "description": "Additional keys merged into the user-scope ~/.claude/settings.json. Keys that affect permissions, hooks, MCP, env, apiKeyHelper, model, or instruction loading are rejected by the entrypoint adapter (they belong to fields above or to managed settings).",
+          "type": "object",
+          "maxProperties": 30
+        }
+      }
+    },
+    "codex": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "sandboxMode",
+        "approvalPolicy"
+      ],
+      "properties": {
+        "mode": {
+          "description": "exec: codex exec --json (no live steering). app_server: codex app-server JSON-RPC over stdio (turn/steer for live steering). OpenAI documents app-server as experimental and not supported for production workloads, so the bundle lint rejects app_server in any bundle that can be promoted (WS-03 ADR-003); it is allowed only for the replicant-eval tenant.",
+          "type": "string",
+          "enum": [
+            "exec",
+            "app_server"
+          ]
+        },
+        "sandboxMode": {
+          "description": "Codex's own sandbox inside the AgentRun. danger-full-access is the default because the AgentRun is the sandbox and Codex's Linux sandbox needs kernel features that are not guaranteed under gVisor (WS-03 cli-invocation.md section 3.4). read-only is valid for reviewers that do not run tests.",
+          "type": "string",
+          "enum": [
+            "read-only",
+            "workspace-write",
+            "danger-full-access"
+          ]
+        },
+        "approvalPolicy": {
+          "type": "string",
+          "enum": [
+            "never"
+          ]
+        },
+        "repoInstructionFiles": {
+          "description": "ignore (default): project_doc_max_bytes=0 so the repo's AGENTS.md is not read.",
+          "type": "string",
+          "enum": [
+            "ignore",
+            "load"
+          ],
+          "default": "ignore"
+        },
+        "extraConfig": {
+          "description": "Additional config.toml keys (as JSON). model_providers, mcp_servers, otel, shell_environment_policy, sandbox_mode, approval_policy, and project settings are rejected by the adapter.",
+          "type": "object",
+          "maxProperties": 30
+        }
+      }
+    }
+  }
+}

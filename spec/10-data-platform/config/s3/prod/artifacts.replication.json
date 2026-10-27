@@ -1,0 +1,38 @@
+{
+  "Role": "arn:aws:iam::111111111111:role/replicant-prod-s3-replication",
+  "Rules": [
+    {
+      "ID": "dr-all",
+      "Priority": 1,
+      "Status": "Enabled",
+      "Filter": {},
+      "DeleteMarkerReplication": {
+        "Status": "Disabled"
+      },
+      "SourceSelectionCriteria": {
+        "SseKmsEncryptedObjects": {
+          "Status": "Enabled"
+        }
+      },
+      "Destination": {
+        "Bucket": "arn:aws:s3:::acme-replicant-prod-artifacts-us-west-2",
+        "StorageClass": "STANDARD_IA",
+        "EncryptionConfiguration": {
+          "ReplicaKmsKeyID": "arn:aws:kms:us-west-2:111111111111:alias/replicant/prod/dr/artifacts"
+        },
+        "ReplicationTime": {
+          "Status": "Enabled",
+          "Time": {
+            "Minutes": 15
+          }
+        },
+        "Metrics": {
+          "Status": "Enabled",
+          "EventThreshold": {
+            "Minutes": 15
+          }
+        }
+      }
+    }
+  ]
+}

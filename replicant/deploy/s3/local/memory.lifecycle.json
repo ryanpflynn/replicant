@@ -1,0 +1,60 @@
+{
+  "Rules": [
+    {
+      "ID": "expire-r1y",
+      "Status": "Enabled",
+      "Filter": {
+        "Tag": {
+          "Key": "replicant-retention",
+          "Value": "r1y"
+        }
+      },
+      "Expiration": {
+        "Days": 14
+      },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 1
+      }
+    },
+    {
+      "ID": "expire-r2y",
+      "Status": "Enabled",
+      "Filter": {
+        "Tag": {
+          "Key": "replicant-retention",
+          "Value": "r2y"
+        }
+      },
+      "Expiration": {
+        "Days": 30
+      },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 1
+      }
+    },
+    {
+      "ID": "housekeeping",
+      "Status": "Enabled",
+      "Filter": {},
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 2
+      },
+      "Expiration": {
+        "ExpiredObjectDeleteMarker": true
+      }
+    },
+    {
+      "ID": "backstop-untagged",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": ""
+      },
+      "Expiration": {
+        "Days": 30
+      },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 1
+      }
+    }
+  ]
+}

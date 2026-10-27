@@ -1,0 +1,67 @@
+# WS-10 · Replicant database maintenance (C-PG rule 3: retention by partition drop, executed only
+# by the migrate image in maintenance mode; postgres.md §7). Same image and IAM identity as the
+# migrate Job. It takes the migrate advisory lock with a short timeout and SKIPS (exit 0, outcome
+# 'skipped') if a migration is running, so DDL from both never interleaves.
+# Validated: YAML parse + kubeconform (Kubernetes 1.36 schemas), 2026-10-24.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: replicant-db-maintenance
+  namespace: replicant-control
+  labels:
+    app.kubernetes.io/name: replicant-db-maintenance
+    app.kubernetes.io/part-of: replicant
+spec:
+  schedule: "17 * * * *"          # hourly; each task decides whether it is due
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 900
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 3000
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: replicant-db-maintenance
+        spec:
+          restartPolicy: Never
+          serviceAccountName: replicant-db-migrate
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: maintenance
+              image: 111111111111.dkr.ecr.us-east-1.amazonaws.com/replicant/replicant-db-migrate@sha256:4f1c2a9e0b7d6c5e3a2f1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e
+              args:
+                - maintenance
+                - run
+                - --tasks=partition_create,partition_detach,partition_drop,matview_refresh,bloat_scan,reindex_concurrently,grants_verify
+                - --lock-timeout=30
+                - --max-reindex-per-run=1
+              env:
+                - name: REPLICANT_ENV
+                  value: prod
+                - name: REPLICANT_DB_HOST
+                  value: replicant-prod.cluster-c9xk2mzq4lab.us-east-1.rds.amazonaws.com
+                - name: REPLICANT_DB_USER
+                  value: replicant_migrator
+                - name: REPLICANT_DB_IAM_AUTH
+                  value: "true"
+                - name: AWS_REGION
+                  value: us-east-1
+                - name: REPLICANT_AUDIT_EXPORT_BUCKET   # partition_drop of audit.events requires a verified export
+                  value: acme-replicant-prod-audit
+              resources:
+                requests: {cpu: 200m, memory: 256Mi}
+                limits: {cpu: "1", memory: 1Gi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]

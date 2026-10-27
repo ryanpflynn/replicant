@@ -1,0 +1,41 @@
+{
+  "Rules": [
+    {
+      "ID": "expire-r1y",
+      "Status": "Enabled",
+      "Filter": {
+        "Tag": {
+          "Key": "replicant-retention",
+          "Value": "r1y"
+        }
+      },
+      "Expiration": {
+        "Days": 14
+      },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 1
+      }
+    },
+    {
+      "ID": "housekeeping",
+      "Status": "Enabled",
+      "Filter": {},
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 2
+      },
+      "Expiration": {
+        "ExpiredObjectDeleteMarker": true
+      }
+    },
+    {
+      "ID": "noncurrent-cleanup",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": ""
+      },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 30
+      }
+    }
+  ]
+}

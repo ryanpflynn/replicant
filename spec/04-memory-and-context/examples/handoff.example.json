@@ -1,0 +1,167 @@
+{
+  "schema": "replicant.handoff/v1",
+  "producer": {
+    "job_id": "job_01m5p7x7r0bt69j0h0fbxepw90",
+    "run_id": "run_gj3h3ep3phjfs9e23v768zrca5",
+    "role": "implementer",
+    "node_key": "implementer",
+    "cycle": 0,
+    "ordinal": 1,
+    "release_bundle_id": "rb_ds5p3wmcj4dag2e9a8ncp4py6k",
+    "cli": "claude-code",
+    "cli_version": "2.1.240",
+    "model": "anthropic/claude-sonnet-5-5",
+    "memory_snapshot_id": "msnap_my7g26p6dy194fr4kjdehzb5hr",
+    "produced_at": "2026-10-24T08:24:05Z",
+    "run_outcome": "completed"
+  },
+  "goal": {
+    "summary": "Fix proration drift for mid-cycle plan upgrades (issue #1423): invoices are off by up to 1 cent.",
+    "acceptance_criteria": [
+      "Upgrade on day 17 of a 31-day cycle produces the expected amount for USD and JPY",
+      "No float arithmetic remains in internal/billing"
+    ],
+    "task_packet_sha256": "6ae6452f0b5dabea9aa674c8b5be6ea19cab0f47121289a51f14eccbecc5ea7d"
+  },
+  "mechanical": {
+    "base_sha": "8c1e4f2a9b7d3c6e5f0a1b2c3d4e5f6a7b8c9d0e",
+    "diff_bundle_key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/diff_bundle/changes.tar.zst",
+    "diff_stats": {
+      "files_changed": 3,
+      "insertions": 41,
+      "deletions": 12
+    },
+    "files_touched": [
+      {
+        "path": "internal/billing/proration.go",
+        "change": "modified",
+        "insertions": 22,
+        "deletions": 9
+      },
+      {
+        "path": "internal/billing/proration_test.go",
+        "change": "modified",
+        "insertions": 17,
+        "deletions": 3
+      },
+      {
+        "path": "go.sum",
+        "change": "modified",
+        "insertions": 2,
+        "deletions": 0
+      }
+    ],
+    "commands": [
+      {
+        "command": "go test ./internal/billing/...",
+        "exit_code": 0,
+        "count": 4,
+        "last_duration_ms": 8120,
+        "classified_as": "test"
+      },
+      {
+        "command": "make test-integration",
+        "exit_code": 0,
+        "count": 1,
+        "last_duration_ms": 94310,
+        "classified_as": "test"
+      },
+      {
+        "command": "golangci-lint run ./internal/billing/...",
+        "exit_code": 0,
+        "count": 2,
+        "last_duration_ms": 21004,
+        "classified_as": "lint"
+      }
+    ],
+    "tests": [
+      {
+        "command": "make test-integration",
+        "status": "passed"
+      }
+    ],
+    "memory_injected": [
+      "mem_01m3zd5w8kq2v7r0c4n6t1x9ha@2",
+      "mem_01m42qyvr0dzhe1xg73b1bq38b@3",
+      "mem_59hx7def5q5szm209krnq57axk@1",
+      "mem_1rxmr93nkrxfdnr6b2rke340rn@4",
+      "mem_rmj9s4nrymbjyr69ybpcdg52gg@1",
+      "mem_prgd9c09cy55pwjwhymfs0bs4m@2"
+    ],
+    "steering_consumed": [],
+    "context": {
+      "compactions": 0,
+      "peak_context_tokens": 88412,
+      "turns": 37
+    },
+    "session": {
+      "cli_session_id": "3f6b2a10-7c4e-4d8a-9b1f-2e5c7a9d0b13",
+      "state_key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/cli_session_state/claude-session.tar.zst",
+      "state_sha256": "3a5c7e9d1f2b4a6c8e0d2f4b6a9c1e3d5f7b9a2c4e6d8f0b1a3c5e7d9f2b4a6c",
+      "cli_image_digest": "sha256:5d7f9b1a3c4e6d8f0b2a4c6e8d1f2b4a6c8e0d2f3b5a7c9e1d3f4b6a8c0e2d4f",
+      "workspace_path": "/workspace/ledger-api",
+      "size_bytes": 4718592
+    }
+  },
+  "narrative_status": "present",
+  "narrative": {
+    "plan_status": [
+      {
+        "step_id": "s1",
+        "step": "Reproduce drift with a table test for USD and JPY",
+        "status": "done"
+      },
+      {
+        "step_id": "s2",
+        "step": "Replace float64 proration with decimal and half-even rounding at the minor unit",
+        "status": "done"
+      },
+      {
+        "step_id": "s3",
+        "step": "Inject clock.Clock into ProrateUpgrade",
+        "status": "done"
+      }
+    ],
+    "decisions": [
+      {
+        "decision": "Round once at the end of ProrateUpgrade, not per line item",
+        "rationale": "Per-item rounding reintroduces the 1-cent drift across 3+ line items",
+        "alternatives_rejected": [
+          "Banker's rounding per line item"
+        ],
+        "evidence_paths": [
+          "internal/billing/proration_test.go"
+        ]
+      }
+    ],
+    "constraints_discovered": [
+      "make test-integration needs the ledger Postgres sidecar (QA environment provides it)"
+    ],
+    "open_issues": [],
+    "commands_that_worked": [
+      {
+        "command": "make test-integration",
+        "purpose": "Runs the ledger invariants suite"
+      }
+    ],
+    "failures_to_avoid": [
+      {
+        "approach": "Using math.Round on float64 cents",
+        "why_failed": "1-cent error for JPY at 31-day cycles",
+        "evidence": "TestProrateUpgrade/JPY_day17 failed before the change"
+      }
+    ],
+    "next_steps": [],
+    "memory_feedback": [
+      {
+        "ref": "mem_01m42qyvr0dzhe1xg73b1bq38b@3",
+        "verdict": "applied"
+      },
+      {
+        "ref": "mem_59hx7def5q5szm209krnq57axk@1",
+        "verdict": "applied"
+      }
+    ],
+    "summary_for_reviewer": "Proration now uses decimal.Decimal end to end with half-even rounding at the currency minor unit. Added table tests for USD/JPY on day 17 of a 31-day cycle."
+  }
+}

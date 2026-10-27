@@ -1,0 +1,313 @@
+// otlp-gateway-core.alloy - Grafana Alloy v1.21.x Deployment "alloy-otlp" (3 replicas, HPA 3-8 on CPU) in the
+// CORE cluster, namespace observability. Owner WS-08.
+//
+// Receives OTLP from every replicant service in core (Python replicant-telemetry SDK, Go services), from the AI gateway
+// (if it exports OTel, ADR-006), and from alloy-sandbox-otlp in the exec account (mTLS, port 4317, through the PrivateLink endpoint service behind the internal
+// NLB otlp.obs.<env>.replicant.internal). Routes:
+//   traces  -> Tempo (all job and sampled non-job spans, content attributes removed)
+//           -> Langfuse (only LLM/agent observations, with Langfuse trace-level attributes on every span)
+//   metrics -> Mimir (Prometheus remote write, tenant "replicant")
+// Logs are not received here: services log to stdout and node-logs.alloy ships them.
+//
+// Required environment: REPLICANT_ENV, TEMPO_OTLP_ENDPOINT (host:port), LANGFUSE_OTLP_TRACES_URL,
+// LANGFUSE_EXCLUDED_TENANTS_REGEX (optional; restricted tenants, from ConfigMap observability-tenant-classes),
+// LANGFUSE_BASIC_AUTH (base64 of pk-lf-...:sk-lf-..., from the Secret langfuse-otlp-ingest), MIMIR_PUSH_URL,
+// OTLP_TLS_DIR.
+
+logging {
+  level  = "info"
+  format = "json"
+}
+
+otelcol.receiver.otlp "default" {
+  grpc {
+    endpoint = "0.0.0.0:4317"
+
+    tls {
+      ca_file        = sys.env("OTLP_TLS_DIR") + "/ca.crt"
+      cert_file      = sys.env("OTLP_TLS_DIR") + "/tls.crt"
+      key_file       = sys.env("OTLP_TLS_DIR") + "/tls.key"
+      client_ca_file = sys.env("OTLP_TLS_DIR") + "/ca.crt"
+    }
+  }
+
+  http {
+    endpoint              = "0.0.0.0:4318"
+    max_request_body_size = "16MiB"
+  }
+
+  output {
+    traces  = [otelcol.processor.memory_limiter.default.input]
+    metrics = [otelcol.processor.memory_limiter.default.input]
+  }
+}
+
+otelcol.processor.memory_limiter "default" {
+  check_interval         = "1s"
+  limit_percentage       = 80
+  spike_limit_percentage = 20
+
+  output {
+    traces  = [otelcol.processor.transform.hygiene.input]
+    metrics = [otelcol.processor.transform.metrics.input]
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Traces
+// ---------------------------------------------------------------------------------------------------------------
+otelcol.processor.transform "hygiene" {
+  error_mode = "ignore"
+
+  trace_statements {
+    context    = "resource"
+    statements = [
+      `set(attributes["replicant.env"], "` + sys.env("REPLICANT_ENV") + `") where attributes["replicant.env"] == nil`,
+      `set(attributes["deployment.environment.name"], "replicant-` + sys.env("REPLICANT_ENV") + `")`,
+    ]
+  }
+
+  trace_statements {
+    context    = "span"
+    statements = [
+      `set(attributes["deployment.environment.name"], resource.attributes["deployment.environment.name"])`,
+      // URLs keep their path and drop query strings that can carry presigned signatures or tokens.
+      `replace_pattern(attributes["url.full"], "\\?.*$", "?[query-removed]")`,
+      `replace_pattern(attributes["http.url"], "\\?.*$", "?[query-removed]")`,
+      `replace_pattern(attributes["db.query.text"], "(?i)(password\\s*=\\s*)'[^']*'", "$${1}'[REDACTED]'")`,
+    ]
+  }
+
+  output {
+    traces = [
+      otelcol.processor.filter.tempo.input,
+      otelcol.processor.filter.langfuse_select.input,
+    ]
+  }
+}
+
+// Tempo branch: drop spans that carry no timing value, then strip content attributes (Tempo has no per-span
+// delete; purge relies on content never reaching it, plus tempo-cli redact for incidents, session-capture.md s.8).
+otelcol.processor.filter "tempo" {
+  error_mode = "ignore"
+
+  traces {
+    span = [
+      `name == "claude_code.tool.blocked_on_user"`,
+    ]
+    spanevent = [
+      `name == "tool.output"`,
+    ]
+  }
+
+  output {
+    traces = [otelcol.processor.transform.tempo_strip.input]
+  }
+}
+
+otelcol.processor.transform "tempo_strip" {
+  error_mode = "ignore"
+
+  trace_statements {
+    context    = "span"
+    statements = [
+      `delete_matching_keys(attributes, "^(langfuse\\.observation\\.(input|output)|gen_ai\\.(prompt|completion|input\\.messages|output\\.messages|system_instructions).*|input\\.value|output\\.value|gen_ai\\.tool\\.call\\.(arguments|result))$")`,
+      `delete_matching_keys(attributes, "^langfuse\\..*")`,
+    ]
+  }
+
+  output {
+    traces = [otelcol.processor.batch.tempo.input]
+  }
+}
+
+otelcol.processor.batch "tempo" {
+  timeout             = "2s"
+  send_batch_size     = 4096
+  send_batch_max_size = 8192
+
+  output {
+    traces = [otelcol.exporter.otlp.tempo.input]
+  }
+}
+
+otelcol.exporter.otlp "tempo" {
+  client {
+    endpoint = sys.env("TEMPO_OTLP_ENDPOINT")
+    headers  = {
+      "X-Scope-OrgID" = "replicant",
+    }
+
+    tls {
+      insecure = true
+    }
+  }
+
+  sending_queue {
+    enabled    = true
+    queue_size = 50000
+  }
+}
+
+// Langfuse branch: keep only agent/LLM observations. Everything else (HTTP, DB, Temporal internals) stays in Tempo.
+otelcol.processor.filter "langfuse_select" {
+  error_mode = "ignore"
+
+  traces {
+    span = [
+      `not (IsMatch(instrumentation_scope.name, "^replicant\\.(agent|gateway|llm)$") or attributes["langfuse.observation.type"] != nil or name == "claude_code.llm_request" or name == "gateway.request")`,
+      `IsMatch(name, "^claude_code\\.") and name != "claude_code.llm_request"`,
+      `name == "gateway.upstream" or name == "agentd.proxy"`,
+      `attributes["replicant.job_id"] == nil`,
+      // Tenants classified `restricted` (WS-09 tenancy classes) send nothing to Langfuse (R2-009, ADR-08-003).
+      // The regex is rendered from tenancy settings into ConfigMap observability-tenant-classes (XD-FIX-R2-009);
+      // "^$" (the default) never matches a tenant ID.
+      `IsMatch(attributes["replicant.tenant_id"], "` + coalesce(sys.env("LANGFUSE_EXCLUDED_TENANTS_REGEX"), "^$") + `")`,
+    ]
+  }
+
+  output {
+    traces = [otelcol.processor.transform.langfuse_map.input]
+  }
+}
+
+otelcol.processor.transform "langfuse_map" {
+  error_mode = "ignore"
+
+  trace_statements {
+    context    = "span"
+    statements = [
+      // Trace-level attributes on EVERY span (C-IDS section 10; Langfuse filters need them on each span).
+      `set(attributes["langfuse.session.id"], attributes["replicant.job_id"])`,
+      `set(attributes["langfuse.user.id"], attributes["replicant.requester_id"]) where attributes["replicant.requester_id"] != nil`,
+      `set(attributes["langfuse.release"], Substring(attributes["replicant.release_bundle_id"], 0, 12)) where attributes["replicant.release_bundle_id"] != nil`,
+      `set(attributes["langfuse.trace.name"], Concat(["replicant-job", attributes["replicant.workflow_type"]], ":")) where attributes["replicant.workflow_type"] != nil`,
+      `set(attributes["langfuse.trace.tags"], [Concat(["tenant", attributes["replicant.tenant_id"]], ":"), Concat(["workflow", attributes["replicant.workflow_type"]], ":"), Concat(["bundle", Substring(attributes["replicant.release_bundle_id"], 0, 12)], ":")]) where attributes["replicant.tenant_id"] != nil and attributes["replicant.workflow_type"] != nil and attributes["replicant.release_bundle_id"] != nil`,
+      `set(attributes["langfuse.trace.metadata.replicant.job_id"], attributes["replicant.job_id"])`,
+      `set(attributes["langfuse.trace.metadata.replicant.tenant_id"], attributes["replicant.tenant_id"]) where attributes["replicant.tenant_id"] != nil`,
+      `set(attributes["langfuse.trace.metadata.replicant.workflow_id"], attributes["replicant.workflow_id"]) where attributes["replicant.workflow_id"] != nil`,
+      `set(attributes["langfuse.trace.metadata.replicant.release_bundle_id"], attributes["replicant.release_bundle_id"]) where attributes["replicant.release_bundle_id"] != nil`,
+      `set(attributes["langfuse.trace.metadata.replicant.memory_snapshot_id"], attributes["replicant.memory_snapshot_id"]) where attributes["replicant.memory_snapshot_id"] != nil`,
+      // Observation-level metadata (filterable top-level keys).
+      `set(attributes["langfuse.observation.metadata.replicant.run_id"], attributes["replicant.run_id"]) where attributes["replicant.run_id"] != nil`,
+      `set(attributes["langfuse.observation.metadata.replicant.node_key"], attributes["replicant.node_key"]) where attributes["replicant.node_key"] != nil`,
+      `set(attributes["langfuse.observation.metadata.replicant.cycle"], attributes["replicant.cycle"]) where attributes["replicant.cycle"] != nil`,
+      `set(attributes["langfuse.observation.metadata.replicant.role"], attributes["replicant.role"]) where attributes["replicant.role"] != nil`,
+      `set(attributes["langfuse.observation.metadata.replicant.memory_entry_ids"], attributes["replicant.memory_entry_ids"]) where attributes["replicant.memory_entry_ids"] != nil`,
+      // Generations (ADR-006): the replicant-gateway-shim's gateway.request span (WS-03 gateway.md s.7) is the single
+      // source of generation observations: authoritative usage and cost, identical for Claude Code, Codex and
+      // in-worker LLM calls. Claude Code's own claude_code.llm_request spans stay plain spans (timing only) so
+      // nothing is counted twice.
+      `set(attributes["langfuse.observation.type"], "generation") where name == "gateway.request"`,
+      `set(attributes["langfuse.observation.model.name"], attributes["gen_ai.request.model"]) where name == "gateway.request" and attributes["gen_ai.request.model"] != nil`,
+      `set(attributes["langfuse.observation.cost_details"], Format("{\"total\":%.6f}", [Double(attributes["replicant.cost_micros"]) / 1000000.0])) where name == "gateway.request" and attributes["replicant.cost_micros"] != nil`,
+      `set(attributes["langfuse.observation.type"], "span") where name == "claude_code.llm_request"`,
+    ]
+  }
+
+  output {
+    traces = [otelcol.processor.batch.langfuse.input]
+  }
+}
+
+otelcol.processor.batch "langfuse" {
+  timeout             = "5s"
+  send_batch_size     = 512
+  send_batch_max_size = 1024
+
+  output {
+    traces = [otelcol.exporter.otlphttp.langfuse.input]
+  }
+}
+
+otelcol.exporter.otlphttp "langfuse" {
+  traces_endpoint = sys.env("LANGFUSE_OTLP_TRACES_URL")
+
+  client {
+    endpoint    = sys.env("LANGFUSE_OTLP_TRACES_URL")
+    compression = "gzip"
+    headers     = {
+      "Authorization"                = "Basic " + sys.env("LANGFUSE_BASIC_AUTH"),
+      "x-langfuse-ingestion-version" = "4",
+    }
+  }
+
+  sending_queue {
+    enabled    = true
+    queue_size = 20000
+  }
+
+  retry_on_failure {
+    enabled          = true
+    max_elapsed_time = "30m"
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Metrics
+// ---------------------------------------------------------------------------------------------------------------
+otelcol.processor.transform "metrics" {
+  error_mode = "ignore"
+
+  metric_statements {
+    context    = "metric"
+    statements = [
+      `set(name, "replicant_http_server_request_duration") where name == "http.server.request.duration"`,
+      `set(name, "replicant_http_client_request_duration") where name == "http.client.request.duration"`,
+      `set(name, "replicant_cli_cost_usd") where name == "claude_code.cost.usage"`,
+      `set(unit, "") where name == "replicant_cli_cost_usd"`,
+      `set(name, "replicant_cli_tokens") where name == "claude_code.token.usage"`,
+      `set(unit, "") where name == "replicant_cli_tokens"`,
+    ]
+  }
+
+  metric_statements {
+    context    = "datapoint"
+    statements = [
+      // C-IDS section 11: identifiers never become labels (they may be exemplars). Before deleting, mark the series
+      // with forbidden_label=<key> (CCR-08-07) so alert ReplicantForbiddenMetricLabel can find the emitter.
+      `set(attributes["forbidden_label"], "job_id") where attributes["replicant.job_id"] != nil or attributes["job_id"] != nil`,
+      `set(attributes["forbidden_label"], "run_id") where attributes["replicant.run_id"] != nil or attributes["run_id"] != nil`,
+      `set(attributes["forbidden_label"], "principal_id") where attributes["replicant.principal_id"] != nil or attributes["principal_id"] != nil or attributes["replicant.requester_id"] != nil`,
+      `delete_matching_keys(attributes, "^(replicant\\.)?(job_id|run_id|workflow_id|workflow_run_id|gate_id|decision_id|principal_id|requester_id|agentrun|session\\.id|user\\..*)$")`,
+      `set(attributes["service"], resource.attributes["service.name"]) where attributes["service"] == nil and resource.attributes["service.name"] != nil`,
+      `set(attributes["route"], attributes["http.route"]) where attributes["http.route"] != nil`,
+      `set(attributes["method"], attributes["http.request.method"]) where attributes["http.request.method"] != nil`,
+      `set(attributes["status_code"], attributes["http.response.status_code"]) where attributes["http.response.status_code"] != nil`,
+      `delete_matching_keys(attributes, "^(http\\..*|url\\..*|server\\..*|network\\..*|user_agent\\..*|client\\..*)$")`,
+      `set(attributes["cli"], "claude-code") where metric.name == "replicant_cli_cost_usd" or metric.name == "replicant_cli_tokens"`,
+    ]
+  }
+
+  output {
+    metrics = [otelcol.exporter.prometheus.mimir.input]
+  }
+}
+
+otelcol.exporter.prometheus "mimir" {
+  add_metric_suffixes              = true
+  include_target_info              = false
+  include_scope_labels             = false
+  resource_to_telemetry_conversion = false
+  forward_to                       = [prometheus.remote_write.mimir.receiver]
+}
+
+prometheus.remote_write "mimir" {
+  endpoint {
+    url            = sys.env("MIMIR_PUSH_URL")
+    send_exemplars = true
+    headers        = {
+      "X-Scope-OrgID" = "replicant",
+    }
+
+    queue_config {
+      capacity             = 20000
+      max_samples_per_send = 4000
+    }
+  }
+
+  external_labels = {
+    env     = sys.env("REPLICANT_ENV"),
+    cluster = "core",
+  }
+}

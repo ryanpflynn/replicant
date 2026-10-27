@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jobs · replicant</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="app.css">
+<style>
+  .jl td.title { max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+  .jl td.phase { max-width: 210px; overflow: hidden; text-overflow: ellipsis; }
+  .jl td.req { max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+  .jl .second { display: none; }
+  @media (max-width: 1200px) { .jl .second { display: block; } .jl td.title { max-width: 300px; } }
+</style>
+</head>
+<body data-page="jobs" data-admin="false">
+<div class="shell">
+  <aside class="rail" data-auto></aside>
+  <header class="topbar">
+    <div class="crumbs"><b>Jobs</b><span class="t3">· tenant payments</span></div>
+    <span class="live"><i></i>Live</span>
+    <div class="search" role="button"><span>Jump to job, PR, run, bundle…</span><kbd>⌘K</kbd></div>
+    <button class="iconbtn" aria-label="Toggle theme"><svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.25"><circle cx="7" cy="7" r="5"/><path d="M7 2v10a5 5 0 0 0 0-10z" fill="currentColor"/></svg></button>
+  </header>
+  <main class="main">
+    <div class="filters">
+      <span class="chip on" title="Non-terminal jobs">Open <span class="n">148</span></span>
+      <span class="chip">Needs a human <span class="n">17</span></span>
+      <span class="chip">Running <span class="n">42</span></span>
+      <span class="chip">In PR review <span class="n">71</span></span>
+      <span class="chip">Recent <span class="n">7d</span></span>
+      <span class="chip hide-md">Failed 24h <span class="n">9</span></span>
+      <span class="grow"></span>
+      <span class="t3 small mono hide-md">status:open repo:ledger-* sort:updated</span>
+      <button class="btn sm primary">New job<kbd>N</kbd></button>
+    </div>
+    <table class="t jl">
+      <thead><tr><th>Job</th><th>Title</th><th>Status</th><th>Phase / node</th><th class="p2">Repo</th><th class="p3">Requester</th><th class="right p3">Cost</th><th class="right sorted">Updated</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">job_01m5p7x7r0</td><td class="title">Refund ledger entries double-count FX fees for partial refunds<span class="second mono">ledger-api · Maya Torres · $2.86</span></td><td><span class="pill info"><i class="g" data-g="ring-spin"></i>Running</span></td><td class="phase">implementing <span class="t3">· implementer</span></td><td class="mono small p2">ledger-api</td><td class="req p3">Maya Torres</td><td class="right num p3">$2.86</td><td class="right t3">8 s</td></tr>
+        <tr><td class="mono">job_01m5n2a9qe</td><td class="title">Stale FX rate cache after deploy<span class="second mono">ledger-api · Maya Torres · $11.40</span></td><td><span class="pill attention"><i class="g" data-g="diamond"></i>Waiting on human</span></td><td class="phase">publish_gate <span class="t3">· 5 h left</span></td><td class="mono small p2">ledger-api</td><td class="req p3">Maya Torres</td><td class="right num p3">$11.40</td><td class="right t3">18 h</td></tr>
+        <tr><td class="mono">job_01m5k8t0vy</td><td class="title">Settlement batcher retries duplicate a failed batch<span class="second mono">settlement-batcher · Arjun Mehta · $7.92</span></td><td><span class="pill info"><i class="g" data-g="ring-spin"></i>Running</span></td><td class="phase">qa <span class="t3">· Playwright</span></td><td class="mono small p2">settlement-batcher</td><td class="req p3">Arjun Mehta</td><td class="right num p3">$7.92</td><td class="right t3">1 m</td></tr>
+        <tr><td class="mono">job_01m5q1v7tn</td><td class="title">Chargeback dispute webhook drops reason codes<span class="second mono">chargebacks-api · Priya Raman · $0.00</span></td><td><span class="pill info"><i class="g" data-g="ring-spin"></i>Running</span></td><td class="phase">waiting: run quota 12/12 <span class="t3">· 41 min</span></td><td class="mono small p2">chargebacks-api</td><td class="req p3">Priya Raman</td><td class="right num p3">$0.00</td><td class="right t3">41 m</td></tr>
+        <tr><td class="mono">job_01m5j1c6rw</td><td class="title">Add idempotency key to POST /v2/payouts<span class="second mono">payouts-svc · Daniel Okafor · $0.74</span></td><td><span class="pill attention"><i class="g" data-g="diamond"></i>Waiting on human</span></td><td class="phase">plan_gate</td><td class="mono small p2">payouts-svc</td><td class="req p3">Daniel Okafor</td><td class="right num p3">$0.74</td><td class="right t3">2 d</td></tr>
+        <tr><td class="mono">job_01m5g9yb2k</td><td class="title">Bump golang.org/x/net to v0.44.0 (CVE-2026-31337)<span class="second mono">ledger-api · svc_scheduler for Lena Fischer · $1.38</span></td><td><span class="pill neutral"><i class="g" data-g="ring-half"></i>In PR review</span></td><td class="phase">pr_review <span class="t3">· PR #1437</span></td><td class="mono small p2">ledger-api</td><td class="req p3"><span class="t2">svc_scheduler</span> <span class="t3">for</span> Lena F.</td><td class="right num p3">$1.38</td><td class="right t3">3 h</td></tr>
+        <tr><td class="mono">job_01m5e0s3hn</td><td class="title">Docs: settlement runbook links<span class="second mono">payments-docs · Kenji Sato · $0.41</span></td><td><span class="pill attention"><i class="g" data-g="diamond"></i>Waiting on human</span></td><td class="phase">publish_gate <span class="t3">· batchable</span></td><td class="mono small p2">payments-docs</td><td class="req p3">Kenji Sato</td><td class="right num p3">$0.41</td><td class="right t3">1 h</td></tr>
+        <tr><td class="mono">job_01m5c2w9fe</td><td class="title">Ledger reconciliation job times out at month end<span class="second mono">ledger-api · Arjun Mehta · $9.12</span></td><td><span class="pill neutral"><i class="g" data-g="bars"></i>Paused</span></td><td class="phase">implementing <span class="t3">· by Arjun Mehta</span></td><td class="mono small p2">ledger-api</td><td class="req p3">Arjun Mehta</td><td class="right num p3">$9.12</td><td class="right t3">1 d</td></tr>
+        <tr><td class="mono">job_01m59x2p0c</td><td class="title">Bump golang.org/x/net to v0.44.0 (CVE-2026-31337)<span class="second mono">payouts-svc · svc_scheduler for Lena Fischer · $0.00</span></td><td><span class="pill neutral"><i class="g" data-g="ring-dotted"></i>Queued</span></td><td class="phase">routing</td><td class="mono small p2">payouts-svc</td><td class="req p3"><span class="t2">svc_scheduler</span> <span class="t3">for</span> Lena F.</td><td class="right num p3">$0.00</td><td class="right t3">40 s</td></tr>
+        <tr><td class="mono">job_01m58m4qhz</td><td class="title">Refund export CSV omits partially refunded orders<span class="second mono">refunds-api · Maya Torres · $3.05</span></td><td><span class="pill neutral"><i class="g" data-g="ring-half"></i>In PR review</span></td><td class="phase">repairing <span class="t3">· cycle 1 of 5</span></td><td class="mono small p2">refunds-api</td><td class="req p3">Maya Torres</td><td class="right num p3">$3.05</td><td class="right t3">12 m</td></tr>
+      </tbody>
+    </table>
+    <div class="row small t3" style="padding:10px 20px">148 open jobs · loads as you scroll · terminal jobs are under Recent · <kbd>J</kbd><kbd>K</kbd> move · <kbd>↵</kbd> open · <kbd>/</kbd> filter</div>
+  </main>
+</div>
+<div class="scrim"></div><div class="palette"></div>
+<script src="app.js"></script>
+</body>
+</html>

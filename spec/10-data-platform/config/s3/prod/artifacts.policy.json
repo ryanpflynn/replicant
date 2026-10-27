@@ -1,0 +1,351 @@
+{
+  "Version": "2012-10-17",
+  "Id": "acme-replicant-prod-artifacts-policy",
+  "Statement": [
+    {
+      "Sid": "DenyNonTls",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/*"
+      ],
+      "Condition": {
+        "Bool": {
+          "aws:SecureTransport": "false"
+        }
+      }
+    },
+    {
+      "Sid": "DenyOutsideOrganization",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/*"
+      ],
+      "Condition": {
+        "StringNotEquals": {
+          "aws:PrincipalOrgID": "o-acmereplicant1"
+        },
+        "Bool": {
+          "aws:PrincipalIsAWSService": "false"
+        }
+      }
+    },
+    {
+      "Sid": "DenyNonKmsEncryption",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-artifacts/*",
+      "Condition": {
+        "StringNotEqualsIfExists": {
+          "s3:x-amz-server-side-encryption": "aws:kms"
+        }
+      }
+    },
+    {
+      "Sid": "DenyKeysOutsideEnvironmentKeySet",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-artifacts/*",
+      "Condition": {
+        "ArnNotLikeIfExists": {
+          "s3:x-amz-server-side-encryption-aws-kms-key-id": "arn:aws:kms:us-east-1:111111111111:key/*"
+        }
+      }
+    },
+    {
+      "Sid": "DenyUnknownRetentionClass",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-artifacts/*",
+      "Condition": {
+        "StringNotEqualsIfExists": {
+          "s3:RequestObjectTag/replicant-retention": [
+            "r7d",
+            "r30d",
+            "r90d",
+            "r1y",
+            "r2y",
+            "r7y"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "NoBucketConfigChangesExceptPlatformPipeline",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:PutBucketPolicy",
+        "s3:DeleteBucketPolicy",
+        "s3:PutBucketAcl",
+        "s3:PutObjectAcl",
+        "s3:PutBucketOwnershipControls",
+        "s3:PutLifecycleConfiguration",
+        "s3:PutBucketVersioning",
+        "s3:PutEncryptionConfiguration",
+        "s3:PutReplicationConfiguration",
+        "s3:PutBucketObjectLockConfiguration",
+        "s3:PutBucketNotification"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/*"
+      ],
+      "Condition": {
+        "ArnNotLike": {
+          "aws:PrincipalArn": "arn:aws:iam::111111111111:role/replicant-prod-platform-deployer"
+        }
+      }
+    },
+    {
+      "Sid": "NobodyBypassesRetention",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:BypassGovernanceRetention",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-artifacts/*"
+    },
+    {
+      "Sid": "DeletesOnlyByNamedRoles",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-artifacts/*",
+      "Condition": {
+        "ArnNotLike": {
+          "aws:PrincipalArn": [
+            "arn:aws:iam::111111111111:role/replicant-prod-tenant-offboarding",
+            "arn:aws:iam::111111111111:role/replicant-prod-leak-purge",
+            "arn:aws:iam::111111111111:role/replicant-prod-memory-service"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "LeakPurgeOnlyTenantJobKeys",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion",
+        "s3:PutObject",
+        "s3:PutObjectTagging"
+      ],
+      "NotResource": "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*",
+      "Condition": {
+        "ArnLike": {
+          "aws:PrincipalArn": "arn:aws:iam::111111111111:role/replicant-prod-leak-purge"
+        }
+      }
+    },
+    {
+      "Sid": "PresignedGetsAtMost15Minutes",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-artifacts/*",
+      "Condition": {
+        "ArnLike": {
+          "aws:PrincipalArn": "arn:aws:iam::111111111111:role/replicant-prod-control-plane-api"
+        },
+        "NumericGreaterThan": {
+          "s3:signatureAge": "900000"
+        }
+      }
+    },
+    {
+      "Sid": "ExecSandboxRoleOnlyThroughSandboxEndpoint",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/*"
+      ],
+      "Condition": {
+        "ArnLike": {
+          "aws:PrincipalArn": "arn:aws:iam::222222222222:role/replicant-prod-sandbox-artifacts"
+        },
+        "StringNotEquals": {
+          "aws:SourceVpce": "vpce-0e1c5ab0d3f4a7b21"
+        }
+      }
+    },
+    {
+      "Sid": "AllowExecSandboxRoleRunPrefixes",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::222222222222:role/replicant-prod-sandbox-artifacts"
+      },
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging",
+        "s3:AbortMultipartUpload",
+        "s3:ListMultipartUploadParts",
+        "s3:GetObject"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/*"
+    },
+    {
+      "Sid": "AllowExecControllerReadRunObjects",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::222222222222:role/replicant-prod-agentrun-controller"
+      },
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/*"
+    },
+    {
+      "Sid": "SandboxNeverWritesStagedOrControlKeys",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/inputs/*",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/inbox/*",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/agentrun_record/*"
+      ],
+      "Condition": {
+        "ArnLike": {
+          "aws:PrincipalArn": "arn:aws:iam::222222222222:role/replicant-prod-sandbox-artifacts"
+        }
+      }
+    },
+    {
+      "Sid": "MemoryServiceDeletesOnlyMemoryInjections",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion"
+      ],
+      "NotResource": "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/inputs/memory-injection.json",
+      "Condition": {
+        "ArnLike": {
+          "aws:PrincipalArn": "arn:aws:iam::111111111111:role/replicant-prod-memory-service"
+        }
+      }
+    },
+    {
+      "Sid": "AllowExecRunnerInboxControl",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::222222222222:role/replicant-prod-runner-api"
+      },
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging",
+        "s3:GetObject"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/inbox/*"
+    },
+    {
+      "Sid": "AllowExecRunnerListInbox",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::222222222222:role/replicant-prod-runner-api"
+      },
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-artifacts",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": "tenants/*/jobs/*/runs/*/inbox/*"
+        }
+      }
+    },
+    {
+      "Sid": "AllowExecRunnerReadInputsManifestAndRecords",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::222222222222:role/replicant-prod-runner-api"
+      },
+      "Action": "s3:GetObject",
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/inputs/manifest.json",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/manifest.json",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/agentrun_record/*"
+      ]
+    },
+    {
+      "Sid": "AllowExecControllerWriteRecordsAndControl",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::222222222222:role/replicant-prod-agentrun-controller"
+      },
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/agentrun_record/*",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/inbox/_control.json"
+      ]
+    },
+    {
+      "Sid": "AgentRunRecordsAndControlWriteOnce",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:PutObject",
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/agentrun_record/*",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/inbox/_control.json"
+      ],
+      "Condition": {
+        "Null": {
+          "s3:if-none-match": "true"
+        },
+        "Bool": {
+          "s3:ObjectCreationOperation": "true"
+        }
+      }
+    },
+    {
+      "Sid": "ControllerWritesNothingElse",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging",
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion"
+      ],
+      "NotResource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/agentrun_record/*",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/inbox/_control.json"
+      ],
+      "Condition": {
+        "ArnLike": {
+          "aws:PrincipalArn": "arn:aws:iam::222222222222:role/replicant-prod-agentrun-controller"
+        }
+      }
+    },
+    {
+      "Sid": "MemoryServiceOnlyDeletesVersions",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:DeleteObject",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-artifacts/*",
+      "Condition": {
+        "ArnLike": {
+          "aws:PrincipalArn": "arn:aws:iam::111111111111:role/replicant-prod-memory-service"
+        }
+      }
+    }
+  ]
+}

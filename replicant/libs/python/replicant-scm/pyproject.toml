@@ -1,0 +1,19 @@
+[project]
+name = "replicant-scm"
+version = "0.1.0"
+description = "ScmProvider abstraction (github-app.md G-9, XD-11-05): normalized SCM event model, webhook verification and the Gitea adapter (local profile)."
+requires-python = ">=3.12,<3.13"
+dependencies = ["httpx>=0.28,<0.29"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/replicant_scm"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

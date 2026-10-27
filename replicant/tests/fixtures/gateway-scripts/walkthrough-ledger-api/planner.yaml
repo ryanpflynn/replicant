@@ -1,0 +1,52 @@
+# replicant.gateway-script/v1: the canned ledger-api planner for the M1 walkthrough (bugfix graph node `plan`, role planner,
+# agent planner-claude: read-only, tools.edit false). WORKER sends stub key plan.c<cycle>.n<ordinal>; the shim falls
+# back through "plan" to the role, i.e. this file. It writes /replicant/out/plan.md with Bash (the planner has no
+# Edit/Write) and ends with the StructuredOutput call of replicant.role-result.planner/v1 (planner.agent_report.json).
+# REPLICANT_OUT_DIR only exists for host-side proofs; in the sandbox the default /replicant/out is used.
+schema: replicant.gateway-script/v1
+name: walkthrough-ledger-api-planner
+protocol: anthropic_messages
+finish: "Plan written to /replicant/out/plan.md."
+turns:
+  - expect: {tools: [Read, Bash]}
+    respond:
+      text: "I'll read ApplyRefund and the Prorate helper."
+      tool_use: {name: Read, input: {file_path: "${cwd}/internal/ledger/ledger.go"}}
+      usage: {input_tokens: 8000, output_tokens: 50}
+  - respond:
+      tool_use: {name: Read, input: {file_path: "${cwd}/internal/ledger/prorate.go"}}
+      usage: {input_tokens: 9500, output_tokens: 40}
+  - respond:
+      text: "ApplyRefund reverses the whole FX fee; Prorate already does the half-even integer split. Writing the plan."
+      tool_use:
+        name: Bash
+        input:
+          description: "Write the plan to /replicant/out/plan.md"
+          command: |
+            OUT="${REPLICANT_OUT_DIR:-/replicant/out}"; mkdir -p "$OUT" && cat > "$OUT/plan.md" <<'PLAN'
+            # Plan: prorate the FX fee reversal on partial refunds
+
+            ## Cause
+            `ledger.ApplyRefund` (internal/ledger/ledger.go) sets `fxReversal := c.FXFeeMinor`, so every refund,
+            partial or full, reverses the whole FX fee.
+
+            ## Steps
+            - s1. In `ApplyRefund`, compute the reversal as `Prorate(c.FXFeeMinor, refundMinor, c.AmountMinor)`
+              (existing helper in internal/ledger/prorate.go: integer arithmetic, half-even rounding). No float64.
+            - s2. Run `go vet ./...` and `go test -count=1 ./...`; `TestApplyRefund/partial_eur_fx_fee` and
+              `TestApplyRefund/partial_half_even` must pass, and the full-refund case must keep reversing the whole fee.
+
+            ## Acceptance criteria
+            - ac1. A partial refund of EUR 40.00 on a EUR 100.00 charge with a EUR 0.48 FX fee posts `fx_fee_reversal` EUR -0.19 (unit test).
+            - ac2. A full refund still reverses the whole FX fee (unit test).
+            - ac3. `go vet ./...`, `go build ./...` and `go test ./...` pass (unit test).
+
+            ## Risks
+            - Rounding: Prorate rounds half-even; repeated partial refunds can differ by one minor unit in total from the fee.
+            PLAN
+            echo "wrote $OUT/plan.md"
+      usage: {input_tokens: 10500, output_tokens: 400}
+  - respond:
+      text: "The plan is a one-line change in ApplyRefund using the existing Prorate helper."
+      structured_output_from: planner.agent_report.json
+      usage: {input_tokens: 11000, output_tokens: 350}

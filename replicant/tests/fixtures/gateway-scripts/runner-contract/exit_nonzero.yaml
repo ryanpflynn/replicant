@@ -1,0 +1,26 @@
+# runner-local contract scenario exit_nonzero: persistent 500s make the CLI fail (RC-RUN-07).
+schema: replicant.gateway-script/v1
+name: runner-contract-exit-nonzero
+protocol: anthropic_messages
+finish: "x"
+turns:
+  - fault: {status: 500}
+  - fault: {status: 500}
+  - fault: {status: 500}
+  - fault: {status: 500}
+  - fault: {status: 500}
+  - fault: {status: 500}
+  - fault: {status: 500}
+  - fault: {status: 500}
+  - fault: {status: 500}
+  - fault: {status: 500}
+  - fault: {status: 500}
+  - fault: {status: 500}
+  - fault: {status: 500}
+  - fault: {status: 500}
+  - fault: {status: 500}
+  - fault: {status: 500}
+  - fault: {status: 500}
+  - fault: {status: 500}
+  - fault: {status: 500}
+  - fault: {status: 500}

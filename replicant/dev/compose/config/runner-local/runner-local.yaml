@@ -1,0 +1,148 @@
+# runner-local: Runner API (C-RUNNER 3.0.0) over the Docker/Podman Engine API (rootless Podman preferred on Linux,
+# WS-02 L-3), with the AgentRun lifecycle of C-CRD 3.0.0 emulated on a pod-like container group. WS-02 implements it (local-runner.md §1); this file is the
+# local configuration contract (XD-11-02, XD-02-11). `${VAR}` values come from the compose environment.
+listeners:
+  orchestration:
+    addr: 0.0.0.0:8480
+    auth: static-dev-keys            # C-RUNNER: local profile; prod verifies core-cluster SA JWTs (parity P-26)
+  sandbox:
+    addr: 0.0.0.0:8490
+    public_base_url: http://runner-sandbox.sbx.local
+namespace: replicant-local
+container_host: ${RUNNER_CONTAINER_HOST}   # Podman/Docker socket URL (XD-FIX-R1-059)
+# State directory (XD-FIX-R1-066, WS-02 local-runner.md §1.2a): agentruns/<run_id>.json, runs/<run_id>/tokens/<audience>,
+# leases/<run_id> (heartbeat timestamps), overrides.json (applied runtime overrides).
+state_dir: ${RUNNER_STATE_DIR}           # /var/lib/runner-local
+
+# Run grants (C-RUNNER 3.0.0, CCR-09-02). createRun verifies RunSpec.run_grant exactly as runner-api does:
+# signature against the core run-grant JWKS, iss, typ, exp, spec_digest equality (digest excludes run_grant and
+# trace_context), run_id/tenant_id/job_id/role match, repo_ids cover repo and additional_repos, and the
+# revocation list. Any failure: 422 run_grant_invalid. Tokens embed the grant and claim a subset of it.
+grants:
+  issuer: ${RUNNER_GRANTS_ISSUER}                    # replicant-local-core
+  jwks_url: ${RUNNER_GRANTS_JWKS_URL}                # http://grants.replicant.localhost:8403/.well-known/jwks.json
+  revocation_url: ${RUNNER_GRANTS_REVOCATION_URL}    # http://grants.replicant.localhost:8403/grants/revoked
+  jwks_cache_seconds: 600
+  revocation_poll_seconds: 60
+
+# Run lease and revocation (C-RUNNER 3.0.0, XD-FIX-R2-030): agentd POSTs /sandbox/v1/heartbeat every 30 s; a run whose
+# lease is older than 120 s while the engine still reports the container running fails NodeLost. Every terminal
+# phase appends {run_id, job_id, at, reason} to the feed: GET /v1/revocations?since=<cursor> on the orchestration
+# listener (readers: the static tokens in RUNNER_REVOCATIONS_READERS_FILE, one per verifier) and objects
+# exec-revocations/local/<yyyymmddhh>.ndjson in the ops bucket (never audit; C-ART 2.0.0).
+lease:
+  heartbeat_path: /sandbox/v1/heartbeat
+  lease_seconds: 120
+revocations:
+  bucket: ${RUNNER_REVOCATIONS_BUCKET}       # local-replicant-local-ops
+  prefix: ${RUNNER_REVOCATIONS_PREFIX}       # exec-revocations/local/
+  readers_file: ${RUNNER_REVOCATIONS_READERS_FILE}
+  retain_seconds: 7200                       # at least two token lifetimes
+cancel:
+  control_object: inbox/_control.json       # {"cancel_reason", "at"} written If-None-Match (XD-FIX-R2-040)
+runtime_overrides:
+  source: state_dir/overrides.json          # local stand-in for ConfigMap replicant-runtime-overrides (XD-FIX-R2-045)
+
+tokens:
+  per_audience: true                 # one token per grant audience, aud a single string (CCR-09-01)
+  ttl_seconds: 3600
+  # Bind-mounted read-only only into replicant-agentd at $REPLICANT_RUN_TOKEN_SEED_DIR/<audience>
+  # (/run/replicant/token-seed); agentd keeps refreshed copies in its tmpfs $REPLICANT_RUN_TOKEN_DIR (/run/replicant/tokens)
+  # (C-IDS 2.0.0 §8, WS-02 local-runner.md §1.2). The agent container gets none (C-ARCH 2.0.0 §1.1).
+  seed_dir_in_container: /run/replicant/token-seed
+  dir_in_container: /run/replicant/tokens
+
+credentials:
+  mode: auto                         # auto | sts | per-run-identity (WS-02 local-runner.md §2)
+  session_seconds: 3600
+executor:
+  engine: auto                       # auto | docker | podman (detected from the socket's /version)
+  pull_policy: if-not-present
+  stop_grace_seconds_extra: 15
+policy:
+  bundle_source: registry            # runtime_selection / network_profiles from local-replicant-local-registry
+
+artifacts:
+  org: local
+  env: local
+  endpoint_for_sandboxes: http://s3.sbx.local
+
+sandbox:
+  network: replicant-sbx
+  dns: [172.31.250.2]
+  env:
+    HTTPS_PROXY: http://egress.sbx.local:3128
+    HTTP_PROXY: http://egress.sbx.local:3128
+    NO_PROXY: .sbx.local,127.0.0.1,localhost
+    NPM_CONFIG_REGISTRY: http://npm.sbx.local:4873/
+    GOPROXY: http://goproxy.sbx.local:3000
+    PIP_INDEX_URL: http://pypi.sbx.local:5000/index/
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://otlp.sbx.local
+    OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+  # Pod-like group (WS-02 local-runner.md §1.2): a pause container owns the network namespace; agentd,
+  # sidecars, QA services and stubs, and the QA builder are sibling containers in that namespace (XD-05-11).
+  pod_group:
+    pause_image: ${REPLICANT_IMAGE_REGISTRY}/pause:3.10
+    # C-IDS §8 container names, WS-02 local-runner.md §1.1 order; no shipper (the uploader ships spool chunks, R1V-184).
+    containers: [workspace-guard, replicant-agentd, watchdog, prepare, svc-<name>, stub-<name>, builder, agent, uploader]
+    # Container names are `ar-<26-char run body>-<container>` (XD-FIX-R1-209); WS-08 local.alloy derives
+    # `container` from the name, so no container-role label is set.
+    container_name_template: "ar-{run_body}-{container}"
+  runtime:
+    default: ${RUNNER_LOCAL_RUNTIME}  # runc | runsc | kata
+    isolation_label_map: {gvisor: runsc, kata-fc: kata, kata-clh: kata}
+  security:
+    defaults:                         # every container unless overridden below
+      read_only_rootfs: true
+      cap_drop: [ALL]
+      no_new_privileges: true
+      seccomp: default
+      user: "10001:10001"
+      pids_limit: 4096
+    overrides:
+      replicant-agentd: {user: "10000:10000"}
+      uploader: {user: "10003:10003"}           # WS-02 uids (XD-FIX-R1-045): watchdog/uploader 10003, fsGroup 10002
+      watchdog: {user: "10003:10003"}
+      # Rootless BuildKit in qa_build runs (WS-05 stage-design.md §7). In prod this relaxation is allowed only in
+      # Kata qa_build pods (WS-09 VAP: SETUID/SETGID and Unconfined seccomp), where the guest kernel is the
+      # boundary. Locally under runc it relaxes the host-kernel boundary: parity.md P-33 (High).
+      builder:
+        when: {workload_class: qa_build}
+        seccomp: unconfined
+        apparmor: unconfined
+        cap_add: [SETUID, SETGID]
+        no_new_privileges: false
+        allow_on_runc: ${RUNNER_ALLOW_BUILDER_RELAXATION_ON_RUNC:-true}   # false: qa_build image builds fail locally
+  workspace:
+    backing: volume                   # named volume per run, removed at terminal + 1 h
+    enforcement: watchdog             # recorded on local AgentRun records; `loopback` on Linux with runner-local-diskd (P-09)
+    loopback:
+      diskd_socket: /run/runner-local-diskd.sock
+  labels:
+    # C-IDS 2.0.0 §8 keys on every container of a run (the container itself is carried in the name), so Alloy (WS-08 local.alloy)
+    # derives identity from labels, never from log content (XD-08-11).
+    static:
+      com.docker.compose.project: replicant
+      app.kubernetes.io/managed-by: agentrun-controller
+    from_run:
+      replicant.example.com/tenant: tenant_id
+      replicant.example.com/job-id: job_id
+      replicant.example.com/run-id: run_id
+      replicant.example.com/role: role
+      replicant.example.com/workload-class: workload_class
+      replicant.example.com/isolation: isolation
+      replicant.example.com/bundle: release_bundle_id_30
+      replicant.example.com/workflow-type: workflow_type
+      replicant.example.com/acting-for: acting_for
+    record_fields:                    # carried on local AgentRun records (XD-FIX-R1-059/066)
+      workspace_enforcement: watchdog
+      network_label: loopback
+max_concurrent_runs: ${RUNNER_MAX_CONCURRENT_RUNS}
+notifier:
+  temporal_address: temporal:7233
+  namespace: replicant-local
+  signal: run.status_changed
+  payload_codec: encode-only          # run-notifier role: encode with the tenant codec, never decode (C-ARCH 2.0.0)
+gc:
+  agentrun_retention: 1080h
+  container_ttl_after_terminal: 1h

@@ -1,0 +1,2365 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/contracts/workflow-messages/v1.json",
+  "title": "Replicant workflow messages",
+  "description": "Contract C-MSG v2.0.0 (WS-00). Changelog 2.0.0 (breaking, CCR-ORCH-02): product rename to Replicant; product-named identifiers change (schema $id host schemas.replicant.example.com, names, labels). Authoritative payload schemas for every Temporal Signal, Update (request and result), and Query Replicant defines, plus the projection event. Catalog and semantics: ../events-and-signals.md. Each payload carries a 'schema' discriminator; receivers ignore unknown optional fields (forward compatibility) and reject unknown 'schema' values. Changelog: 1.1.0 CCR-11-01. 1.2.0 (additive) CCR-06-01 JobSnapshot.evaluation; CCR-06-03 ReleasePipeline messages. 1.3.0 (additive) CCR-07-02 GateDecideResult.denial_reason values identity_unverifiable, identity_recheck_pending. 1.4.0 (additive) CCR-01-01 bundle_patched notice; CCR-01-04 BatchChildProgressSignal; CCR-01-05 optional ProjectionEvent.events. 1.5.0 (additive): notice kind model_retiring (R2-044); gate kind leak_purge with min_approvers and outcome recorded; Signal ops.kill_switch (R2-016). 1.6.0 (wave 1): decision rerun_qa (CCR-05-04); five sign-off points (CCR-06-11); bundle_rolled_back, override_release_block, GateView.release_block, migration consent (CCR-06-13). 1.7.0 (wave 1, final): decision_identity_contested (CCR-07-06); GateView.decision_log, steering[].actor (CCR-07-07); JobSnapshot.waiting (CCR-07-10 merged with CCR-01-06); decided_at semantics (CCR-01-07); Update ops.retry_node (CCR-07-12). 1.7.1: shared decision_channel enum (gitea added on the request side, jira dropped from the log); delegate_of is log-only. 1.7.4 (wave 3): JobSnapshot.waiting.queue_position removed (R1V-093); description stamp aligned with events-and-signals.md.",
+  "$defs": {
+    "tenant_id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 32,
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+    },
+    "job_id": {
+      "type": "string",
+      "pattern": "^job_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^run_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "gate_id": {
+      "type": "string",
+      "pattern": "^gate_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "decision_id": {
+      "type": "string",
+      "pattern": "^dec_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "message_id": {
+      "type": "string",
+      "pattern": "^msg_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "action_id": {
+      "type": "string",
+      "pattern": "^act_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "notice_id": {
+      "type": "string",
+      "pattern": "^ntc_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "principal_id": {
+      "type": "string",
+      "pattern": "^(usr_[0-9a-hjkmnp-tv-z]{26}|svc_[a-z][a-z0-9-]{2,40})$"
+    },
+    "release_bundle_id": {
+      "type": "string",
+      "pattern": "^rb_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "memory_snapshot_id": {
+      "type": "string",
+      "pattern": "^msnap_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "s3_uri": {
+      "type": "string",
+      "maxLength": 1100,
+      "pattern": "^s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/.+"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "traceparent": {
+      "type": "string",
+      "pattern": "^00-(?!0{32})[0-9a-f]{32}-(?!0{16})[0-9a-f]{16}-[0-9a-f]{2}$"
+    },
+    "channel": {
+      "type": "string",
+      "enum": [
+        "ui",
+        "slack",
+        "github",
+        "cli",
+        "api",
+        "system"
+      ]
+    },
+    "actor": {
+      "description": "Who sent the message, as resolved by the sending service from an authenticated session (UI/CLI: Okta token; Slack: signed request + identity link; GitHub: webhook signature + identity link). The workflow re-checks authorization through an activity; this field is a claim to be verified, not proof.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "principal_id"
+      ],
+      "properties": {
+        "principal_id": {
+          "$ref": "#/$defs/principal_id"
+        },
+        "channel_identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "id"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "okta",
+                "slack",
+                "github",
+                "gitea",
+                "jira"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "login": {
+              "type": "string",
+              "maxLength": 128
+            }
+          }
+        }
+      }
+    },
+    "worker_deployment_version": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deployment_name",
+        "build_id"
+      ],
+      "properties": {
+        "deployment_name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{1,62}$"
+        },
+        "build_id": {
+          "type": "string",
+          "pattern": "^b[0-9]{8}-[0-9a-f]{12}$"
+        }
+      }
+    },
+    "gate_kind": {
+      "type": "string",
+      "enum": [
+        "plan_approval",
+        "publish_approval",
+        "clarification",
+        "budget_extension",
+        "bundle_migration",
+        "leak_purge"
+      ]
+    },
+    "gate_decision": {
+      "type": "string",
+      "enum": [
+        "approve",
+        "reject",
+        "request_changes",
+        "answer",
+        "rerun_qa"
+      ]
+    },
+    "run_phase": {
+      "type": "string",
+      "enum": [
+        "Pending",
+        "Provisioning",
+        "Running",
+        "Finalizing",
+        "Cancelling",
+        "Succeeded",
+        "Failed",
+        "Cancelled"
+      ]
+    },
+    "job_status": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "running",
+        "waiting_human",
+        "waiting_external",
+        "paused",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "rejected",
+        "expired",
+        "taken_over"
+      ]
+    },
+    "job_phase": {
+      "description": "Open vocabulary (ids-and-naming.md section 6). New values via contract change request.",
+      "type": "string",
+      "pattern": "^[a-z][a-z_]{1,30}$"
+    },
+    "winning_decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision_id",
+        "decision",
+        "principal_id",
+        "channel",
+        "decided_at"
+      ],
+      "properties": {
+        "decision_id": {
+          "$ref": "#/$defs/decision_id"
+        },
+        "decision": {
+          "$ref": "#/$defs/gate_decision"
+        },
+        "principal_id": {
+          "$ref": "#/$defs/principal_id"
+        },
+        "channel": {
+          "$ref": "#/$defs/decision_channel"
+        },
+        "decided_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "comment": {
+          "type": "string",
+          "maxLength": 8000
+        }
+      }
+    },
+    "GateDecideRequest": {
+      "description": "Update 'gate.decide'. Update ID = decision_id.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "decision_id",
+        "gate_id",
+        "decision",
+        "actor",
+        "channel",
+        "presented_digest",
+        "decided_at"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.msg.gate-decide/v1"
+        },
+        "decision_id": {
+          "$ref": "#/$defs/decision_id"
+        },
+        "gate_id": {
+          "$ref": "#/$defs/gate_id"
+        },
+        "decision": {
+          "$ref": "#/$defs/gate_decision"
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "channel": {
+          "$ref": "#/$defs/decision_channel"
+        },
+        "channel_ref": {
+          "description": "Where the decision was made, for cross-channel updates and audit.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "slack_channel_id": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "slack_message_ts": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "github_review_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "github_delivery_id": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "ui_session_id": {
+              "type": "string",
+              "maxLength": 64
+            }
+          }
+        },
+        "presented_digest": {
+          "description": "Digest of the approval packet the decider was shown (GateView.presented_digest at render time). A mismatch means the packet changed after the decider looked at it, and the validator rejects with StaleApprovalView.",
+          "$ref": "#/$defs/digest"
+        },
+        "comment": {
+          "type": "string",
+          "maxLength": 8000
+        },
+        "answer_text": {
+          "description": "Required when decision=answer (clarification gates). Untrusted.",
+          "type": "string",
+          "maxLength": 16000
+        },
+        "decided_at": {
+          "description": "CCR-01-07. control-plane-api's receipt time of the decision, unchanged across re-submissions (outbox retries); used by V10.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "override_release_block": {
+          "description": "CCR-06-13. Required to approve a gate whose job's bundle was rolled back or revoked (otherwise validator rejects with GateBlockedByRelease). Audited. reject, request_changes and rerun_qa are never blocked.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reason"
+          ],
+          "properties": {
+            "reason": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 2000
+            }
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "decision": {
+            "const": "answer"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "answer_text"
+        ]
+      }
+    },
+    "GateDecideResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "outcome",
+        "gate_id",
+        "decision_id"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.msg.gate-decide-result/v1"
+        },
+        "outcome": {
+          "description": "accepted: this decision resolved the gate. denied: the decider failed the authoritative authorization check at decision time; the gate stays open. superseded: another decision won while this one was being checked. recorded: an approval was recorded on a gate that needs more distinct approvers (eligible.min_approvers > 1, for example leak_purge); the gate stays open.",
+          "type": "string",
+          "enum": [
+            "accepted",
+            "denied",
+            "superseded",
+            "recorded"
+          ]
+        },
+        "gate_id": {
+          "$ref": "#/$defs/gate_id"
+        },
+        "decision_id": {
+          "$ref": "#/$defs/decision_id"
+        },
+        "winning_decision": {
+          "$ref": "#/$defs/winning_decision"
+        },
+        "denial_reason": {
+          "type": "string",
+          "enum": [
+            "not_in_approver_group",
+            "insufficient_repo_permission",
+            "identity_unlinked",
+            "principal_deprovisioned",
+            "self_approval_forbidden",
+            "tenant_mismatch",
+            "identity_unverifiable",
+            "identity_recheck_pending",
+            "duplicate_approver",
+            "initiator_cannot_approve"
+          ]
+        },
+        "approvals_recorded": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "approvals_required": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "JobSteerRequest": {
+      "description": "Update 'job.steer'. Update ID = message_id.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "message_id",
+        "actor",
+        "channel",
+        "text",
+        "delivery",
+        "sent_at"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.msg.job-steer/v1"
+        },
+        "message_id": {
+          "$ref": "#/$defs/message_id"
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "channel": {
+          "$ref": "#/$defs/channel"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16000
+        },
+        "delivery": {
+          "description": "auto: live if the active run's agent definition supports live steering, else next node. next_node: always queue. live_only: fail with outcome not_deliverable if live delivery is impossible.",
+          "type": "string",
+          "enum": [
+            "auto",
+            "next_node",
+            "live_only"
+          ]
+        },
+        "sent_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "JobSteerResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "outcome",
+        "message_id"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.msg.job-steer-result/v1"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "delivered_live",
+            "queued_next_node",
+            "not_deliverable",
+            "denied"
+          ]
+        },
+        "message_id": {
+          "$ref": "#/$defs/message_id"
+        },
+        "run_id": {
+          "$ref": "#/$defs/run_id"
+        },
+        "denial_reason": {
+          "type": "string",
+          "maxLength": 200
+        }
+      }
+    },
+    "JobControlRequest": {
+      "description": "Updates 'job.cancel', 'job.pause', 'job.resume', 'job.takeover', 'batch.cancel'. Update ID = action_id.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "action_id",
+        "action",
+        "actor",
+        "channel",
+        "requested_at"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.msg.job-control/v1"
+        },
+        "action_id": {
+          "$ref": "#/$defs/action_id"
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "cancel",
+            "pause",
+            "resume",
+            "takeover",
+            "batch_cancel"
+          ]
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "channel": {
+          "$ref": "#/$defs/channel"
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "pause_mode": {
+          "description": "pause only. at_next_node: stop before starting the next node. at_next_gate: run until the next gate, then hold it open without notifying approvers.",
+          "type": "string",
+          "enum": [
+            "at_next_node",
+            "at_next_gate"
+          ]
+        },
+        "takeover_include": {
+          "description": "takeover only.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "branch",
+              "workspace_archive",
+              "transcripts",
+              "plan",
+              "handoff"
+            ]
+          }
+        },
+        "requested_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "pause"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "pause_mode"
+            ]
+          }
+        }
+      ]
+    },
+    "JobControlResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "outcome",
+        "action_id",
+        "status"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.msg.job-control-result/v1"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "accepted",
+            "denied",
+            "no_op"
+          ]
+        },
+        "action_id": {
+          "$ref": "#/$defs/action_id"
+        },
+        "status": {
+          "$ref": "#/$defs/job_status"
+        },
+        "takeover_id": {
+          "type": "string",
+          "pattern": "^tko_[0-9a-hjkmnp-tv-z]{26}$"
+        },
+        "denial_reason": {
+          "type": "string",
+          "maxLength": 200
+        }
+      }
+    },
+    "OfferBundleMigrationRequest": {
+      "description": "Update 'job.offer_bundle_migration'. Sent by control-plane-api on an operator's behalf. Opens a bundle_migration gate whose approver is the requester (consent); WS-01 defines eligibility.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "action_id",
+        "actor",
+        "target_release_bundle_id",
+        "reason"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.msg.offer-bundle-migration/v1"
+        },
+        "action_id": {
+          "$ref": "#/$defs/action_id"
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "target_release_bundle_id": {
+          "$ref": "#/$defs/release_bundle_id"
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "required": {
+          "description": "True when the current bundle is revoked: the job cannot continue without migrating, and declining ends it as cancelled.",
+          "type": "boolean",
+          "default": false
+        },
+        "consent": {
+          "description": "CCR-06-13. requester (default): opens a bundle_migration gate for the requester. operator: requires release:revoke, opens no gate, migrates at the next safe point; the requester is notified.",
+          "type": "string",
+          "enum": [
+            "requester",
+            "operator"
+          ],
+          "default": "requester"
+        }
+      }
+    },
+    "OfferBundleMigrationResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "outcome"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.msg.offer-bundle-migration-result/v1"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "gate_opened",
+            "ineligible",
+            "denied",
+            "migration_scheduled"
+          ]
+        },
+        "gate_id": {
+          "$ref": "#/$defs/gate_id"
+        },
+        "ineligible_reason": {
+          "type": "string",
+          "maxLength": 500
+        }
+      }
+    },
+    "RunStatusChangedSignal": {
+      "description": "Signal 'run.status_changed'. Sent by run-notifier for every AgentRun phase transition. A wake-up hint only: the workflow confirms state with activity runner.get_run before acting (ADR-002). Identical to the Runner OpenAPI webhook payload RunStatusNotification.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "notification_id",
+        "run_id",
+        "job_id",
+        "tenant_id",
+        "idempotency_key",
+        "phase",
+        "terminal",
+        "observed_generation",
+        "observed_at"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.msg.run-status-changed/v1"
+        },
+        "notification_id": {
+          "description": "<run_id>:<phase>:<observed_generation>. Dedupe key.",
+          "type": "string",
+          "pattern": "^run_[0-9a-hjkmnp-tv-z]{26}:[A-Za-z]+:[0-9]+$"
+        },
+        "run_id": {
+          "$ref": "#/$defs/run_id"
+        },
+        "job_id": {
+          "$ref": "#/$defs/job_id"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/tenant_id"
+        },
+        "idempotency_key": {
+          "type": "string",
+          "maxLength": 255
+        },
+        "phase": {
+          "$ref": "#/$defs/run_phase"
+        },
+        "terminal": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 1024,
+          "pattern": "^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$"
+        },
+        "observed_generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "observed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "artifact_manifest_uri": {
+          "$ref": "#/$defs/s3_uri"
+        },
+        "traceparent": {
+          "$ref": "#/$defs/traceparent"
+        }
+      }
+    },
+    "PrEventSignal": {
+      "description": "Signal 'pr.event'. Sent by github-integration for events on a PR owned by a running job. Comment bodies are NOT inline: they are in payload_uri (artifact type pr_event_payload). The sender has already filtered bots, Replicant's own app, and unlinked identities (D-15); the workflow re-checks with activity identity.check_repair_trigger before acting.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "delivery_id",
+        "event",
+        "job_id",
+        "repo",
+        "pr_number",
+        "actor",
+        "payload_uri",
+        "received_at"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.msg.pr-event/v1"
+        },
+        "delivery_id": {
+          "description": "X-GitHub-Delivery GUID (or Gitea delivery id locally). Dedupe key carried across Continue-As-New.",
+          "type": "string",
+          "maxLength": 64
+        },
+        "event": {
+          "type": "string",
+          "enum": [
+            "review_submitted",
+            "review_dismissed",
+            "review_comment_created",
+            "review_comment_edited",
+            "issue_comment_created",
+            "replicant_command",
+            "pull_request_closed",
+            "pull_request_merged",
+            "pull_request_reopened",
+            "pull_request_synchronize",
+            "check_suite_completed"
+          ]
+        },
+        "job_id": {
+          "$ref": "#/$defs/job_id"
+        },
+        "repo": {
+          "type": "string",
+          "description": "<host>/<owner>/<name>",
+          "maxLength": 455
+        },
+        "pr_number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "head_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        },
+        "review_state": {
+          "type": "string",
+          "enum": [
+            "approved",
+            "changes_requested",
+            "commented",
+            "dismissed"
+          ]
+        },
+        "actor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "github_user_id",
+            "login",
+            "is_bot",
+            "linked"
+          ],
+          "properties": {
+            "github_user_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "login": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "is_bot": {
+              "type": "boolean"
+            },
+            "linked": {
+              "type": "boolean"
+            },
+            "principal_id": {
+              "$ref": "#/$defs/principal_id"
+            },
+            "repo_permission": {
+              "type": "string",
+              "enum": [
+                "admin",
+                "maintain",
+                "write",
+                "triage",
+                "read",
+                "none"
+              ]
+            }
+          }
+        },
+        "comment_refs": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "comment_id",
+              "kind"
+            ],
+            "properties": {
+              "comment_id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "review_comment",
+                  "issue_comment",
+                  "review_body"
+                ]
+              },
+              "path": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "line": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "in_reply_to_id": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        },
+        "payload_uri": {
+          "$ref": "#/$defs/s3_uri"
+        },
+        "received_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "ReleaseNoticeSignal": {
+      "description": "Signal 'release.notice'. Sent by control-plane-api as a Temporal batch signal to the workflows selected by a visibility query (for example ReplicantReleaseBundleId = X AND ExecutionStatus = 'Running').",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "notice_id",
+        "kind",
+        "current_release_bundle_id",
+        "issued_at",
+        "issued_by"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.msg.release-notice/v1"
+        },
+        "notice_id": {
+          "$ref": "#/$defs/notice_id"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "newer_bundle_available",
+            "worker_version_draining",
+            "worker_version_retire_scheduled",
+            "bundle_revoked",
+            "bundle_patched",
+            "model_retiring",
+            "bundle_rolled_back"
+          ]
+        },
+        "current_release_bundle_id": {
+          "$ref": "#/$defs/release_bundle_id"
+        },
+        "recommended_release_bundle_id": {
+          "$ref": "#/$defs/release_bundle_id"
+        },
+        "deadline": {
+          "description": "For retire_scheduled and bundle_revoked: after this time the job must have migrated or will be stopped at its next safe point.",
+          "$ref": "#/$defs/timestamp"
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "issued_by": {
+          "$ref": "#/$defs/principal_id"
+        },
+        "issued_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "PrincipalChangedSignal": {
+      "description": "Signal 'identity.principal_changed'. Sent by identity-service (through control-plane-api's Temporal client) to running jobs where the principal is the requester or an eligible approver of an open gate, found through jobs_read.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "notice_id",
+        "principal_id",
+        "change",
+        "effective_at"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.msg.principal-changed/v1"
+        },
+        "notice_id": {
+          "$ref": "#/$defs/notice_id"
+        },
+        "principal_id": {
+          "$ref": "#/$defs/principal_id"
+        },
+        "change": {
+          "type": "string",
+          "enum": [
+            "deprovisioned",
+            "suspended",
+            "groups_changed",
+            "identity_link_removed",
+            "decision_identity_contested"
+          ]
+        },
+        "effective_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "decision_id": {
+          "description": "CCR-07-06. Required when change = decision_identity_contested (an approval accepted before the approver's removal propagated), forbidden otherwise. With tenant setting on_contested_decision: reopen_if_unpublished, the workflow withdraws that approval and reopens the gate if no publish activity has started for it.",
+          "$ref": "#/$defs/decision_id"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "change": {
+                "const": "decision_identity_contested"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "decision_id"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "decision_id"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "GateView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gate_id",
+        "kind",
+        "state",
+        "opened_at",
+        "presented_digest",
+        "packet_uri",
+        "channels"
+      ],
+      "properties": {
+        "gate_id": {
+          "$ref": "#/$defs/gate_id"
+        },
+        "kind": {
+          "$ref": "#/$defs/gate_kind"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "open",
+            "approved",
+            "rejected",
+            "changes_requested",
+            "answered",
+            "expired",
+            "cancelled"
+          ]
+        },
+        "opened_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "next_reminder_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "escalation_level": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "presented_digest": {
+          "description": "sha256 of the JCS-canonical approval packet manifest at packet_uri.",
+          "$ref": "#/$defs/digest"
+        },
+        "packet_uri": {
+          "description": "Approval packet manifest (artifact type approval_packet): plan, diff, QA summary, risk rationale and fired rules, memory entries used, cost.",
+          "$ref": "#/$defs/s3_uri"
+        },
+        "eligible": {
+          "description": "Who may decide. Resolved at gate open from policy; re-evaluated authoritatively at decision time.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "okta_groups": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "string",
+                "maxLength": 200
+              }
+            },
+            "principals": {
+              "type": "array",
+              "maxItems": 50,
+              "items": {
+                "$ref": "#/$defs/principal_id"
+              }
+            },
+            "min_repo_permission": {
+              "type": "string",
+              "enum": [
+                "admin",
+                "maintain",
+                "write",
+                "triage",
+                "read"
+              ]
+            },
+            "requester_may_decide": {
+              "type": "boolean"
+            },
+            "min_approvers": {
+              "description": "Distinct approvals required to resolve the gate with 'approve' (default 1). leak_purge gates use 2 (two-person rule). Any single 'reject' closes the gate.",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5,
+              "default": 1
+            }
+          }
+        },
+        "channels": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "ui",
+              "cli",
+              "api",
+              "slack",
+              "github",
+              "gitea"
+            ]
+          }
+        },
+        "decision": {
+          "$ref": "#/$defs/winning_decision"
+        },
+        "release_block": {
+          "description": "Present when the job's bundle was rolled back or revoked after the gate opened (CCR-06-13).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "release_bundle_id",
+            "rolled_back_at",
+            "actor",
+            "reason"
+          ],
+          "properties": {
+            "release_bundle_id": {
+              "$ref": "#/$defs/release_bundle_id"
+            },
+            "rolled_back_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "actor": {
+              "$ref": "#/$defs/principal_id"
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 2000
+            }
+          }
+        },
+        "qa_reruns_used": {
+          "description": "publish_approval only: rerun_qa decisions consumed on this gate (max 2, CCR-05-04).",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "decision_log": {
+          "description": "CCR-07-07. Every decision attempt on this gate as seen by the workflow (accepted, superseded, denied, recorded), so the read model comes from Temporal only. maxItems 50, oldest dropped first. text_key is the C-ART approval_text key, never the text.",
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "decision_id",
+              "outcome",
+              "decision",
+              "principal_id",
+              "channel",
+              "decided_at",
+              "presented_digest"
+            ],
+            "properties": {
+              "decision_id": {
+                "$ref": "#/$defs/decision_id"
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "accepted",
+                  "superseded",
+                  "denied",
+                  "recorded"
+                ]
+              },
+              "decision": {
+                "$ref": "#/$defs/gate_decision"
+              },
+              "principal_id": {
+                "$ref": "#/$defs/principal_id"
+              },
+              "channel": {
+                "$ref": "#/$defs/decision_channel"
+              },
+              "delegate_of": {
+                "description": "Log-only. Delegation (dlg_) is resolved server-side by control-plane-api and identity-service and is never sent by clients; GateDecideRequest has no such field.",
+                "$ref": "#/$defs/principal_id"
+              },
+              "denial_reason": {
+                "$ref": "#/$defs/GateDecideResult/properties/denial_reason"
+              },
+              "text_key": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "text_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "decided_at": {
+                "$ref": "#/$defs/timestamp"
+              },
+              "presented_digest": {
+                "$ref": "#/$defs/digest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "RunView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "node_key",
+        "role",
+        "phase"
+      ],
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/run_id"
+        },
+        "node_key": {
+          "type": "string",
+          "maxLength": 41
+        },
+        "cycle": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "planner",
+            "implementer",
+            "qa",
+            "reviewer",
+            "repair",
+            "takeover",
+            "eval"
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/run_phase"
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "isolation": {
+          "type": "string",
+          "enum": [
+            "gvisor",
+            "kata-fc",
+            "kata-clh"
+          ]
+        },
+        "started_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "finished_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "artifact_manifest_uri": {
+          "$ref": "#/$defs/s3_uri"
+        },
+        "result_uri": {
+          "$ref": "#/$defs/s3_uri"
+        }
+      }
+    },
+    "JobSnapshot": {
+      "description": "Full job view. Returned by Query 'job.snapshot' and carried in every ProjectionEvent. Size budget: under 64 KiB serialized; large lists go to object storage by reference.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "job_id",
+        "tenant_id",
+        "seq",
+        "as_of",
+        "workflow_type",
+        "status",
+        "phase",
+        "release_bundle_id",
+        "requester",
+        "targets",
+        "cycle",
+        "gates",
+        "runs"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.job-snapshot/v1"
+        },
+        "job_id": {
+          "$ref": "#/$defs/job_id"
+        },
+        "parent_job_id": {
+          "$ref": "#/$defs/job_id"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/tenant_id"
+        },
+        "seq": {
+          "description": "Monotonic per job across all workflow runs (carried over Continue-As-New). The projector applies a snapshot only if seq > stored seq.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "as_of": {
+          "description": "workflow.now() at emission.",
+          "$ref": "#/$defs/timestamp"
+        },
+        "workflow_type": {
+          "type": "string",
+          "enum": [
+            "unrouted",
+            "bugfix",
+            "feature",
+            "api_change",
+            "docs",
+            "hotfix",
+            "maintenance",
+            "pr_repair",
+            "qa_only"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/job_status"
+        },
+        "phase": {
+          "$ref": "#/$defs/job_phase"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "current_node": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "node_key",
+            "cycle",
+            "ordinal",
+            "started_at"
+          ],
+          "properties": {
+            "node_key": {
+              "type": "string",
+              "maxLength": 41
+            },
+            "cycle": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "ordinal": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "started_at": {
+              "$ref": "#/$defs/timestamp"
+            }
+          }
+        },
+        "release_bundle_id": {
+          "$ref": "#/$defs/release_bundle_id"
+        },
+        "worker_deployment_version": {
+          "$ref": "#/$defs/worker_deployment_version"
+        },
+        "memory_snapshot_id": {
+          "$ref": "#/$defs/memory_snapshot_id"
+        },
+        "requester": {
+          "$ref": "#/$defs/principal_id"
+        },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "low",
+            "normal",
+            "high",
+            "urgent"
+          ]
+        },
+        "risk": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "level"
+          ],
+          "properties": {
+            "level": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "critical"
+              ]
+            },
+            "rules_fired": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "string",
+                "maxLength": 128
+              }
+            },
+            "raised_by_llm": {
+              "type": "boolean"
+            }
+          }
+        },
+        "targets": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 200,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "repo"
+            ],
+            "properties": {
+              "repo": {
+                "type": "string",
+                "maxLength": 455
+              },
+              "base_ref": {
+                "type": "string",
+                "maxLength": 255
+              },
+              "base_sha": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+              }
+            }
+          }
+        },
+        "pull_request": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repo",
+            "number",
+            "url",
+            "state"
+          ],
+          "properties": {
+            "repo": {
+              "type": "string",
+              "maxLength": 455
+            },
+            "number": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "url": {
+              "type": "string",
+              "format": "uri"
+            },
+            "head_sha": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "draft",
+                "open",
+                "merged",
+                "closed"
+              ]
+            }
+          }
+        },
+        "cycle": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "repair_budget": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "used",
+            "max"
+          ],
+          "properties": {
+            "used": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "max": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "gates": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/GateView"
+          }
+        },
+        "runs": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/RunView"
+          }
+        },
+        "steering": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "message_id",
+              "outcome",
+              "at"
+            ],
+            "properties": {
+              "message_id": {
+                "$ref": "#/$defs/message_id"
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "delivered_live",
+                  "queued_next_node",
+                  "consumed",
+                  "not_deliverable"
+                ]
+              },
+              "at": {
+                "$ref": "#/$defs/timestamp"
+              },
+              "actor": {
+                "$ref": "#/$defs/principal_id"
+              }
+            }
+          }
+        },
+        "artifacts_index_uri": {
+          "description": "Job-level artifact index (artifact type job_artifact_index) listing every artifact across runs.",
+          "$ref": "#/$defs/s3_uri"
+        },
+        "paused": {
+          "type": "boolean"
+        },
+        "pending_notices": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "enum": [
+              "newer_bundle_available",
+              "worker_version_draining",
+              "worker_version_retire_scheduled",
+              "bundle_revoked",
+              "bundle_patched",
+              "model_retiring",
+              "bundle_rolled_back"
+            ]
+          }
+        },
+        "terminal": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "outcome",
+            "at"
+          ],
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z_]{1,63}$",
+              "examples": [
+                "pr_merged",
+                "pr_closed_unmerged",
+                "rejected_at_gate",
+                "no_change_needed",
+                "repair_budget_exhausted",
+                "gate_expired",
+                "cancelled_by_user",
+                "taken_over",
+                "infrastructure_failure",
+                "docs_published"
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 2000
+            },
+            "at": {
+              "$ref": "#/$defs/timestamp"
+            }
+          }
+        },
+        "evaluation": {
+          "description": "Present only for jobs started with JobRequest.options.evaluation (CCR-06-01), so projections and UIs can filter eval and shadow jobs.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "eval",
+                "shadow"
+              ]
+            },
+            "eval_run_id": {
+              "type": "string",
+              "pattern": "^eval_[0-9a-hjkmnp-tv-z]{26}$"
+            },
+            "shadow_of_job_id": {
+              "$ref": "#/$defs/job_id"
+            }
+          }
+        },
+        "waiting": {
+          "description": "CCR-07-10 merged with CCR-01-06. Why a job is waiting on capacity, budget, a dependency or a hold; absent when not waiting. Set by the workflow from typed errors of runner.start_run, the gateway budget check, dependency probes, and kill-switch or revocation holds; cleared when work resumes. The projector maps it to jobs_read.jobs.sub_status and excludes budget and capacity waits from needs_human. bundle_revoked holds use status waiting_human; dependency_outage and operator_hold use status paused. There is no queue_position: runner-api has no queue (ruling on XD-W2-02-04, R1V-093).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reason",
+            "since",
+            "attempt"
+          ],
+          "properties": {
+            "reason": {
+              "type": "string",
+              "enum": [
+                "tenant_run_quota",
+                "cluster_capacity",
+                "tenant_budget_exhausted",
+                "platform_budget_exhausted",
+                "dependency_outage",
+                "operator_hold",
+                "bundle_revoked"
+              ]
+            },
+            "since": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "attempt": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "quota_used": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "quota_limit": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "resets_at": {
+              "description": "Budget reasons only.",
+              "$ref": "#/$defs/timestamp"
+            },
+            "contact_group": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "dependency": {
+              "description": "dependency_outage only (CCR-01-06).",
+              "type": "string",
+              "enum": [
+                "ai-gateway",
+                "repo-mirror",
+                "exec-node-pool",
+                "internal_service"
+              ]
+            },
+            "next_probe_at": {
+              "description": "dependency_outage only (CCR-01-06).",
+              "$ref": "#/$defs/timestamp"
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "reason": {
+                    "const": "dependency_outage"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "dependency"
+                ]
+              },
+              "else": {
+                "not": {
+                  "required": [
+                    "dependency"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "TimelineEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "at",
+        "summary"
+      ],
+      "properties": {
+        "type": {
+          "description": "Dotted event type. Initial set: job.created, job.routed, phase.entered, node.started, node.completed, node.failed, run.status_changed, gate.opened, gate.reminded, gate.escalated, gate.decided, gate.decision_denied, gate.expired, steer.received, steer.delivered, job.paused, job.resumed, pr.opened, pr.updated, pr.event, repair.started, memory.candidates_written, bundle.migration_offered, bundle.migrated, notice.received, job.terminal. WS-01 may add types under these prefixes without a contract change.",
+          "type": "string",
+          "pattern": "^[a-z]+(\\.[a-z_]+)+$",
+          "maxLength": 64
+        },
+        "at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "summary": {
+          "description": "One line for the timeline, generated by workflow code from structured data (never model output, never untrusted text).",
+          "type": "string",
+          "maxLength": 300
+        },
+        "actor": {
+          "$ref": "#/$defs/principal_id"
+        },
+        "refs": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "run_id": {
+              "$ref": "#/$defs/run_id"
+            },
+            "gate_id": {
+              "$ref": "#/$defs/gate_id"
+            },
+            "decision_id": {
+              "$ref": "#/$defs/decision_id"
+            },
+            "message_id": {
+              "$ref": "#/$defs/message_id"
+            },
+            "node_key": {
+              "type": "string",
+              "maxLength": 41
+            },
+            "artifact_uri": {
+              "$ref": "#/$defs/s3_uri"
+            },
+            "delivery_id": {
+              "type": "string",
+              "maxLength": 64
+            }
+          }
+        }
+      }
+    },
+    "ProjectionEvent": {
+      "description": "Input of activity projection.apply (task queue replicant-projections). Idempotent: the snapshot is applied iff seq > stored seq; the timeline row (job_id, seq) is inserted ON CONFLICT DO NOTHING. Optional 'events' (CCR-01-05): 1..20 TimelineEvents from one workflow task, each with its own seq. The snapshot carries the latest seq; the projector inserts one timeline row per element (ON CONFLICT DO NOTHING) and applies the snapshot with the seq guard. 'event' stays required for v1 senders, and projectors must accept both.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "job_id",
+        "tenant_id",
+        "seq",
+        "event",
+        "snapshot"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.projection-event/v1"
+        },
+        "job_id": {
+          "$ref": "#/$defs/job_id"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/tenant_id"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "event": {
+          "$ref": "#/$defs/TimelineEvent"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/JobSnapshot"
+        },
+        "workflow_run_id": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "events": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "seq",
+              "event"
+            ],
+            "properties": {
+              "seq": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "event": {
+                "$ref": "#/$defs/TimelineEvent"
+              }
+            }
+          }
+        }
+      }
+    },
+    "OpenGatesQueryResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "gates"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.msg.open-gates/v1"
+        },
+        "gates": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/GateView"
+          }
+        }
+      }
+    },
+    "WorkingMemoryRefsQueryResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.msg.working-memory-refs/v1"
+        },
+        "plan_uri": {
+          "$ref": "#/$defs/s3_uri"
+        },
+        "latest_handoff_uri": {
+          "$ref": "#/$defs/s3_uri"
+        },
+        "latest_diff_bundle_uri": {
+          "$ref": "#/$defs/s3_uri"
+        },
+        "latest_session_state_uri": {
+          "$ref": "#/$defs/s3_uri"
+        },
+        "latest_qa_report_uri": {
+          "$ref": "#/$defs/s3_uri"
+        },
+        "briefing_uri": {
+          "$ref": "#/$defs/s3_uri"
+        },
+        "memory_snapshot_id": {
+          "$ref": "#/$defs/memory_snapshot_id"
+        }
+      }
+    },
+    "BatchSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "job_id",
+        "children_total",
+        "children_by_status"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.batch-snapshot/v1"
+        },
+        "job_id": {
+          "$ref": "#/$defs/job_id"
+        },
+        "children_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "children_by_status": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/job_status"
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "max_concurrency": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "children_index_uri": {
+          "$ref": "#/$defs/s3_uri"
+        }
+      }
+    },
+    "pipeline_id": {
+      "type": "string",
+      "pattern": "^rpl_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "ReleaseSignoffRequest": {
+      "description": "Update 'release.signoff' on ReleasePipeline (CCR-06-03). Update ID = decision_id. Sender: control-plane-api only. Validators (no I/O): actor is usr_; signoff_point is pending; presented_digest equals the current evidence packet digest (else StaleEvidenceView). Handler: activity check_release_signoff (live group membership, change-author exclusion, two-person distinctness). Details: spec/06-releases-and-evals/promotion.md section 3 and 10.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "decision_id",
+        "pipeline_id",
+        "signoff_point",
+        "decision",
+        "actor",
+        "presented_digest",
+        "decided_at"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.msg.release-signoff/v1"
+        },
+        "decision_id": {
+          "$ref": "#/$defs/decision_id"
+        },
+        "pipeline_id": {
+          "$ref": "#/$defs/pipeline_id"
+        },
+        "signoff_point": {
+          "type": "string",
+          "enum": [
+            "t3_eval_pass",
+            "canary_pct50_to_full",
+            "expedited",
+            "judge_only_gain",
+            "superiority_claim",
+            "stratum_flag",
+            "tenant_layer_behavioral",
+            "cost_acceptance",
+            "judge_acceptance",
+            "shadow_extension",
+            "bootstrap_default"
+          ]
+        },
+        "decision": {
+          "type": "string",
+          "enum": [
+            "approve",
+            "reject"
+          ]
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "presented_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "comment": {
+          "type": "string",
+          "maxLength": 8000
+        },
+        "decided_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "ReleaseSignoffResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "outcome",
+        "decision_id"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.msg.release-signoff-result/v1"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "accepted",
+            "superseded",
+            "denied",
+            "rejected_self_signoff"
+          ]
+        },
+        "decision_id": {
+          "$ref": "#/$defs/decision_id"
+        },
+        "signoffs_recorded": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "signoffs_required": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "denial_reason": {
+          "type": "string",
+          "maxLength": 200
+        }
+      }
+    },
+    "ReleaseControlRequest": {
+      "description": "Updates 'release.abort' and 'release.hold' on ReleasePipeline (CCR-06-03). Update ID = action_id. Sender: control-plane-api only, after a live release:operate authorization check.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "action_id",
+        "action",
+        "actor",
+        "reason",
+        "requested_at"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.msg.release-control/v1"
+        },
+        "action_id": {
+          "$ref": "#/$defs/action_id"
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "abort",
+            "hold",
+            "resume"
+          ]
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 2000
+        },
+        "rollback": {
+          "description": "abort only: also roll back the assignment (default true).",
+          "type": "boolean"
+        },
+        "already_rolled_back": {
+          "description": "abort only: the API already rolled back the assignment in its own transaction (fast rollback, promotion.md section 7).",
+          "type": "boolean"
+        },
+        "requested_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "ReleaseControlResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "outcome",
+        "action_id"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.msg.release-control-result/v1"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "accepted",
+            "denied",
+            "no_op"
+          ]
+        },
+        "action_id": {
+          "$ref": "#/$defs/action_id"
+        }
+      }
+    },
+    "ReleaseSnapshot": {
+      "description": "Query 'release.snapshot' on ReleasePipeline. Envelope fixed here; additional fields are owned by WS-06 (promotion.md).",
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "schema",
+        "pipeline_id",
+        "candidate_release_bundle_id",
+        "stage",
+        "held",
+        "pending_signoffs"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.release-snapshot/v1"
+        },
+        "pipeline_id": {
+          "$ref": "#/$defs/pipeline_id"
+        },
+        "candidate_release_bundle_id": {
+          "$ref": "#/$defs/release_bundle_id"
+        },
+        "baseline_release_bundle_id": {
+          "$ref": "#/$defs/release_bundle_id"
+        },
+        "stage": {
+          "type": "string",
+          "enum": [
+            "offline",
+            "shadow",
+            "canary",
+            "holdback",
+            "done",
+            "rolled_back",
+            "aborted"
+          ]
+        },
+        "held": {
+          "type": "boolean"
+        },
+        "pending_signoffs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 64
+          }
+        }
+      }
+    },
+    "BatchChildProgressSignal": {
+      "description": "Signal 'batch.child_progress' on MaintenanceBatch (CCR-01-04). Sent by child ReplicantJob workflows through SignalExternalWorkflowExecution (a workflow command; no client credential). Children are started with ParentClosePolicy.ABANDON, so the parent cannot rely on child-completion events. The parent keeps the highest seq per child (dedupe and ordering).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "child_job_id",
+        "status",
+        "phase",
+        "seq"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.msg.batch-child-progress/v1"
+        },
+        "child_job_id": {
+          "$ref": "#/$defs/job_id"
+        },
+        "status": {
+          "$ref": "#/$defs/job_status"
+        },
+        "phase": {
+          "$ref": "#/$defs/job_phase"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "KillSwitchSignal": {
+      "description": "Signal 'ops.kill_switch' (R2-016). Sent by control-plane-api as a Temporal batch signal to every running workflow matching the scope: global = all ReplicantJob/MaintenanceBatch; tenant = ReplicantTenantId; repo = ReplicantRepos; bundle = ReplicantReleaseBundleId. Delivery depends on Temporal visibility, not on the replicant Postgres. Workflows started later read the same state at start from the out-of-band mirror (activity ops.read_kill_switches). Latest issued_at per (scope, scope_value) wins.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "notice_id",
+        "scope",
+        "state",
+        "switches",
+        "issued_by",
+        "issued_at",
+        "reason"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.msg.kill-switch/v1"
+        },
+        "notice_id": {
+          "$ref": "#/$defs/notice_id"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "global",
+            "tenant",
+            "repo",
+            "bundle"
+          ]
+        },
+        "scope_value": {
+          "description": "tenant_id, '<host>/<owner>/<name>', or release_bundle_id; absent for global.",
+          "type": "string",
+          "maxLength": 455
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "engaged",
+            "released"
+          ]
+        },
+        "switches": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "starts",
+              "runs",
+              "publishing"
+            ]
+          },
+          "description": "starts: no new runner.start_run (the job waits at its next safe point). runs: cancel active runs (cancelReason operator) and hold. publishing: publisher activities raise retryable PublishingPaused, and the job shows 'Publishing paused by operators'. The 'intake' switch is enforced by intake, not by workflows."
+        },
+        "issued_by": {
+          "$ref": "#/$defs/principal_id"
+        },
+        "issued_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 2000
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "scope": {
+                "const": "global"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "scope_value"
+              ]
+            }
+          },
+          "else": {
+            "required": [
+              "scope_value"
+            ]
+          }
+        }
+      ]
+    },
+    "RetryNodeRequest": {
+      "description": "Update 'ops.retry_node' on ReplicantJob (CCR-07-12). Update ID = operation_id (opr_<ulid>). Sender: control-plane-api only, after checking the actor holds release:operate. The supported way for operators to re-run a failed or stuck node; Temporal reset is operator break-glass only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "operation_id",
+        "node_key",
+        "reason",
+        "actor"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.msg.retry-node/v1"
+        },
+        "operation_id": {
+          "type": "string",
+          "pattern": "^opr_[0-9a-hjkmnp-tv-z]{26}$"
+        },
+        "node_key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,40}$"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 2000
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        }
+      }
+    },
+    "RetryNodeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "accepted"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.msg.retry-node-result/v1"
+        },
+        "accepted": {
+          "type": "boolean"
+        },
+        "new_ordinal": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "denial_reason": {
+          "type": "string",
+          "enum": [
+            "not_failed",
+            "node_unknown",
+            "job_terminal",
+            "not_allowed"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "accepted": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "new_ordinal"
+            ]
+          },
+          "else": {
+            "required": [
+              "denial_reason"
+            ]
+          }
+        }
+      ]
+    },
+    "decision_channel": {
+      "description": "Channels a gate decision can arrive through (orchestrator ruling on CCR-07-07). Shared by GateDecideRequest.channel, winning_decision.channel and GateView.decision_log[].channel. There is no Jira approval channel.",
+      "type": "string",
+      "enum": [
+        "ui",
+        "cli",
+        "api",
+        "slack",
+        "github",
+        "gitea",
+        "system"
+      ]
+    }
+  }
+}

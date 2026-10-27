@@ -1,0 +1,27 @@
+# Local dev secrets and generated config: never committed
+dev/.secrets/
+dev/.env
+dev/compose/.env
+dev/compose/.replicant-dev/
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+build/
+# Go
+/go/bin/
+# OS
+.DS_Store
+tests/fixtures/gateway-scripts/runner-contract-egress/
+tests/runner-contract/results-*.json
+tests/chaos/results-*.json
+# Web
+node_modules/
+web/**/test-results/
+web/**/playwright-report/
+web/**/screenshots/

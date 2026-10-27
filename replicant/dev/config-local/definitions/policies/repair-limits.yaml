@@ -1,0 +1,46 @@
+# Policy (policyType repair_limits; WS-01 owns: ../schemas/policy-repair-limits.v1.json)
+apiVersion: replicant.example.com/v1
+kind: Policy
+metadata:
+  name: repair-limits
+  scope:
+    level: global
+  owners: [replicant-platform]
+  description: "Bounded loops: repair cycles per job (D-15), run retries per node, QA fix loops, PR wait expiry, budgets"
+spec:
+  policyType: repair_limits
+  repair_cycles:
+    default: 5
+    per_workflow_type: {hotfix: 2, maintenance: 1, docs: 3, pr_repair: 1}
+  run_retries:
+    max_per_node: 2           # re-invocations with a new ordinal after retryable AgentRun failures
+    backoff_seconds: 30       # linear: 30 s, 60 s
+  pr_wait:
+    expiry_days: 30           # ADR-009: 30 days after the last PR activity
+    reminder_days: [7, 21]    # notify the requester that the PR is waiting on review
+    per_workflow_type: {maintenance: {expiry_days: 14}}
+  debounce_seconds: 120       # C-MSG pr.event default; review_submitted ends the debounce early
+  qa:                         # WS-05 route_after_qa inputs (XD-05-03)
+    fix_iterations:
+      default: 2              # OQ-05-03 recommendation
+      per_workflow_type: {hotfix: 1, maintenance: 1}
+    env_retries: 1
+    on_fail_after_fixes: fail_job            # OQ-05-01 default (product decision pending)
+    on_fail_after_fixes_per_workflow_type: {}  # e.g. {feature: gate_with_failure} if product chooses the gate option
+  budget:
+    extension_gate: true      # GatewayBudgetExceeded (run/job) opens a budget_extension gate (WS-03 gateway.md 6.6)
+    tenant_quota_wait_days: 7 # tenant period budget exhausted: wait (waiting.reason tenant_budget_exhausted), re-check hourly
+    tenant_quota_check_seconds: 3600
+  maintenance:                # MaintenanceBatch fan-out (ADR-01-007)
+    max_concurrency: 10       # children in active states per batch; waiting_external frees a slot
+    max_concurrent_batches_per_tenant: 2
+    max_batch_usd: 2000       # R2-062: stop starting children when the batch's children have spent this much
+  job_max_age_days: 60        # R2-044: hard lifetime from creation (> 30-day gate wait + PR wait); accepted pending user confirmation
+  max_pr_repair_jobs_per_pr: 3  # XD-FIX-R2-059: enforced by intake (409 pr_repair_cap_reached)
+  dependency_block:           # R2-010: pause, don't fail, when an internal dependency is down
+    probe_initial_seconds: 60
+    probe_max_seconds: 900
+    jitter_seconds: 120
+    max_hours: 72             # then the job ends dependency_unavailable (failed), with compensation
+  platform_dependency:        # R2-012: gateway / repo-mirror / node-pool outages are not charged to run_retries
+    max_restarts_per_node: 20

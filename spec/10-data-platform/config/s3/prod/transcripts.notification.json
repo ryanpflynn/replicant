@@ -1,0 +1,21 @@
+{
+  "QueueConfigurations": [
+    {
+      "Id": "leak-scan",
+      "QueueArn": "arn:aws:sqs:us-east-1:111111111111:replicant-prod-leak-scan",
+      "Events": [
+        "s3:ObjectCreated:*"
+      ],
+      "Filter": {
+        "Key": {
+          "FilterRules": [
+            {
+              "Name": "prefix",
+              "Value": "tenants/"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

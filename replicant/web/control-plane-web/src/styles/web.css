@@ -1,0 +1,136 @@
+/* control-plane-web additions on top of the reviewed prototype stylesheet (app.css, unchanged).
+   Only what a working app needs that a static prototype did not: real form controls, menus, skeletons,
+   decision outcomes, dialogs. Every colour, size and radius is a token; no gradients, no blur, no extra shadows. */
+
+button { font: inherit; color: inherit; }
+button:disabled, .btn[disabled] { opacity: .55; cursor: not-allowed; }
+.btn.danger-solid { background: var(--c-danger-solid); border-color: var(--c-danger-solid); color: var(--c-bg); }
+.btn.danger-solid:hover { background: var(--c-danger-fg); }
+.linkbtn { background: none; border: 0; padding: 0; color: var(--c-text-3); text-decoration: underline; cursor: pointer; font-size: inherit; }
+.attn-t { color: var(--c-attention-fg); font-weight: var(--fw-semibold); }
+.err-t { color: var(--c-danger-fg); }
+.a-mark { color: var(--c-diff-add-mark); } .d-mark { color: var(--c-diff-del-mark); }
+ul.plain { list-style: none; margin: 0; padding: 0; } ul.plain li { margin: 3px 0; }
+
+/* Shell */
+.search { cursor: pointer; text-align: left; font-size: var(--fs-body); }
+.search:hover { border-color: var(--c-line-input); }
+.search svg { flex: none; }
+.crumbs .id { font-weight: var(--fw-medium); }
+.crumbs a { text-decoration: none; color: var(--c-text-2); }
+.crumbs a:hover { color: var(--c-text); }
+.me-wrap { position: relative; }
+.rail .me { width: 100%; background: none; border: 0; border-top: 1px solid var(--c-line); text-align: left; cursor: pointer; }
+.rail .me:hover { background: var(--c-bg-hover); }
+.rail .me .chev { margin-left: auto; }
+.menu { position: absolute; z-index: 30; background: var(--c-bg-raised); border-radius: var(--r-md); box-shadow: var(--shadow-popover); padding: var(--sp-1) 0; }
+.usermenu { bottom: calc(100% + 4px); left: var(--sp-2); width: 340px; }
+.menu-h { padding: var(--sp-1_5) var(--sp-3) var(--sp-1); }
+.menu-it { display: grid; grid-template-columns: 16px 52px minmax(0, 1fr) 12px; align-items: center; gap: var(--sp-2); width: 100%; height: 30px; padding: 0 var(--sp-3); border: 0; background: none; text-align: left; cursor: pointer; }
+.menu-it:hover, .menu-it:focus-visible { background: var(--c-bg-hover); }
+.menu-it.on { background: var(--c-bg-selected); }
+@media (max-width: 1200px) { .rail .me .chev { display: none; } .rail .me { justify-content: center; padding: var(--sp-2) 0; } }
+
+/* Command palette input */
+.palette .q input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--c-text); font: inherit; font-size: var(--fs-body-lg); outline: none; }
+.palette .pl-body { max-height: 440px; overflow: auto; padding-bottom: var(--sp-1); }
+.palette .it { cursor: pointer; min-width: 0; }
+.palette .it .ellipsis { min-width: 0; }
+.palette .it .hint { flex: none; }
+
+/* Filters and query field */
+.chip { cursor: pointer; font-family: var(--font-sans); }
+.chip:hover { border-color: var(--c-line-input); color: var(--c-text); }
+.qform { display: inline-flex; align-items: center; gap: var(--sp-1_5); }
+.qinput { height: 24px; width: 280px; padding: 0 8px; border: 1px solid var(--c-line-input); border-radius: var(--r-sm); background: var(--c-bg); color: var(--c-text); }
+.qinput::placeholder { color: var(--c-text-3); }
+@media (max-width: 1200px) { .qinput { width: 200px; } }
+.listfoot { padding: 10px var(--sp-5); flex-wrap: wrap; }
+.holdpill { padding: 6px var(--sp-5); border-bottom: 1px solid var(--c-line); background: var(--c-bg-sunken); }
+
+/* Tables */
+table.jl tbody tr { cursor: pointer; }
+table.t a.rowlink { color: inherit; text-decoration: none; }
+table.t a.rowlink:hover { text-decoration: underline; text-decoration-color: var(--c-line-strong); }
+table.t a.id { text-decoration: none; }
+table.t.compact td, table.t.compact th { height: 26px; }
+.id.copyable { cursor: copy; }
+.id .copied { margin-left: 6px; font-family: var(--font-sans); font-size: var(--fs-micro); color: var(--c-text-3); }
+.jl td.title { max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
+.jl td.phase { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.jl td.req { max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+.jl .second { display: none; }
+@media (max-width: 1200px) { .jl .second { display: block; } }
+
+/* Skeletons (static, no shimmer: components.md §9) */
+tr.skel td i { display: block; height: 8px; border-radius: var(--r-xs); background: var(--c-bg-sunken); }
+tr.skel:hover td { background: none; }
+.skel-line { height: 10px; margin: 10px 0; border-radius: var(--r-xs); background: var(--c-bg-sunken); }
+.skel-line.tall { height: 18px; }
+.w40 { width: 40%; } .w70 { width: 70%; }
+.gitem.skel-item { display: block; }
+.gitem.skel-item i { display: block; height: 8px; margin: 4px 0; width: 70%; border-radius: var(--r-xs); background: var(--c-bg-sunken); }
+.gitem.skel-item i + i { width: 45%; }
+.diff.skel-block { padding: var(--sp-3); }
+.diff.skel-block i { display: block; height: 8px; margin: 6px 0; width: 80%; background: var(--c-bg-sunken); border-radius: var(--r-xs); }
+
+/* Inbox items are links */
+a.gitem { color: inherit; text-decoration: none; }
+.gitem .sub .mono { font-size: 11px; }
+
+/* Quotes for untrusted text, outside the timeline too */
+.quote { margin-top: 4px; padding: 6px 10px; border-left: 2px solid var(--c-line-strong); color: var(--c-text-2); background: var(--c-bg-sunken); font-size: var(--fs-small); max-width: 720px; }
+.quote .untrusted { font-family: var(--font-mono); font-size: 10px; color: var(--c-text-3); letter-spacing: 0.04em; text-transform: uppercase; display: block; margin-bottom: 2px; }
+.quote .qt { white-space: pre-wrap; overflow-wrap: anywhere; display: block; }
+.plantext { max-width: 760px; }
+.packnote { padding: var(--sp-2) var(--sp-5) 0; }
+
+/* Decision bar: a real comment field and the outcome states (components.md §8) */
+.decide textarea.comment { height: auto; min-height: 30px; resize: vertical; font: inherit; color: var(--c-text); padding: 5px 10px; line-height: var(--lh-body); display: block; width: 100%; }
+.decide textarea.comment::placeholder { color: var(--c-text-3); }
+.decide textarea.comment.need { border-color: var(--c-attention-solid); }
+.decide.done { grid-template-columns: minmax(0, 1fr); min-height: 52px; }
+.decide .stamp { overflow-wrap: anywhere; }
+
+/* Dialogs and fields */
+.field { display: block; width: 100%; padding: 6px 10px; border: 1px solid var(--c-line-input); border-radius: var(--r-sm); background: var(--c-bg); color: var(--c-text); font: inherit; resize: vertical; }
+.consequences { margin: 0; padding-left: 18px; color: var(--c-text-2); }
+.consequences li { margin: 4px 0; }
+.opt { cursor: pointer; }
+.dialog .db p + p { margin-top: 6px; }
+.actres { margin-top: var(--sp-2); }
+
+/* Job header */
+.jobhead .meta a { text-decoration-color: var(--c-line-strong); }
+.metaline { flex-wrap: wrap; }
+.track .st.fail i { background: var(--c-danger-solid); }
+.track .st.skip i { background: var(--c-line-strong); }
+.track .st.skip span { text-decoration: line-through; text-decoration-color: var(--c-line-strong); }
+.tl li .body { min-width: 0; overflow-wrap: anywhere; }
+.tl .runrow .id { font-size: 11px; }
+
+/* Admin */
+.admin-grid { display: grid; grid-template-columns: minmax(0, 1fr) 380px; min-height: 100%; }
+.admin-grid > .side { border-left: 1px solid var(--c-line); }
+.links.infra a { height: auto; padding: 7px 0; align-items: flex-start; border-top: 1px solid var(--c-line); }
+.links.infra a:first-of-type { border-top: 0; }
+.links.infra .iname { display: flex; flex-direction: column; gap: 1px; color: var(--c-text); }
+.links.infra .iname .small { color: var(--c-text-3); }
+@media (max-width: 1200px) { .admin-grid { grid-template-columns: minmax(0, 1fr) 300px; } }
+
+.tabs a[aria-disabled="true"] { color: var(--c-text-3); cursor: default; }
+.rel > .side, .mem > .side { min-width: 0; }
+.capsline { white-space: normal; }
+.caps .idcase { text-transform: none; letter-spacing: 0; font-size: 11px; color: var(--c-text-2); }
+.links a .ext { white-space: nowrap; flex: none; }
+
+/* Waiting on you (/waiting): two tables in sections; the kind cell holds the gate kind or the external PR link */
+.waiting .section-h h3 { font-size: var(--fs-body); }
+.wt td.kindcell { width: 96px; }
+.wt a.prlink { color: var(--c-text); text-decoration: none; }
+.wt a.prlink:hover { text-decoration: underline; text-decoration-color: var(--c-line-strong); }
+.wt td.title { max-width: 420px; }
+.wt th.right { text-align: right; }
+/* Collapsed rail (< 1200 px): app.css hides every label span, which also hid the accent count it then positions as a
+   badge on the icon (ui/README.md annotation 4). Show it again. */
+@media (max-width: 1200px) { .nav a > span.count.attn { display: inline-block; } }

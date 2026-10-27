@@ -1,0 +1,526 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/ws04/briefing/v1.json",
+  "title": "Ecosystem briefing",
+  "description": "WS-04. Artifact type `briefing` (C-ART §4, artifacts bucket, 16 MiB, r90d). Generated deterministically per job at context assembly by activity context.build_briefing from the ecosystem schema and Zoekt (no LLM in v1). Written to steps/context.c<cycle>.n<ordinal>/briefing/briefing.json; a token-budgeted rendering (`briefing.md`) is staged into each run's inputs. Sections that do not fit the budget are omitted from the rendering and remain fetchable through context-mcp briefing_get_section. Free-text fields copied from catalog files, CODEOWNERS, or incident titles are untrusted.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "job_id",
+    "tenant_id",
+    "generated_at",
+    "graph_seq",
+    "target",
+    "sections",
+    "freshness"
+  ],
+  "properties": {
+    "schema": {
+      "const": "replicant.briefing/v1"
+    },
+    "job_id": {
+      "type": "string",
+      "pattern": "^job_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "tenant_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "generator": {
+      "type": "string",
+      "maxLength": 64,
+      "examples": [
+        "briefing-gen@1.0.0"
+      ]
+    },
+    "graph_seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "input_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repo",
+        "repo_id",
+        "base_sha"
+      ],
+      "properties": {
+        "repo": {
+          "type": "string",
+          "maxLength": 455
+        },
+        "repo_id": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "base_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        },
+        "predicted_paths": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        },
+        "planned_paths": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        }
+      }
+    },
+    "sections": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "service": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "services": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "service_ref",
+                  "name"
+                ],
+                "properties": {
+                  "service_ref": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 128
+                  },
+                  "kind": {
+                    "type": "string",
+                    "maxLength": 32
+                  },
+                  "system_ref": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "lifecycle": {
+                    "type": "string",
+                    "maxLength": 32
+                  },
+                  "tier": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 4
+                  },
+                  "description_untrusted": {
+                    "type": "string",
+                    "maxLength": 2000
+                  },
+                  "path_prefix": {
+                    "type": "string",
+                    "maxLength": 1024
+                  }
+                }
+              }
+            }
+          }
+        },
+        "contracts_touched": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "contract_ref",
+              "kind",
+              "path",
+              "reason"
+            ],
+            "properties": {
+              "contract_ref": {
+                "type": "string",
+                "maxLength": 1100
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "openapi",
+                  "protobuf",
+                  "graphql",
+                  "asyncapi",
+                  "jsonschema",
+                  "avro"
+                ]
+              },
+              "path": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "path_predicted",
+                  "path_planned",
+                  "generated_from_touched_code",
+                  "service_provides"
+                ]
+              },
+              "elements_at_risk": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "type": "string",
+                  "maxLength": 512
+                }
+              }
+            }
+          }
+        },
+        "consumers": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "service_ref",
+              "depth",
+              "edge_kinds",
+              "confidence"
+            ],
+            "properties": {
+              "service_ref": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "tenant_id": {
+                "type": "string",
+                "maxLength": 32
+              },
+              "depth": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 5
+              },
+              "edge_kinds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "via": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {
+                  "type": "string",
+                  "maxLength": 512
+                }
+              },
+              "calls_per_min": {
+                "type": "number",
+                "minimum": 0
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "owner_group": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "call_sites_visible": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Call sites in repositories the requester can read. Call sites elsewhere are neither shown nor counted (WS-09 G-05)."
+              }
+            }
+          }
+        },
+        "blast_radius": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "direct_consumers",
+            "transitive_consumers",
+            "max_consumer_tier",
+            "level"
+          ],
+          "properties": {
+            "direct_consumers": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "transitive_consumers": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "tenants_affected": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "max_consumer_tier": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 4
+            },
+            "runtime_calls_per_min": {
+              "type": "number",
+              "minimum": 0
+            },
+            "level": {
+              "type": "string",
+              "enum": [
+                "none",
+                "low",
+                "medium",
+                "high"
+              ],
+              "description": "Deterministic (ecosystem-context.md §5.3). An input to risk.classify (D-19), which may only raise risk from it."
+            }
+          }
+        },
+        "owners": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "pattern",
+              "owners"
+            ],
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "owners": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {
+                  "type": "string",
+                  "maxLength": 200
+                }
+              },
+              "matched_paths": {
+                "type": "array",
+                "maxItems": 50,
+                "items": {
+                  "type": "string",
+                  "maxLength": 1024
+                }
+              }
+            }
+          }
+        },
+        "recent_incidents": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "incident_ref",
+              "severity",
+              "started_at"
+            ],
+            "properties": {
+              "incident_ref": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "service_ref": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "sev1",
+                  "sev2",
+                  "sev3",
+                  "sev4"
+                ]
+              },
+              "title_untrusted": {
+                "type": "string",
+                "maxLength": 300
+              },
+              "started_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "url": {
+                "type": "string",
+                "maxLength": 2048
+              }
+            }
+          }
+        },
+        "constraints": {
+          "description": "Replicant-generated constraints (from policy and the ecosystem graph), e.g. 'proto package ledger.v1 is consumed by 3 services: changes must be wire-compatible'.",
+          "type": "array",
+          "maxItems": 30,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "text",
+              "source"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_.-]{2,63}$"
+              },
+              "text": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "contract_consumers",
+                  "policy",
+                  "codeowners",
+                  "lifecycle"
+                ]
+              }
+            }
+          }
+        },
+        "compat_checks": {
+          "description": "Checks the QA stage must run against the base branch (ecosystem-context.md §7).",
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "tool",
+              "contract_ref",
+              "argv"
+            ],
+            "properties": {
+              "tool": {
+                "type": "string",
+                "enum": [
+                  "buf_breaking",
+                  "oasdiff_breaking",
+                  "graphql_inspector_diff",
+                  "asyncapi_diff",
+                  "json_schema_diff_validator"
+                ]
+              },
+              "contract_ref": {
+                "type": "string",
+                "maxLength": 1100
+              },
+              "argv": {
+                "type": "array",
+                "maxItems": 30,
+                "items": {
+                  "type": "string",
+                  "maxLength": 1024
+                }
+              },
+              "fail_on": {
+                "type": "string",
+                "enum": [
+                  "breaking",
+                  "warn"
+                ]
+              }
+            }
+          }
+        },
+        "code_search_hints": {
+          "type": "array",
+          "maxItems": 30,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "purpose",
+              "zoekt_query"
+            ],
+            "properties": {
+              "purpose": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "zoekt_query": {
+                "type": "string",
+                "maxLength": 1024
+              }
+            }
+          }
+        }
+      }
+    },
+    "freshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z][a-z0-9-]{2,62}$": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "last_success_at",
+            "stale"
+          ],
+          "properties": {
+            "last_success_at": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "stale": {
+              "type": "boolean"
+            },
+            "max_staleness": {
+              "type": "string",
+              "maxLength": 32
+            }
+          }
+        }
+      }
+    },
+    "omitted_sections": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Sections cut from the inline rendering by the budget (fetchable through context-mcp)."
+    }
+  }
+}

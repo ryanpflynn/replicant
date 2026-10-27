@@ -1,0 +1,894 @@
+// local.alloy - Grafana Alloy v1.21.x for the local compose stack (D-20). Owner WS-08; proposed to WS-11 as the
+// replacement for spec/11-local-dev/compose/config/alloy/config.alloy (see cross-ws-dependencies.md XD-08-11).
+// GENERATED from otlp-gateway-core.alloy and node-logs.alloy by tests/gen_local.py: the processing stages are
+// byte-identical to production, so label sets, metadata keys, Langfuse mapping and redaction match exactly.
+// Differences from production (each is a documented parity gap, parity.md in WS-11):
+//   - container discovery uses the Docker socket (discovery.docker) instead of /var/log/pods;
+//   - "namespace" is synthesized: sbx-<tenant> for sandbox containers, replicant-local for everything else;
+//   - sandbox OTLP is NOT re-attributed from Kubernetes pod metadata (no k8sattributes locally): sandbox-declared
+//     identity attributes are accepted. Production strips and re-derives them (otlp-gateway-sandbox.alloy);
+//   - no TLS; Tempo/Langfuse/Prometheus endpoints from env.
+// Required environment: REPLICANT_ENV=local, REPLICANT_CLUSTER=local, REPLICANT_REDACTION_DIR, TEMPO_OTLP_ENDPOINT,
+//   LANGFUSE_OTLP_TRACES_URL, LANGFUSE_BASIC_AUTH, MIMIR_PUSH_URL (=http://prometheus:9090/api/v1/write),
+//   LOKI_PUSH_URL (=http://loki:3100/loki/api/v1/push), OTLP_TLS_DIR (unused locally; any value).
+
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Container logs via the Docker socket.
+// ---------------------------------------------------------------------------------------------------------------
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+
+  filter {
+    name   = "label"
+    values = ["com.docker.compose.project=replicant"]
+  }
+}
+
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/?(.*)"
+    target_label  = "pod"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "k8s_app"
+  }
+
+  // Container name from runner-local's container naming ar-<run body>-<container> only (XD-FIX-R1-209; orchestrator
+  // ruling on XD-W2-08-02). Non-sandbox compose services keep container unset.
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/?ar-[0-9a-hjkmnp-tv-z]{26}-(.+)"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_replicant_example_com_tenant"]
+    target_label  = "sbx_tenant"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_replicant_example_com_job_id"]
+    target_label  = "sbx_job_id"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_replicant_example_com_run_id"]
+    target_label  = "sbx_run_id"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_replicant_example_com_role"]
+    target_label  = "sbx_role"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_replicant_example_com_bundle"]
+    target_label  = "sbx_bundle"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_replicant_example_com_workflow_type"]
+    target_label  = "sbx_workflow_type"
+  }
+
+  rule {
+    source_labels = ["sbx_tenant"]
+    regex         = "(.+)"
+    target_label  = "namespace"
+    replacement   = "sbx-$1"
+  }
+
+  rule {
+    source_labels = ["namespace"]
+    regex         = ""
+    target_label  = "namespace"
+    replacement   = "replicant-local"
+  }
+}
+
+discovery.relabel "sandbox_pods" {
+  targets = discovery.relabel.containers.output
+
+  rule {
+    source_labels = ["__meta_docker_container_label_app_kubernetes_io_managed_by"]
+    regex         = "(agentrun-controller|runner-local)"
+    action        = "keep"
+  }
+}
+
+discovery.relabel "platform_pods" {
+  targets = discovery.relabel.containers.output
+
+  rule {
+    source_labels = ["namespace"]
+    regex         = "sbx-.*"
+    action        = "drop"
+  }
+}
+
+loki.source.docker "sandbox" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.sandbox_pods.output
+  forward_to = [loki.process.sandbox.receiver]
+}
+
+loki.source.docker "platform" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.platform_pods.output
+  forward_to = [loki.process.platform.receiver]
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Sandbox pipeline (Loki tenant "sandbox").
+// The uploader writes one JSON object per selected, redacted transcript event on stdout (session-capture.md s.4):
+//   {"ts":..,"level":..,"stream":"transcript"|"app","event":..,"run_id":..,"span_id":..,"node_key":..,"cycle":..,
+//    "phase":..,"msg":..}
+// Fields that would assert identity (job_id, tenant, run_id) are ignored here: identity comes from pod labels.
+// ---------------------------------------------------------------------------------------------------------------
+loki.process "sandbox" {
+  forward_to = [loki.secretfilter.sandbox.receiver]
+
+  // Flood protection: untrusted code can print without bound. 300 lines/s per pod sustained, burst 3000.
+  stage.limit {
+    rate          = 300
+    burst         = 3000
+    by_label_name = "pod"
+    drop          = true
+  }
+
+  stage.json {
+    expressions = {
+      level    = "level",
+      stream   = "stream",
+      span_id  = "span_id",
+      node_key = "node_key",
+      cycle    = "cycle",
+      phase    = "phase",
+    }
+  }
+
+  // Trace ID is recomputed from the trusted job_id label (C-IDS Rule T-1); a span_id from the line is kept only if
+  // well-formed. Verified locally: job_01m5p7x7r0bt69j0h0fbxepw90 -> fc0575170c8597ce9805552723c08d6e.
+  stage.template {
+    source   = "trace_id"
+    template = `{{ if .sbx_job_id }}{{ printf "replicant.job.trace.v1:%s" .sbx_job_id | sha256sum | trunc 32 }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "span_id"
+    template = `{{ if regexMatch "^[0-9a-f]{16}$" (default "" .span_id) }}{{ .span_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "node_key"
+    template = `{{ if regexMatch "^[a-z][a-z0-9_]{0,40}$" (default "" .node_key) }}{{ .node_key }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "cycle"
+    template = `{{ if regexMatch "^[0-9]{1,3}$" (default "" .cycle) }}{{ .cycle }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "phase"
+    template = `{{ if regexMatch "^[a-z_]{2,32}$" (default "" .phase) }}{{ .phase }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "agentrun"
+    template = `{{ if .sbx_run_id }}{{ printf "ar-%s" (trimPrefix "run_" .sbx_run_id) }}{{ end }}`
+  }
+
+  // principal_id = the run's acting-for principal (C-IDS section 8 maps this pod label to principal_id)
+  stage.template {
+    source   = "principal_id"
+    template = `{{ if regexMatch "^(usr_[0-9a-hjkmnp-tv-z]{26}|svc_[a-z][a-z0-9-]{2,40})$" (default "" .sbx_acting_for) }}{{ .sbx_acting_for }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "level"
+    template = `{{ $l := lower (default "info" .level) }}{{ if has $l (list "debug" "info" "warn" "error") }}{{ $l }}{{ else if eq $l "warning" }}warn{{ else if has $l (list "fatal" "critical" "panic" "err") }}error{{ else }}info{{ end }}`
+  }
+
+  // A sandbox can only ever produce source=app or source=transcript (never audit, never k8s-events), and only
+  // the uploader container (UID 10003, which redacts before shipping, WS-02 controller.md s.4.2) may produce
+  // transcript lines; the agent container (UID 10001, runs untrusted code) is always source=app.
+  stage.template {
+    source   = "source_value"
+    template = `{{ if and (eq (default "" .stream) "transcript") (eq .container "uploader") }}transcript{{ else }}app{{ end }}`
+  }
+
+  // Containers of the AgentRun pod (WS-02 controller.md s.4.2, 18:40Z): init workspace-guard and prepare; sidecars
+  // replicant-agentd, watchdog, builder (qa_build only) and QA services; main agent and uploader.
+  stage.template {
+    source   = "service"
+    template = `{{ if eq .container "agent" }}replicant-sandbox{{ else if eq .container "uploader" }}replicant-sandbox-uploader{{ else if eq .container "watchdog" }}replicant-sandbox-watchdog{{ else if eq .container "replicant-agentd" }}replicant-sandbox-agentd{{ else if eq .container "builder" }}replicant-sandbox-builder{{ else if or (eq .container "workspace-guard") (eq .container "prepare") }}replicant-sandbox-init{{ else }}replicant-sandbox-svc{{ end }}`
+  }
+
+  stage.template {
+    source   = "workflow_type_value"
+    template = `{{ $w := default "none" .sbx_workflow_type }}{{ if has $w (list "bugfix" "feature" "api_change" "docs" "hotfix" "maintenance" "pr_repair" "qa_only" "unrouted") }}{{ $w }}{{ else }}none{{ end }}`
+  }
+
+  stage.template {
+    source   = "role_value"
+    template = `{{ default "none" .sbx_role }}`
+  }
+
+  stage.structured_metadata {
+    values = {
+      job_id            = "sbx_job_id",
+      run_id            = "sbx_run_id",
+      agentrun          = "agentrun",
+      release_bundle_id = "sbx_bundle",
+      trace_id          = "trace_id",
+      span_id           = "span_id",
+      node_key          = "node_key",
+      cycle             = "cycle",
+      phase             = "phase",
+      principal_id      = "principal_id",
+      pod               = "pod",
+    }
+  }
+
+  stage.labels {
+    values = {
+      tenant        = "sbx_tenant",
+      service       = "service",
+      level         = "level",
+      source        = "source_value",
+      workflow_type = "workflow_type_value",
+      role          = "role_value",
+    }
+  }
+
+  stage.static_labels {
+    values = {
+      env     = sys.env("REPLICANT_ENV"),
+      cluster = sys.env("REPLICANT_CLUSTER"),
+    }
+  }
+
+  stage.label_keep {
+    values = ["env", "cluster", "namespace", "service", "tenant", "workflow_type", "role", "level", "source"]
+  }
+
+  stage.tenant {
+    value = "sandbox"
+  }
+
+  // Restricted tenants (WS-09 tenancy.md section 8, R1V-052): their sandbox streams go to their own Loki tenant
+  // "sandbox-<tenant>". LOKI_RESTRICTED_TENANTS_REGEX comes from ConfigMap observability-tenant-classes (key
+  // loki_restricted_tenants_regex, an alternation of tenant slugs rendered from the isolation classes, the same
+  // source as LANGFUSE_EXCLUDED_TENANTS_REGEX); the default matches no tenant.
+  stage.template {
+    source   = "restricted_loki_tenant"
+    template = "sandbox-{{ .sbx_tenant }}"
+  }
+
+  stage.match {
+    selector = "{tenant=~\"" + coalesce(sys.env("LOKI_RESTRICTED_TENANTS_REGEX"), "^$") + "\"}"
+
+    stage.tenant {
+      source = "restricted_loki_tenant"
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Platform pipeline (Loki tenants "platform" and "audit").
+// Replicant services log JSON via the replicant-telemetry logging adapter (telemetry-model.md s.7).
+// ---------------------------------------------------------------------------------------------------------------
+loki.process "platform" {
+  forward_to = [loki.secretfilter.platform.receiver]
+
+  stage.json {
+    expressions = {
+      level              = "level",
+      log_type           = "log_type",
+      tenant_id          = "tenant_id",
+      workflow_type      = "workflow_type",
+      role               = "role",
+      job_id             = "job_id",
+      workflow_id        = "workflow_id",
+      workflow_run_id    = "workflow_run_id",
+      run_id             = "run_id",
+      agentrun           = "agentrun",
+      trace_id           = "trace_id",
+      span_id            = "span_id",
+      node_key           = "node_key",
+      cycle              = "cycle",
+      activity_id        = "activity_id",
+      gate_id            = "gate_id",
+      decision_id        = "decision_id",
+      release_bundle_id  = "release_bundle_id",
+      phase              = "phase",
+      principal_id       = "principal_id",
+      memory_snapshot_id = "memory_snapshot_id",
+    }
+  }
+
+  // Validate every metadata value against its C-IDS 2.0.0 section 12 regex; invalid values are dropped (empty).
+  // workflow_id covers ReplicantJob and children, sys:* system workflows, EvalSuite/EvalCase, ReleasePipeline (rpl_)
+  // and EvalComparisonRun (<rpl_id>:cmp:<n>).
+  stage.template {
+    source   = "job_id"
+    template = `{{ if regexMatch "^job_[0-9a-hjkmnp-tv-z]{26}$" (default "" .job_id) }}{{ .job_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "workflow_id"
+    template = `{{ if regexMatch "^(job_[0-9a-hjkmnp-tv-z]{26}(:[a-z][a-z0-9_]{1,30}:[1-9][0-9]*)?|sys:[a-z][a-z0-9:-]{1,80}|eval_[0-9a-hjkmnp-tv-z]{26}(:case:gtask_[0-9a-hjkmnp-tv-z]{26})?|rpl_[0-9a-hjkmnp-tv-z]{26}(:cmp:[1-9][0-9]*)?)$" (default "" .workflow_id) }}{{ .workflow_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "workflow_run_id"
+    template = `{{ if regexMatch "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" (default "" .workflow_run_id) }}{{ .workflow_run_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "run_id"
+    template = `{{ if regexMatch "^run_[0-9a-hjkmnp-tv-z]{26}$" (default "" .run_id) }}{{ .run_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "agentrun"
+    template = `{{ if regexMatch "^ar-[0-9a-hjkmnp-tv-z]{26}$" (default "" .agentrun) }}{{ .agentrun }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "trace_id"
+    template = `{{ if regexMatch "^[0-9a-f]{32}$" (default "" .trace_id) }}{{ .trace_id }}{{ else if .job_id }}{{ printf "replicant.job.trace.v1:%s" .job_id | sha256sum | trunc 32 }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "span_id"
+    template = `{{ if regexMatch "^[0-9a-f]{16}$" (default "" .span_id) }}{{ .span_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "node_key"
+    template = `{{ if regexMatch "^[a-z][a-z0-9_]{0,40}$" (default "" .node_key) }}{{ .node_key }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "cycle"
+    template = `{{ if regexMatch "^[0-9]{1,3}$" (default "" .cycle) }}{{ .cycle }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "activity_id"
+    template = `{{ if regexMatch "^[a-z][a-z0-9_]{0,40}\\.c[0-9]{1,3}\\.n[0-9]{1,3}\\.[a-z][a-z0-9_]{0,30}$" (default "" .activity_id) }}{{ .activity_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "gate_id"
+    template = `{{ if regexMatch "^gate_[0-9a-hjkmnp-tv-z]{26}$" (default "" .gate_id) }}{{ .gate_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "decision_id"
+    template = `{{ if regexMatch "^dec_[0-9a-hjkmnp-tv-z]{26}$" (default "" .decision_id) }}{{ .decision_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "release_bundle_id"
+    template = `{{ if regexMatch "^rb_[0-9a-hjkmnp-tv-z]{26}$" (default "" .release_bundle_id) }}{{ .release_bundle_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "phase"
+    template = `{{ if regexMatch "^[a-z_]{2,32}$" (default "" .phase) }}{{ .phase }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "principal_id"
+    template = `{{ if regexMatch "^(usr_[0-9a-hjkmnp-tv-z]{26}|svc_[a-z][a-z0-9-]{2,40})$" (default "" .principal_id) }}{{ .principal_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "memory_snapshot_id"
+    template = `{{ if regexMatch "^msnap_[0-9a-hjkmnp-tv-z]{26}$" (default "" .memory_snapshot_id) }}{{ .memory_snapshot_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "tenant_value"
+    template = `{{ $t := default "" .tenant_id }}{{ if and (regexMatch "^[a-z][a-z0-9]*(-[a-z0-9]+)*$" $t) (le (len $t) 32) (ge (len $t) 3) }}{{ $t }}{{ else }}replicant-system{{ end }}`
+  }
+
+  stage.template {
+    source   = "workflow_type_value"
+    template = `{{ $w := default "none" .workflow_type }}{{ if has $w (list "bugfix" "feature" "api_change" "docs" "hotfix" "maintenance" "pr_repair" "qa_only" "unrouted") }}{{ $w }}{{ else }}none{{ end }}`
+  }
+
+  stage.template {
+    source   = "role_value"
+    template = `{{ $r := default "none" .role }}{{ if has $r (list "planner" "implementer" "qa" "reviewer" "repair" "takeover" "eval") }}{{ $r }}{{ else }}none{{ end }}`
+  }
+
+  stage.template {
+    source   = "level"
+    template = `{{ $l := lower (default "info" .level) }}{{ if has $l (list "debug" "info" "warn" "error") }}{{ $l }}{{ else if eq $l "warning" }}warn{{ else if has $l (list "fatal" "critical" "panic" "err") }}error{{ else }}info{{ end }}`
+  }
+
+  stage.template {
+    source   = "source_value"
+    template = `{{ if eq (default "" .log_type) "audit" }}audit{{ else }}app{{ end }}`
+  }
+
+  stage.template {
+    source   = "service"
+    template = `{{ default .container .k8s_app }}`
+  }
+
+  stage.structured_metadata {
+    values = {
+      job_id             = "",
+      workflow_id        = "",
+      workflow_run_id    = "",
+      run_id             = "",
+      agentrun           = "",
+      trace_id           = "",
+      span_id            = "",
+      node_key           = "",
+      cycle              = "",
+      activity_id        = "",
+      gate_id            = "",
+      decision_id        = "",
+      release_bundle_id  = "",
+      phase              = "",
+      principal_id       = "",
+      memory_snapshot_id = "",
+      pod                = "",
+    }
+  }
+
+  stage.labels {
+    values = {
+      tenant        = "tenant_value",
+      service       = "service",
+      level         = "level",
+      source        = "source_value",
+      workflow_type = "workflow_type_value",
+      role          = "role_value",
+    }
+  }
+
+  stage.static_labels {
+    values = {
+      env     = sys.env("REPLICANT_ENV"),
+      cluster = sys.env("REPLICANT_CLUSTER"),
+    }
+  }
+
+  stage.label_keep {
+    values = ["env", "cluster", "namespace", "service", "tenant", "workflow_type", "role", "level", "source"]
+  }
+
+  stage.tenant {
+    value = "platform"
+  }
+
+  stage.match {
+    selector = "{source=\"audit\"}"
+
+    stage.tenant {
+      value = "audit"
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Cilium Hubble denied flows (exec cluster; WS-02 XD-02-08). Cilium's static flow exporter writes JSON flows to a
+// node-local file (Cilium Helm hubble.export.static, filePath ${HUBBLE_EXPORT_FILE}, filtered to verdict DROPPED
+// and DENIED) [unverified: exact Helm keys for the pinned Cilium version; WS-02 owns the Cilium config]. Only
+// sandbox-namespace denials are shipped, to Loki tenant "platform", service "hubble".
+// ---------------------------------------------------------------------------------------------------------------
+local.file_match "hubble" {
+  path_targets = [{
+    "__path__" = coalesce(sys.env("HUBBLE_EXPORT_FILE"), "/var/run/cilium/hubble/events.log"),
+  }]
+}
+
+loki.source.file "hubble" {
+  targets    = local.file_match.hubble.targets
+  forward_to = [loki.process.hubble.receiver]
+}
+
+loki.process "hubble" {
+  forward_to = [loki.secretfilter.platform.receiver]
+
+  stage.json {
+    expressions = {
+      verdict   = "flow.verdict",
+      src_ns    = "flow.source.namespace",
+      src_pod   = "flow.source.pod_name",
+      dest_name = "flow.destination_names[0]",
+    }
+  }
+
+  stage.template {
+    source   = "keep"
+    template = `{{ if and (hasPrefix "sbx-" (default "" .src_ns)) (has (default "" .verdict) (list "DROPPED" "DENIED")) }}yes{{ else }}no{{ end }}`
+  }
+
+  stage.drop {
+    source = "keep"
+    value  = "no"
+  }
+
+  stage.template {
+    source   = "tenant_value"
+    template = `{{ trimPrefix "sbx-" .src_ns }}`
+  }
+
+  stage.template {
+    source   = "agentrun"
+    template = `{{ $p := default "" .src_pod }}{{ if regexMatch "^ar-[0-9a-hjkmnp-tv-z]{26}" $p }}{{ substr 0 29 $p }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "run_id"
+    template = `{{ if .agentrun }}{{ printf "run_%s" (trimPrefix "ar-" .agentrun) }}{{ end }}`
+  }
+
+  stage.structured_metadata {
+    values = {
+      agentrun = "",
+      run_id   = "",
+      pod      = "src_pod",
+    }
+  }
+
+  stage.labels {
+    values = {
+      tenant    = "tenant_value",
+      namespace = "src_ns",
+    }
+  }
+
+  stage.static_labels {
+    values = {
+      env           = sys.env("REPLICANT_ENV"),
+      cluster       = sys.env("REPLICANT_CLUSTER"),
+      service       = "hubble",
+      level         = "warn",
+      source        = "app",
+      workflow_type = "none",
+      role          = "none",
+    }
+  }
+
+  stage.label_keep {
+    values = ["env", "cluster", "namespace", "service", "tenant", "workflow_type", "role", "level", "source"]
+  }
+
+  stage.tenant {
+    value = "platform"
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Second-pass secret redaction (defense in depth; the first pass runs at the source).
+// ---------------------------------------------------------------------------------------------------------------
+loki.secretfilter "sandbox" {
+  forward_to         = [loki.write.default.receiver]
+  gitleaks_config    = sys.env("REPLICANT_REDACTION_DIR") + "/gitleaks-replicant.toml"
+  redact_with        = "[REDACTED:$SECRET_NAME:$SECRET_HASH]"
+  origin_label       = "service"
+  processing_timeout = "250ms"
+  label_timed_out    = false
+}
+
+loki.secretfilter "platform" {
+  forward_to         = [loki.write.default.receiver]
+  gitleaks_config    = sys.env("REPLICANT_REDACTION_DIR") + "/gitleaks-replicant.toml"
+  redact_with        = "[REDACTED:$SECRET_NAME:$SECRET_HASH]"
+  origin_label       = "service"
+  processing_timeout = "250ms"
+}
+
+loki.write "default" {
+  endpoint {
+    url = sys.env("LOKI_PUSH_URL")
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// OTLP (identical to otlp-gateway-core.alloy from here on, TLS removed)
+// ---------------------------------------------------------------------------------------------------------------
+otelcol.receiver.otlp "default" {
+  grpc {
+    endpoint = "0.0.0.0:4317"
+  }
+
+  http {
+    endpoint              = "0.0.0.0:4318"
+    max_request_body_size = "16MiB"
+  }
+
+  output {
+    traces  = [otelcol.processor.memory_limiter.default.input]
+    metrics = [otelcol.processor.memory_limiter.default.input]
+  }
+}
+
+otelcol.processor.memory_limiter "default" {
+  check_interval         = "1s"
+  limit_percentage       = 80
+  spike_limit_percentage = 20
+
+  output {
+    traces  = [otelcol.processor.transform.hygiene.input]
+    metrics = [otelcol.processor.transform.metrics.input]
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Traces
+// ---------------------------------------------------------------------------------------------------------------
+otelcol.processor.transform "hygiene" {
+  error_mode = "ignore"
+
+  trace_statements {
+    context    = "resource"
+    statements = [
+      `set(attributes["replicant.env"], "` + sys.env("REPLICANT_ENV") + `") where attributes["replicant.env"] == nil`,
+      `set(attributes["deployment.environment.name"], "replicant-` + sys.env("REPLICANT_ENV") + `")`,
+    ]
+  }
+
+  trace_statements {
+    context    = "span"
+    statements = [
+      `set(attributes["deployment.environment.name"], resource.attributes["deployment.environment.name"])`,
+      // URLs keep their path and drop query strings that can carry presigned signatures or tokens.
+      `replace_pattern(attributes["url.full"], "\\?.*$", "?[query-removed]")`,
+      `replace_pattern(attributes["http.url"], "\\?.*$", "?[query-removed]")`,
+      `replace_pattern(attributes["db.query.text"], "(?i)(password\\s*=\\s*)'[^']*'", "$${1}'[REDACTED]'")`,
+    ]
+  }
+
+  output {
+    traces = [
+      otelcol.processor.filter.tempo.input,
+      otelcol.processor.filter.langfuse_select.input,
+    ]
+  }
+}
+
+// Tempo branch: drop spans that carry no timing value, then strip content attributes (Tempo has no per-span
+// delete; purge relies on content never reaching it, plus tempo-cli redact for incidents, session-capture.md s.8).
+otelcol.processor.filter "tempo" {
+  error_mode = "ignore"
+
+  traces {
+    span = [
+      `name == "claude_code.tool.blocked_on_user"`,
+    ]
+    spanevent = [
+      `name == "tool.output"`,
+    ]
+  }
+
+  output {
+    traces = [otelcol.processor.transform.tempo_strip.input]
+  }
+}
+
+otelcol.processor.transform "tempo_strip" {
+  error_mode = "ignore"
+
+  trace_statements {
+    context    = "span"
+    statements = [
+      `delete_matching_keys(attributes, "^(langfuse\\.observation\\.(input|output)|gen_ai\\.(prompt|completion|input\\.messages|output\\.messages|system_instructions).*|input\\.value|output\\.value|gen_ai\\.tool\\.call\\.(arguments|result))$")`,
+      `delete_matching_keys(attributes, "^langfuse\\..*")`,
+    ]
+  }
+
+  output {
+    traces = [otelcol.processor.batch.tempo.input]
+  }
+}
+
+otelcol.processor.batch "tempo" {
+  timeout             = "2s"
+  send_batch_size     = 4096
+  send_batch_max_size = 8192
+
+  output {
+    traces = [otelcol.exporter.otlp.tempo.input]
+  }
+}
+
+otelcol.exporter.otlp "tempo" {
+  client {
+    endpoint = sys.env("TEMPO_OTLP_ENDPOINT")
+    headers  = {
+      "X-Scope-OrgID" = "replicant",
+    }
+
+    tls {
+      insecure = true
+    }
+  }
+
+  sending_queue {
+    enabled    = true
+    queue_size = 50000
+  }
+}
+
+// Langfuse branch: keep only agent/LLM observations. Everything else (HTTP, DB, Temporal internals) stays in Tempo.
+otelcol.processor.filter "langfuse_select" {
+  error_mode = "ignore"
+
+  traces {
+    span = [
+      `not (IsMatch(instrumentation_scope.name, "^replicant\\.(agent|gateway|llm)$") or attributes["langfuse.observation.type"] != nil or name == "claude_code.llm_request" or name == "gateway.request")`,
+      `IsMatch(name, "^claude_code\\.") and name != "claude_code.llm_request"`,
+      `name == "gateway.upstream" or name == "agentd.proxy"`,
+      `attributes["replicant.job_id"] == nil`,
+      // Tenants classified `restricted` (WS-09 tenancy classes) send nothing to Langfuse (R2-009, ADR-08-003).
+      // The regex is rendered from tenancy settings into ConfigMap observability-tenant-classes (XD-FIX-R2-009);
+      // "^$" (the default) never matches a tenant ID.
+      `IsMatch(attributes["replicant.tenant_id"], "` + coalesce(sys.env("LANGFUSE_EXCLUDED_TENANTS_REGEX"), "^$") + `")`,
+    ]
+  }
+
+  output {
+    traces = [otelcol.processor.transform.langfuse_map.input]
+  }
+}
+
+otelcol.processor.transform "langfuse_map" {
+  error_mode = "ignore"
+
+  trace_statements {
+    context    = "span"
+    statements = [
+      // Trace-level attributes on EVERY span (C-IDS section 10; Langfuse filters need them on each span).
+      `set(attributes["langfuse.session.id"], attributes["replicant.job_id"])`,
+      `set(attributes["langfuse.user.id"], attributes["replicant.requester_id"]) where attributes["replicant.requester_id"] != nil`,
+      `set(attributes["langfuse.release"], Substring(attributes["replicant.release_bundle_id"], 0, 12)) where attributes["replicant.release_bundle_id"] != nil`,
+      `set(attributes["langfuse.trace.name"], Concat(["replicant-job", attributes["replicant.workflow_type"]], ":")) where attributes["replicant.workflow_type"] != nil`,
+      `set(attributes["langfuse.trace.tags"], [Concat(["tenant", attributes["replicant.tenant_id"]], ":"), Concat(["workflow", attributes["replicant.workflow_type"]], ":"), Concat(["bundle", Substring(attributes["replicant.release_bundle_id"], 0, 12)], ":")]) where attributes["replicant.tenant_id"] != nil and attributes["replicant.workflow_type"] != nil and attributes["replicant.release_bundle_id"] != nil`,
+      `set(attributes["langfuse.trace.metadata.replicant.job_id"], attributes["replicant.job_id"])`,
+      `set(attributes["langfuse.trace.metadata.replicant.tenant_id"], attributes["replicant.tenant_id"]) where attributes["replicant.tenant_id"] != nil`,
+      `set(attributes["langfuse.trace.metadata.replicant.workflow_id"], attributes["replicant.workflow_id"]) where attributes["replicant.workflow_id"] != nil`,
+      `set(attributes["langfuse.trace.metadata.replicant.release_bundle_id"], attributes["replicant.release_bundle_id"]) where attributes["replicant.release_bundle_id"] != nil`,
+      `set(attributes["langfuse.trace.metadata.replicant.memory_snapshot_id"], attributes["replicant.memory_snapshot_id"]) where attributes["replicant.memory_snapshot_id"] != nil`,
+      // Observation-level metadata (filterable top-level keys).
+      `set(attributes["langfuse.observation.metadata.replicant.run_id"], attributes["replicant.run_id"]) where attributes["replicant.run_id"] != nil`,
+      `set(attributes["langfuse.observation.metadata.replicant.node_key"], attributes["replicant.node_key"]) where attributes["replicant.node_key"] != nil`,
+      `set(attributes["langfuse.observation.metadata.replicant.cycle"], attributes["replicant.cycle"]) where attributes["replicant.cycle"] != nil`,
+      `set(attributes["langfuse.observation.metadata.replicant.role"], attributes["replicant.role"]) where attributes["replicant.role"] != nil`,
+      `set(attributes["langfuse.observation.metadata.replicant.memory_entry_ids"], attributes["replicant.memory_entry_ids"]) where attributes["replicant.memory_entry_ids"] != nil`,
+      // Generations (ADR-006): the replicant-gateway-shim's gateway.request span (WS-03 gateway.md s.7) is the single
+      // source of generation observations: authoritative usage and cost, identical for Claude Code, Codex and
+      // in-worker LLM calls. Claude Code's own claude_code.llm_request spans stay plain spans (timing only) so
+      // nothing is counted twice.
+      `set(attributes["langfuse.observation.type"], "generation") where name == "gateway.request"`,
+      `set(attributes["langfuse.observation.model.name"], attributes["gen_ai.request.model"]) where name == "gateway.request" and attributes["gen_ai.request.model"] != nil`,
+      `set(attributes["langfuse.observation.cost_details"], Format("{\"total\":%.6f}", [Double(attributes["replicant.cost_micros"]) / 1000000.0])) where name == "gateway.request" and attributes["replicant.cost_micros"] != nil`,
+      `set(attributes["langfuse.observation.type"], "span") where name == "claude_code.llm_request"`,
+    ]
+  }
+
+  output {
+    traces = [otelcol.processor.batch.langfuse.input]
+  }
+}
+
+otelcol.processor.batch "langfuse" {
+  timeout             = "5s"
+  send_batch_size     = 512
+  send_batch_max_size = 1024
+
+  output {
+    traces = [otelcol.exporter.otlphttp.langfuse.input]
+  }
+}
+
+otelcol.exporter.otlphttp "langfuse" {
+  traces_endpoint = sys.env("LANGFUSE_OTLP_TRACES_URL")
+
+  client {
+    endpoint    = sys.env("LANGFUSE_OTLP_TRACES_URL")
+    compression = "gzip"
+    headers     = {
+      "Authorization"                = "Basic " + sys.env("LANGFUSE_BASIC_AUTH"),
+      "x-langfuse-ingestion-version" = "4",
+    }
+  }
+
+  sending_queue {
+    enabled    = true
+    queue_size = 20000
+  }
+
+  retry_on_failure {
+    enabled          = true
+    max_elapsed_time = "30m"
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Metrics
+// ---------------------------------------------------------------------------------------------------------------
+otelcol.processor.transform "metrics" {
+  error_mode = "ignore"
+
+  metric_statements {
+    context    = "metric"
+    statements = [
+      `set(name, "replicant_http_server_request_duration") where name == "http.server.request.duration"`,
+      `set(name, "replicant_http_client_request_duration") where name == "http.client.request.duration"`,
+      `set(name, "replicant_cli_cost_usd") where name == "claude_code.cost.usage"`,
+      `set(unit, "") where name == "replicant_cli_cost_usd"`,
+      `set(name, "replicant_cli_tokens") where name == "claude_code.token.usage"`,
+      `set(unit, "") where name == "replicant_cli_tokens"`,
+    ]
+  }
+
+  metric_statements {
+    context    = "datapoint"
+    statements = [
+      // C-IDS section 11: identifiers never become labels (they may be exemplars). Before deleting, mark the series
+      // with forbidden_label=<key> (CCR-08-07) so alert ReplicantForbiddenMetricLabel can find the emitter.
+      `set(attributes["forbidden_label"], "job_id") where attributes["replicant.job_id"] != nil or attributes["job_id"] != nil`,
+      `set(attributes["forbidden_label"], "run_id") where attributes["replicant.run_id"] != nil or attributes["run_id"] != nil`,
+      `set(attributes["forbidden_label"], "principal_id") where attributes["replicant.principal_id"] != nil or attributes["principal_id"] != nil or attributes["replicant.requester_id"] != nil`,
+      `delete_matching_keys(attributes, "^(replicant\\.)?(job_id|run_id|workflow_id|workflow_run_id|gate_id|decision_id|principal_id|requester_id|agentrun|session\\.id|user\\..*)$")`,
+      `set(attributes["service"], resource.attributes["service.name"]) where attributes["service"] == nil and resource.attributes["service.name"] != nil`,
+      `set(attributes["route"], attributes["http.route"]) where attributes["http.route"] != nil`,
+      `set(attributes["method"], attributes["http.request.method"]) where attributes["http.request.method"] != nil`,
+      `set(attributes["status_code"], attributes["http.response.status_code"]) where attributes["http.response.status_code"] != nil`,
+      `delete_matching_keys(attributes, "^(http\\..*|url\\..*|server\\..*|network\\..*|user_agent\\..*|client\\..*)$")`,
+      `set(attributes["cli"], "claude-code") where metric.name == "replicant_cli_cost_usd" or metric.name == "replicant_cli_tokens"`,
+    ]
+  }
+
+  output {
+    metrics = [otelcol.exporter.prometheus.mimir.input]
+  }
+}
+
+otelcol.exporter.prometheus "mimir" {
+  add_metric_suffixes              = true
+  include_target_info              = false
+  include_scope_labels             = false
+  resource_to_telemetry_conversion = false
+  forward_to                       = [prometheus.remote_write.mimir.receiver]
+}
+
+prometheus.remote_write "mimir" {
+  endpoint {
+    url            = sys.env("MIMIR_PUSH_URL")
+    send_exemplars = true
+    headers        = {
+      "X-Scope-OrgID" = "replicant",
+    }
+
+    queue_config {
+      capacity             = 20000
+      max_samples_per_send = 4000
+    }
+  }
+
+  external_labels = {
+    env     = sys.env("REPLICANT_ENV"),
+    cluster = "local",
+  }
+}

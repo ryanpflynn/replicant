@@ -1,0 +1,15 @@
+{
+  "Rules": [
+    {
+      "ID": "housekeeping",
+      "Status": "Enabled",
+      "Filter": {},
+      "Expiration": {
+        "ExpiredObjectDeleteMarker": true
+      },
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 2
+      }
+    }
+  ]
+}

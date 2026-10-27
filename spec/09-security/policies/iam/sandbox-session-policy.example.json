@@ -1,0 +1,65 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging",
+        "s3:AbortMultipartUpload",
+        "s3:ListMultipartUploadParts"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/*",
+        "arn:aws:s3:::acme-replicant-prod-transcripts/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/*",
+        "arn:aws:s3:::acme-replicant-prod-session/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/*"
+      ]
+    },
+    {
+      "Effect": "Deny",
+      "Action": "s3:PutObject",
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/*",
+        "arn:aws:s3:::acme-replicant-prod-transcripts/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/*",
+        "arn:aws:s3:::acme-replicant-prod-session/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/*"
+      ],
+      "Condition": {
+        "StringNotEqualsIfExists": {
+          "s3:x-amz-server-side-encryption-aws-kms-key-id": "arn:aws:kms:us-east-1:111111111111:key/7c1e2d3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f"
+        }
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/inputs/*",
+        "arn:aws:s3:::acme-replicant-prod-transcripts/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/inputs/*",
+        "arn:aws:s3:::acme-replicant-prod-session/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/inputs/*",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/manifest.json"
+      ]
+    },
+    {
+      "Effect": "Deny",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/agentrun_record/*",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/inbox/*",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/inputs/*",
+        "arn:aws:s3:::acme-replicant-prod-transcripts/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/inputs/*",
+        "arn:aws:s3:::acme-replicant-prod-session/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/inputs/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "kms:GenerateDataKey",
+        "kms:Decrypt"
+      ],
+      "Resource": "arn:aws:kms:us-east-1:111111111111:key/7c1e2d3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f"
+    }
+  ]
+}

@@ -1,0 +1,568 @@
+{
+  "uid": "replicant-overview",
+  "title": "Replicant overview",
+  "tags": [
+    "replicant",
+    "overview"
+  ],
+  "timezone": "utc",
+  "schemaVersion": 41,
+  "version": 1,
+  "editable": false,
+  "graphTooltip": 1,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "templating": {
+    "list": [
+      {
+        "name": "tenant",
+        "label": "Tenant",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "mimir"
+        },
+        "query": {
+          "query": "label_values(replicant_jobs_terminal_total, tenant)",
+          "refId": "tenant"
+        },
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "current": {}
+      },
+      {
+        "name": "workflow_type",
+        "label": "Workflow type",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "mimir"
+        },
+        "query": {
+          "query": "label_values(replicant_jobs_terminal_total, workflow_type)",
+          "refId": "workflow_type"
+        },
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "current": {}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "First progress within 60 s (SLO-1, target 99%)",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "description": "Share of jobs whose first non-intake phase was visible within 60 s of the trigger, last hour.",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "1 - replicant:first_progress_bad:ratio_rate1h",
+          "legendFormat": "",
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 2,
+      "title": "Trigger to first sandbox ready p95 (SLO-2, target < 90 s)",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "description": "p95 of trigger -> first AgentRun AgentRunning, last hour.",
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "replicant:sandbox_ready_seconds:p95_1h",
+          "legendFormat": "",
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 3,
+      "title": "Control-plane error budget remaining (SLO-3, 99.9% / 30 d)",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "description": "1 = untouched budget, 0 = exhausted.",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "1 - (sum(increase(replicant_http_server_request_duration_seconds_count{service=\"control-plane-api\",status_code=~\"5..\"}[30d])) / sum(increase(replicant_http_server_request_duration_seconds_count{service=\"control-plane-api\"}[30d]))) / 0.001",
+          "legendFormat": "",
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 4,
+      "title": "Jobs waiting on humans / stalled",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "description": "Gauges from sys:projection-reconciler (every 2 min). Stalled = running, no progress 30 min.",
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "sum(replicant_jobs_in_status{status=\"waiting_human\"})",
+          "legendFormat": "waiting_human",
+          "exemplar": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "sum(replicant_jobs_stalled)",
+          "legendFormat": "stalled",
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 5,
+      "title": "Jobs finished per hour by outcome",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "description": "Terminal statuses per hour (C-IDS section 6).",
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "sum by (outcome) (increase(replicant_jobs_terminal_total{tenant=~\"$tenant\",workflow_type=~\"$workflow_type\"}[1h]))",
+          "legendFormat": "{{outcome}}",
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 6,
+      "title": "Job failure ratio by workflow type (1 h)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "description": "Alert ReplicantJobFailureRateHigh at 25% with >= 8 jobs.",
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "sum by (workflow_type) (increase(replicant_jobs_terminal_total{outcome=\"failed\",tenant=~\"$tenant\"}[1h])) / clamp_min(sum by (workflow_type) (increase(replicant_jobs_terminal_total{tenant=~\"$tenant\"}[1h])), 1)",
+          "legendFormat": "{{workflow_type}}",
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 7,
+      "title": "Run failures by reason (6 h)",
+      "type": "barchart",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "description": "C-CRD section 4 reasons. Infrastructure reasons page WS-02; profile reasons ticket WS-03.",
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "sort_desc(sum by (reason) (increase(replicant_controller_phase_transitions_total{phase=\"Failed\"}[6h])))",
+          "legendFormat": "{{reason}}",
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 8,
+      "title": "Sandbox startup p95 by segment and isolation",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "description": "Creation -> scheduled -> workspace_ready -> agent_running (WS-02 segments).",
+      "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, phase, isolation) (rate(replicant_controller_run_startup_seconds_bucket[30m])))",
+          "legendFormat": "{{isolation}} {{phase}}",
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 9,
+      "title": "LLM spend per hour by tenant (USD)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "description": "From replicant_gateway_cost_micros_total. The cost ledger (Postgres cost schema) is authoritative.",
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "topk(10, replicant:llm_cost_usd:increase1h)",
+          "legendFormat": "{{tenant}}",
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 10,
+      "title": "Open gates by kind and oldest age",
+      "type": "table",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "description": "Approval backlog (D-19).",
+      "gridPos": {
+        "x": 12,
+        "y": 20,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "sum by (tenant, gate_kind) (replicant_gates_open)",
+          "legendFormat": "",
+          "exemplar": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "max by (tenant, gate_kind) (replicant_gate_oldest_open_age_seconds)",
+          "legendFormat": "",
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "transformations": [
+        {
+          "id": "merge"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Temporal task queue backlog age",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "description": "Above 60 s pages (TemporalWorkflowTaskBacklog).",
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "max by (task_queue) (approximate_backlog_age_seconds{task_queue=~\"replicant-.+\"})",
+          "legendFormat": "{{task_queue}}",
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 12,
+      "title": "Error logs per service (5 m rate)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "description": "Loki recording rule replicant:log_errors:rate5m; click through to Explore.",
+      "gridPos": {
+        "x": 12,
+        "y": 28,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "topk(10, replicant:log_errors:rate5m)",
+          "legendFormat": "{{service}}",
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 13,
+      "title": "Recent failed jobs",
+      "type": "table",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "replicant-pg"
+      },
+      "description": "Click job_id for the job drilldown.",
+      "gridPos": {
+        "x": 0,
+        "y": 36,
+        "w": 24,
+        "h": 10
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "replicant-pg"
+          },
+          "rawSql": "SELECT j.job_id, j.tenant_id, j.workflow_type, j.status, j.updated_at, substr(encode(sha256(convert_to('replicant.job.trace.v1:' || j.job_id, 'UTF8')), 'hex'), 1, 32) AS trace_id FROM jobs_read.jobs j WHERE j.status = 'failed' AND $__timeFilter(j.updated_at) AND ('$tenant' = '$__all' OR j.tenant_id IN ($tenant)) ORDER BY j.updated_at DESC LIMIT 50",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "job_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Job drilldown",
+                    "url": "/d/replicant-job/job?var-job_id=${__value.raw}"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {}
+    }
+  ],
+  "links": [],
+  "annotations": {
+    "list": [
+      {
+        "name": "Job terminal (failed)",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "replicant-pg"
+        },
+        "enable": false,
+        "iconColor": "#c4162a",
+        "rawQuery": "SELECT terminal_at AS time, job_id AS text FROM jobs_read.jobs WHERE terminal_outcome = 'failed' AND $__timeFilter(terminal_at)"
+      }
+    ]
+  }
+}

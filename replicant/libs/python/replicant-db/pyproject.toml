@@ -1,0 +1,30 @@
+[project]
+name = "replicant-db"
+version = "0.1.0"
+description = "Replicant database: models, the single linear Alembic history (WS-10 framework + all 17 owner DDL files), migrate CLI, maintenance, startup revision check"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "sqlalchemy[asyncio]>=2.0.36",
+  "alembic>=1.14",
+  "psycopg[binary]>=3.2",
+]
+
+[project.optional-dependencies]
+aws = ["boto3>=1.35"]
+
+[project.scripts]
+replicant-db = "replicant_db.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["replicant_db"]
+artifacts = ["replicant_db/sql/**/*.sql", "replicant_db/migrations/script.py.mako"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

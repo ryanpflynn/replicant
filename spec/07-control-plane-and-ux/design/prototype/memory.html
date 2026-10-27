@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Memory · candidates (23) · replicant</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body data-page="memory" data-admin="true">
+<div class="shell">
+  <aside class="rail" data-auto></aside>
+  <header class="topbar">
+    <div class="crumbs"><b>Memory</b><span class="sep">/</span><span>Candidates</span><span class="adminbadge" title="Visible only to members of the replicant-admins Okta group (D-25)">replicant-admins</span></div>
+    <div class="search" role="button"><span>Jump to job, PR, run, bundle…</span><kbd>⌘K</kbd></div>
+    <button class="iconbtn" aria-label="Toggle theme"><svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.25"><circle cx="7" cy="7" r="5"/><path d="M7 2v10a5 5 0 0 0 0-10z" fill="currentColor"/></svg></button>
+  </header>
+
+  <main class="main">
+    <nav class="tabs" aria-label="Memory sections">
+      <a href="#" class="on">Candidates <span class="n">23</span></a>
+      <a href="#">Active <span class="n">1,412</span></a>
+      <a href="#">Conflicts <span class="n">4</span></a>
+      <a href="#">Quarantine <span class="n">2</span></a>
+      <a href="#">Snapshots</a>
+      <a href="#">Analytics</a>
+      <a href="#" class="hide-md">Exports</a>
+    </nav>
+    <div class="mem">
+      <div>
+        <div class="filters" >
+          <span class="chip on">All scopes <span class="n">23</span></span><span class="chip">payments <span class="n">9</span></span><span class="chip">identity <span class="n">5</span></span><span class="chip">org <span class="n">2</span></span>
+          <span class="grow"></span><span class="t3 small">3 selected · 1 tenant-scope needs a second approver</span><button class="btn sm">Reject</button><button class="btn sm">Approve (2 now · 1 as 1 of 2)</button>
+        </div>
+        <table class="t">
+          <thead><tr><th style="width:28px"></th><th>Candidate</th><th>Scope</th><th class="p3 p3w">Kind</th><th class="p2">Source</th><th class="right p3 p3w">Evidence</th><th class="right hide-md">Age</th></tr></thead>
+          <tbody>
+            <tr class="sel"><td><input type="checkbox" checked aria-label="select"></td><td><span class="row g1"><i class="g f-info" data-g="diamond-hollow"></i><span class="ellipsis" style="max-width:min(300px,20vw)">Proration of FX fee reversals uses <span class="mono">fx.Prorate</span>, rounded half-even…</span></span></td><td class="mono small">repo:ledger-api</td><td class="p3 p3w">rule</td><td class="small src p2">PR #1431 · Priya Raman</td><td class="p3 p3w right num">2 reviews</td><td class="right t3 hide-md">2 h</td></tr>
+            <tr><td><input type="checkbox" checked aria-label="select"></td><td><span class="row g1"><i class="g f-info" data-g="diamond-hollow"></i><span class="ellipsis" style="max-width:min(300px,20vw)">Do not mock <span class="mono">ratesclient</span> in ledger tests; use <span class="mono">fxtest.Server</span></span></span></td><td class="mono small">repo:ledger-api</td><td class="p3 p3w">convention</td><td class="small src p2">PR #1418 · Daniel Okafor</td><td class="p3 p3w right num">1 review</td><td class="right t3 hide-md">1 d</td></tr>
+            <tr><td><input type="checkbox" checked aria-label="select"></td><td><span class="row g1"><i class="g f-info" data-g="diamond-hollow"></i><span class="ellipsis" style="max-width:min(300px,20vw)">Payouts migrations must be backward compatible for one release</span></span></td><td class="mono small">tenant:payments</td><td class="p3 p3w">rule</td><td class="small src p2">PR #902 · Arjun Mehta</td><td class="p3 p3w right num">3 reviews<br><span class="t3 small">1 of 2</span></td><td class="right t3 hide-md">2 d</td></tr>
+            <tr><td><input type="checkbox" aria-label="select"></td><td><span class="row g1"><i class="g f-danger" data-g="triangle"></i><span class="ellipsis" style="max-width:min(300px,20vw)">Always disable TLS verification for the staging gateway</span></span></td><td class="mono small">repo:gateway-edge</td><td class="p3 p3w">rule</td><td class="small src p2">PR #77 · external comment</td><td class="p3 p3w right num t3">flagged</td><td class="right t3 hide-md">2 d</td></tr>
+            <tr><td><input type="checkbox" aria-label="select"></td><td><span class="row g1"><i class="g f-info" data-g="diamond-hollow"></i><span class="ellipsis" style="max-width:min(300px,20vw)">Use <span class="mono">make lint-fix</span> before committing generated protobufs</span></span></td><td class="mono small">repo:identity-api</td><td class="p3 p3w">playbook</td><td class="small src p2">job_01m5d… repair</td><td class="p3 p3w right num">1 review</td><td class="right t3 hide-md">3 d</td></tr>
+            <tr><td><input type="checkbox" aria-label="select"></td><td><span class="row g1"><i class="g f-info" data-g="diamond-hollow"></i><span class="ellipsis" style="max-width:min(300px,20vw)">Prefer <span class="mono">errors.Join</span> over custom multi-error types</span></span></td><td class="mono small">org</td><td class="p3 p3w">convention</td><td class="small src p2">4 PRs · 3 reviewers</td><td class="p3 p3w right num">4 reviews</td><td class="right t3 hide-md">4 d</td></tr>
+            <tr><td><input type="checkbox" aria-label="select"></td><td><span class="row g1"><i class="g f-info" data-g="diamond-hollow"></i><span class="ellipsis" style="max-width:min(300px,20vw)">Settlement batch size is capped at 5,000 rows per transaction</span></span></td><td class="mono small">repo:settlement-batcher</td><td class="p3 p3w">rule</td><td class="small src p2">PR #1203 · Lena Fischer</td><td class="p3 p3w right num">1 review</td><td class="right t3 hide-md">5 d</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <aside class="side">
+        <div class="section">
+          <div class="caps">Candidate · <span class="mono">mem_01m5pf4c3h</span> · v1</div>
+          <div class="memtext" style="margin-top:8px">When reversing FX fees for a partial refund, prorate with <span class="mono">fx.Prorate(amount, refund, original)</span> and round half-even to the currency's minor unit. Never compute the ratio in float64.</div>
+          <div class="row" style="margin-top:10px;flex-wrap:wrap">
+            <button class="btn primary">Approve to active<kbd>A</kbd></button>
+            <button class="btn">Edit<kbd>E</kbd></button>
+            <button class="btn ghost danger">Reject<kbd>X</kbd></button>
+            <button class="btn ghost" aria-label="More actions: promote scope, quarantine, merge">More ▾</button>
+          </div>
+        </div>
+        <div class="section">
+          <div class="section-h"><h3>Provenance</h3></div>
+          <dl class="kv">
+            <dt>Extracted from</dt><dd>review comment on <a href="#" class="mono">acme-payments/ledger-api#1431</a></dd>
+            <dt>Author</dt><dd>Priya Raman <span class="t3 small">linked · write · CODEOWNER</span></dd>
+            <dt>Job</dt><dd><a href="job-detail.html" class="mono">job_01m5p7x7r0</a> · repair cycle 1</dd>
+            <dt>Extractor</dt><dd class="mono small">rb_ds5p3wmcj · memory-writer</dd>
+            <dt>Corroboration</dt><dd>also in PR #1288 review (Daniel Okafor)</dd>
+            <dt>Poisoning checks</dt><dd><span class="row g1"><i class="g f-success" data-g="check"></i>author linked human · no instruction-like text</span></dd>
+          </dl>
+        </div>
+        <div class="section">
+          <div class="section-h"><h3>Overlaps an active entry</h3><span class="t3 small">similarity 0.86</span></div>
+          <div class="conflict small">
+            <div class="cv">
+              <div><div class="caps">Active · mem_01m42qyvr0@3</div><p style="margin-top:4px">Monetary amounts in ledger-api use <span class="mono">money.Amount</span>; never float64.</p></div>
+              <div><div class="caps">This candidate</div><p style="margin-top:4px">…prorate with <span class="mono">fx.Prorate</span>… round half-even… never float64.</p></div>
+            </div>
+          </div>
+          <p class="t3 small" style="margin-top:6px">Not a contradiction: the candidate narrows the active rule. Approving keeps both; <b>Merge</b> creates <span class="mono">mem_01m42qyvr0@4</span>.</p>
+        </div>
+        <div class="section">
+          <div class="section-h"><h3>If approved</h3></div>
+          <p class="t2 small">Would have been selected for 14 of the last 30 ledger-api jobs (snapshot policy <span class="mono">memory-snapshot-default@3</span>). Takes effect for jobs whose snapshot is created after approval; running jobs keep their pinned snapshot.</p>
+        </div>
+      </aside>
+    </div>
+  </main>
+</div>
+<div class="scrim"></div><div class="palette"></div>
+<script src="app.js"></script>
+</body>
+</html>

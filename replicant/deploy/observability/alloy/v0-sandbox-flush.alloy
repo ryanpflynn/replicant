@@ -1,0 +1,14 @@
+// v0 (M3) addition to WS-08's local.alloy, loaded next to it (alloy run <dir>): the receiving end of runner-local's
+// per-run sandbox log flush (RUNNER_LOG_FLUSH_URL). runner-local pushes every line of every container of a finished
+// run with the labels the Docker discovery would have derived (sbx_tenant, sbx_job_id, sbx_run_id, sbx_role,
+// sbx_bundle, sbx_workflow_type, container, pod, namespace) and the engine's timestamps, into the SAME sandbox
+// pipeline, so attribution, redaction and tenancy are unchanged and lines the tailer already shipped are duplicates
+// Loki drops. Local stand-in for the B-LOG-01 fallback (short-lived containers are otherwise missed by the tailer).
+loki.source.api "sandbox_flush" {
+  http {
+    listen_address = "0.0.0.0"
+    listen_port    = 3500
+  }
+  use_incoming_timestamp = true
+  forward_to             = [loki.process.sandbox.receiver]
+}

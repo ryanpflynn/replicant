@@ -1,0 +1,118 @@
+openapi: 3.1.1
+info:
+  title: Replicant API common components
+  version: 1.0.0
+  description: 'Owner WS-07. Components shared by every OpenAPI document that is merged into the control-plane-api surface
+
+    (WS-07 control-plane-api, WS-06 releases, WS-03 rightsizing/quota, WS-08 audit/leaks). Merged documents
+
+    `$ref` these instead of defining their own copies, so the merged document has exactly one definition per
+
+    name (R1 syntax finding on component collisions; XD-FIX-R1-SYNTAX-OPENAPI).
+
+    '
+paths: {}
+components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: RFC 9651 sf-string. UI/CLI send a fresh ULID per user action and reuse it on retry; services send the logical idempotency key.
+      schema:
+        type: string
+        maxLength: 260
+  responses:
+    Problem:
+      description: RFC 9457 problem
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    Problem:
+      type: object
+      required:
+      - type
+      - title
+      - status
+      - code
+      - request_id
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          description: Machine reason, e.g. not_in_admin_group, insufficient_repo_permission, stale_view, gate_closed, quota_exceeded
+        request_id:
+          type: string
+        audit_id:
+          type: string
+          pattern: ^aud_[0-9a-hjkmnp-tv-z]{26}$
+        retryable:
+          type: boolean
+        retry_after_seconds:
+          type: integer
+        current_digest:
+          type: string
+          pattern: ^sha256:[0-9a-f]{64}$
+    ReleaseBundleId:
+      type: string
+      pattern: ^rb_[0-9a-hjkmnp-tv-z]{26}$
+    TenantId:
+      type: string
+      minLength: 3
+      maxLength: 32
+      pattern: ^[a-z][a-z0-9]*(-[a-z0-9]+)*$
+    JobId:
+      type: string
+      pattern: ^job_[0-9a-hjkmnp-tv-z]{26}$
+    PrincipalId:
+      type: string
+      pattern: ^(usr_[0-9a-hjkmnp-tv-z]{26}|svc_[a-z][a-z0-9-]{2,40})$
+    LinkStatus:
+      description: Canonical identity link status (identity.sql links.status; R1-175)
+      type: string
+      enum:
+      - pending
+      - active
+      - suspended
+      - revoked
+      - rejected
+    WorkerRoutingStatus:
+      description: Temporal Worker Deployment version status as reported by DescribeWorkerDeployment (R1-175)
+      type: string
+      enum:
+      - inactive
+      - current
+      - ramping
+      - draining
+      - drained
+    RestoreStep:
+      type: object
+      required:
+      - restore_step_id
+      - state
+      description: Shared envelope of every post-restore step (XD-FIX-R1-237, XD-W3-R1V-033); restore_step_id is opaque to callers
+      properties:
+        restore_step_id:
+          type: string
+          maxLength: 64
+        state:
+          type: string
+          enum:
+          - queued
+          - running
+          - succeeded
+          - failed
+        detail:
+          type: object

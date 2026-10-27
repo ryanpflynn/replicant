@@ -1,0 +1,67 @@
+# Temporal server dynamic config for the replicant (self-hosted, server 1.32.x; mounted from a ConfigMap and
+# referenced by dynamicConfigClient.filepath). Keys and defaults verified against
+# temporalio/temporal v1.32.1 common/dynamicconfig/constants.go (2026-10-24). Format: key -> list of
+# {value, constraints}. Only deliberate deviations from defaults and explicitly pinned values are listed.
+
+# ---- History and payload limits: keep the server defaults explicit (alerts key off them) ----
+limit.historyCount.error:          # 51,200 events per run: hard failure
+  - value: 51200
+limit.historyCount.warn:
+  - value: 10240
+limit.historyCount.suggestContinueAsNew:   # drives workflow.info().is_continue_as_new_suggested()
+  - value: 4096
+limit.historySize.error:
+  - value: 52428800                # 50 MB
+limit.historySize.warn:
+  - value: 10485760                # 10 MB
+limit.historySize.suggestContinueAsNew:
+  - value: 4194304                 # 4 MB
+limit.blobSize.error:
+  - value: 2097152                 # 2 MiB per payload
+limit.blobSize.warn:
+  - value: 524288
+history.maximumSignalsPerExecution:
+  - value: 10000
+history.maxInFlightUpdates:
+  - value: 10
+history.maxTotalUpdates:
+  - value: 2000
+
+# ---- Tenant fairness on replicant task queues (ADR-01-006). Plain bool = immediate change. ----
+# R1-022: on in every replicant namespace (local, dev, staging, prod), so behaviour is tested before prod.
+matching.enableFairness:
+  - value: true
+
+# ---- Frontend protection ----
+# Temporal's dynamic config has no per-caller-identity rate limit (v1.32.1 constants.go defines only global,
+# per-namespace, visibility and replication-inducing RPS keys). Signal-flood control for run-notifier is
+# therefore layered (R1-022, XD-FIX-R1-022): (1) the namespace RPS below, (2) a per-identity token bucket in
+# WS-09's custom Authorizer (run-notifier CN: 50 SignalWorkflowExecution/s burst 200; other callers 200/s),
+# (3) limit.numPendingSignals / history.maximumSignalsPerExecution per execution, (4) the workflow ignores and
+# counts unknown run_ids (replicant_workflow_unknown_run_signals_total) and Continue-As-New bounds history.
+frontend.namespaceRPS:             # per frontend instance; 3 frontends -> 7,200 RPS ceiling for the namespace
+  - value: 2400
+    constraints:
+      namespace: replicant-prod
+  - value: 600                     # local, dev, staging (one frontend each)
+
+# ---- Worker Versioning drainage (defaults kept; listed because the release UI shows drainage lag) ----
+matching.wv.VersionDrainageStatusRefreshInterval:
+  - value: 3m
+matching.wv.VersionDrainageStatusVisibilityGracePeriod:
+  - value: 3m
+matching.maxVersionsInDeployment:
+  - value: 100
+
+# ---- Persistence and visibility (XD-FIX-R1-242: this file is the only source of server dynamic config; WS-10's
+# values file no longer sets server.dynamicConfig). Sized for WS-10's persistence: Aurora PostgreSQL 16.15,
+# db.r8g.xlarge writer + reader, I/O-Optimized, 512 history shards (10-data-platform temporal-persistence.md §5).
+# Keys verified to exist in temporalio/temporal v1.32.1 common/dynamicconfig/constants.go (2026-10-24).
+history.persistenceMaxQPS:
+  - value: 3000
+matching.persistenceMaxQPS:
+  - value: 1500
+frontend.persistenceMaxQPS:
+  - value: 1000
+frontend.visibilityMaxPageSize:
+  - value: 1000

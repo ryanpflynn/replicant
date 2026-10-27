@@ -1,0 +1,107 @@
+# WS-06 — production promotion policy (validated by schemas/promotion-policy.schema.json).
+# Lives at releases/promotion-policy.yaml in the replicant-config repo. Numbers are justified in
+# eval-harness.md §6 (statistics) and promotion.md §4–§6 (gates and triggers).
+apiVersion: replicant.example.com/v1
+kind: PromotionPolicy
+metadata:
+  name: prod
+  owners: [replicant-release-managers]
+spec:
+  tiers:
+    T1:
+      goldenSubset: smoke            # 60 tasks, stratified (eval-harness.md §2.5)
+      reps: 1
+      arms: candidate_only           # paired against the incumbent's latest sentinel run on the same tasks
+      maxParallelCases: 60
+      maxUsd: 600
+      maxHours: 3
+    T2:
+      goldenSubset: standard         # 300 tasks
+      reps: 1
+      arms: paired_reuse_baseline_7d # baseline arm reused if the incumbent ran on this set version within 7 days
+      maxParallelCases: 90
+      maxUsd: 6000
+      maxHours: 16
+    T3:
+      goldenSubset: full             # 450 tasks
+      reps: 2
+      arms: paired                   # both arms run concurrently (same gateway, mirror, provider conditions)
+      maxParallelCases: 90
+      maxUsd: 20000
+      maxHours: 30
+  offlineGates:
+    maxHarnessErrorRate: 0.03        # above this the eval is INVALID (re-run), not failed
+    nonInferiorityMarginPts:         # lower bound of the one-sided 95% interval on (candidate - baseline) resolved rate
+      T1: 16                         # gross-regression detector only (60 tasks): SE 6.39pt, power 0.80
+      T2: 7.5                        # 300 tasks x 1 rep: SE 2.86pt, power 0.84 at true difference 0
+      T3: 4.5                        # 450 tasks x 2 reps: SE 1.67pt, power 0.85 at true difference 0
+    confidence: 0.95
+    maxStableSetFailureRate: 0.05    # candidate minus baseline failure rate on the stable subset (point estimate)
+    maxCostRatioMedian: 1.15         # median cost per resolved case, candidate / baseline
+    maxWallRatioP95: 1.25
+    maxScopeViolationDeltaPts: 1.0
+    judgeMarginOrdinal: 0.25         # on a 1-5 scale, lower bound of the 95% interval on the mean difference
+    strataFlagDropPts: 10
+    interimHarmZ: 2.797
+  shadow:
+    sampleRate: 0.10
+    minPairs: 50
+    maxDays: 5
+    maxUsd: 1500
+    requiredFor: [model, cli_major, cli_minor, graph, router, memory_policy]
+    maxRunFailureDeltaPts: 3
+    maxCostRatio: 1.3
+  canary:
+    evaluationIntervalSeconds: 600
+    stages:
+      - {name: ring-early, percent: 0,   ring: [early], minHours: 24, minCandidateJobs: 40,  advance: auto}
+      - {name: pct-10,     percent: 10,  ring: [early], minHours: 24, minCandidateJobs: 80,  advance: auto}
+      - {name: pct-50,     percent: 50,  ring: [early], minHours: 24, minCandidateJobs: 150, advance: signoff}
+      - {name: full,       percent: 100, ring: [early, standard, conservative], minHours: 0, minCandidateJobs: 0, advance: auto}
+  rollbackTriggers:
+    # Rate triggers: pause tier = P(candidate worse) > 0.99 and observed difference >= theta/2;
+    # rollback tier = P > 0.999 and observed >= theta. Simulated false-fire and detection rates over the
+    # default 72-hour staged canary are in promotion.md §6.3 (tools/canary_guardrails.py).
+    - {id: R1,  metric: bundle_attributable_run_failure_rate, kind: rate_increase_pts, threshold: 5,  minCandidateN: 20, escalateAfterHours: 4,
+       pause: {probability: 0.99, observedMinFraction: 0.5}, rollback: {probability: 0.999, observedMinFraction: 1.0}, action: rollback}
+    - {id: R2,  metric: bundle_attributable_run_failure,      kind: same_reason_burst, threshold: 4,  windowMinutes: 60, minCandidateN: 4, action: rollback}
+    - {id: R3,  metric: job_failure_rate,                     kind: rate_increase_pts, threshold: 10, minCandidateN: 30, escalateAfterHours: 4,
+       pause: {probability: 0.99, observedMinFraction: 0.5}, rollback: {probability: 0.999, observedMinFraction: 1.0}, action: rollback}
+    - {id: R4,  metric: qa_first_pass_rate,                   kind: rate_decrease_pts, threshold: 15, minCandidateN: 30, escalateAfterHours: 4,
+       pause: {probability: 0.99, observedMinFraction: 0.5}, rollback: {probability: 0.999, observedMinFraction: 1.0}, action: rollback}
+    - {id: R5,  metric: cost_per_job_usd,                     kind: ratio_median,      threshold: 1.5, minCandidateN: 20, action: pause_ramp}
+    - {id: R6,  metric: time_to_pr_active_seconds,            kind: ratio_p50,         threshold: 1.5, minCandidateN: 20, action: pause_ramp}
+    - {id: R7,  metric: integrity_violation,                  kind: count_any,         threshold: 1,  minCandidateN: 0,  action: rollback_and_revoke}
+    - {id: R8,  metric: plan_gate_reject_or_change_rate,      kind: rate_increase_pts, threshold: 15, minCandidateN: 30, escalateAfterHours: 8,
+       pause: {probability: 0.99, observedMinFraction: 0.5}, action: pause_ramp}
+    - {id: R9,  metric: takeover_or_cancel_rate,              kind: rate_increase_pts, threshold: 10, minCandidateN: 30, escalateAfterHours: 8,
+       pause: {probability: 0.99, observedMinFraction: 0.5}, action: pause_ramp}
+    - {id: R10, metric: scope_violation_rate,                 kind: rate_increase_pts, threshold: 3,  minCandidateN: 30, escalateAfterHours: 4,
+       pause: {probability: 0.99, observedMinFraction: 0.5}, rollback: {probability: 0.999, observedMinFraction: 1.0}, action: rollback}
+  signoff:
+    releaseManagerGroup: replicant-release-managers
+    securityGroup: replicant-security
+    requiredFor: [canary_pct50_to_full, t3_eval_pass, expedited, judge_only_gain, superiority_claim, stratum_flag,
+                  tenant_layer_behavioral, cost_acceptance, judge_acceptance, shadow_extension, bootstrap_default]
+    # G-09 (WS-09 control review): any change that alters agent instructions, capabilities, or gates in prod
+    # needs two distinct signers, neither of them the change author. Tightening-only tenant layers (T0) stay
+    # single-actor (system), per WS-09's recommendation and ADR-06-001.
+    twoPersonFor: [expedited, model, cli_major, cli_minor, prompt, prompt_inworker, agent_config, graph, router,
+                   policy_behavioral, codebase_binding, memory_policy, worker_code, judge_only_gain, superiority_claim]
+    authorMaySignOff: false
+  holdback:
+    percent: 5
+    days: 7
+    byChangeClass: {model: 30}      # R1-155, online-metrics.md §5 (merge-rate MDE 7.9 pt at 30 days)
+    protected: [model]              # a model holdback is never replaced by a later promotion's holdback
+  reruns:
+    maxInvalidRerunsPerBundle: 1    # R2-056: second invalid comparison = eval_failed (harness_errors)
+    maxRerollsPerBundle: 1          # one human-initiated re-evaluation after eval_failed or rolled_back
+    maxPreemptRetriesPerCase: 2     # Preempted cases are retried separately, outside the harness-error rate
+    maxPreemptedFraction: 0.10      # above this after retries the comparison is invalid
+  spend:                            # promotion.md §4.7; $1.2M per year total ceiling vs the 2x-token projection of $1.13M (OQ-06-05)
+    eval:      {weeklyUsd: 25000, monthlyUsd: 90000}
+    shadow:    {weeklyUsd: 3000,  monthlyUsd: 8000}
+    proposal:  {weeklyUsd: 2000,  monthlyUsd: 6000}
+    component: {weeklyUsd: 500,   monthlyUsd: 2000}
+    total:     {weeklyUsd: 28000, monthlyUsd: 100000}

@@ -1,0 +1,287 @@
+# Rendered once per tenant at onboarding (exec cluster) by the tenant-onboarding job (tenancy.md §10).
+# Example tenant: payments (isolation group shared-standard). This file is the ONLY definition of the
+# per-tenant namespace bundle: its labels are the single schema that the agentrun-controller watch,
+# runner-api admission (A-5, RS-5), the Cilium baseline (sbx-baseline-deny), and every WS-09 VAP key on
+# (XD-FIX-R1-031). WS-02 deletes its own per-tenant ResourceQuota `replicant-run-quota` (XD-FIX-R1-032).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sbx-payments
+  labels:
+    replicant.example.com/zone: sandbox                 # selects: controller watch, Cilium baseline, VAPs
+    replicant.example.com/tenant: payments              # must equal the name suffix (VAP-checked)
+    replicant.example.com/tenant-ready: "true"          # runner-api A-5: admission requires "true"
+    replicant.example.com/exec-kill-switch: "false"     # runner-api A-5: "true" denies new runs (kill switch, tenant scope, exec side)
+    replicant.example.com/max-active-runs: "12"         # runner-api RS-5: 429 at or above (from tenancy.tenants quota)
+    replicant.example.com/isolation-group: shared-standard   # or iso-<tenant>; tenancy.md §3.2
+    # Pod Security Admission: baseline enforced (blocks host namespaces, hostPath, privileged);
+    # restricted is warned only because rootless builders in Kata qa_build pods need seccomp
+    # Unconfined. The VAP replicant-sandbox-pod-shape enforces the stricter, replicant-specific shape.
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sbx-runner
+  namespace: sbx-payments
+automountServiceAccountToken: false
+---
+# Noisy-neighbor backstop: exactly one ResourceQuota per tenant namespace, owned by WS-09
+# (XD-FIX-R1-032). There is deliberately NO count/agentruns.replicant.example.com entry: terminal
+# AgentRuns are retained 45 days (C-CRD §5.5), so a count quota would exhaust within days and turn
+# every CREATE into Forbidden. Concurrency is enforced by runner-api RS-5 from the max-active-runs
+# label (429 tenant_quota_exceeded); this quota only bounds what a racing or bypassed admission can
+# start. Terminal pods (Succeeded/Failed) do not count against `pods`. Secrets and ConfigMaps are not
+# counted either, because their lifetime follows the AgentRun, not the pod.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: sbx-quota
+  namespace: sbx-payments
+spec:
+  hard:
+    pods: "40"
+    requests.cpu: "200"
+    limits.cpu: "300"
+    requests.memory: 600Gi
+    limits.memory: 800Gi
+    requests.ephemeral-storage: 2Ti
+    limits.ephemeral-storage: 3Ti
+    persistentvolumeclaims: "8"
+    requests.storage: 800Gi
+    services: "0"
+    services.loadbalancers: "0"
+    services.nodeports: "0"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: sbx-quota-urgent
+  namespace: sbx-payments
+spec:
+  hard:
+    pods: "4"
+  scopeSelector:
+    matchExpressions:
+      - scopeName: PriorityClass
+        operator: In
+        values: ["replicant-run-urgent"]
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: sbx-limits
+  namespace: sbx-payments
+spec:
+  limits:
+    - type: Container
+      max:
+        cpu: "16"
+        memory: 64Gi
+        ephemeral-storage: 200Gi
+      defaultRequest:
+        cpu: 500m
+        memory: 512Mi
+        ephemeral-storage: 1Gi
+      default:
+        cpu: "1"
+        memory: 1Gi
+        ephemeral-storage: 2Gi
+---
+# The controller gets write access only inside sbx-* namespaces (one RoleBinding per tenant
+# namespace), never cluster-wide pod creation.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agentrun-controller
+  namespace: sbx-payments
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: replicant-sandbox-child-writer
+subjects:
+  - kind: ServiceAccount
+    name: agentrun-controller
+    namespace: replicant-runner
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: runner-api
+  namespace: sbx-payments
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: replicant-agentrun-writer
+subjects:
+  - kind: ServiceAccount
+    name: runner-api
+    namespace: replicant-runner
+---
+# Children are bare Pods named ar-<body> (ADR-02-002), plus the creds Secret, the config ConfigMap and
+# the per-run CiliumNetworkPolicy (C-CRD §6). R1-210: pods create/update/patch (cancel-reason
+# annotation, pod-status finalizer removal) and agentruns delete (45-day GC, C-CRD §5.5) are granted.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: replicant-sandbox-child-writer
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps"]
+    # list/watch for the controller-runtime Owns() informers (02-execution/controller.md §2, R1V-019);
+    # the controller's cache is label-selected to replicant.example.com/run-id.
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["cilium.io"]
+    resources: ["ciliumnetworkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["replicant.example.com"]
+    resources: ["agentruns"]
+    verbs: ["get", "list", "watch", "update", "patch", "delete"]
+  - apiGroups: ["replicant.example.com"]
+    resources: ["agentruns/status", "agentruns/finalizers"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]          # run leases ar-<body>-lease (R2-030), read-only for the controller
+    verbs: ["get", "list", "watch"]
+  # Deliberately absent: pods/exec, pods/attach, pods/portforward, pods/ephemeralcontainers,
+  # serviceaccounts/token, and nodes/proxy. nodes/proxy GET is equivalent to exec on every pod of every
+  # node (kubelet WebSocket upgrade), so DiskPressure comes from node conditions plus the in-pod watchdog
+  # report, not the kubelet stats API (XD-FIX-R1-210).
+---
+# Cluster-scoped read of node conditions (NodeLost, DiskPressure). Bound once, cluster-wide.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: replicant-agentrun-controller-nodes-read
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: replicant-agentrun-controller-nodes-read
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: replicant-agentrun-controller-nodes-read
+subjects:
+  - kind: ServiceAccount
+    name: agentrun-controller
+    namespace: replicant-runner
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: replicant-agentrun-writer
+rules:
+  - apiGroups: ["replicant.example.com"]
+    resources: ["agentruns"]
+    verbs: ["get", "list", "watch", "create", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]          # runner-api creates and renews run leases (XD-FIX-R1-048)
+    verbs: ["get", "create", "update", "patch"]
+---
+# agentrun-controller's own leader-election Lease in replicant-runner (XD-FIX-R1-048) and the binding
+# VAP parameter ConfigMap it keeps in sync (R1V-056). The ConfigMap is created by the platform pipeline.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agentrun-controller-leader-election
+  namespace: replicant-runner
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    resourceNames: ["agentrun-controller"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]
+  # Policy sync writes the binding VAP's parameters (XD-FIX-R1-213, 02-execution/network.md §5; R1V-056).
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["replicant-agentrun-binding-params"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agentrun-controller-leader-election
+  namespace: replicant-runner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: agentrun-controller-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: agentrun-controller
+    namespace: replicant-runner
+---
+# runner-api cluster-scoped reads (R1V-003): sbx-<tenant> Namespace labels for admission A-5/RS-5
+# (XD-FIX-R1-031: controller and runner-api only read namespaces) and the cluster-wide AgentRun
+# informer of runner-service.md §4. Writes stay per-namespace through replicant-agentrun-writer.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: replicant-runner-api-cluster-read
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["replicant.example.com"]
+    resources: ["agentruns"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: replicant-runner-api-cluster-read
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: replicant-runner-api-cluster-read
+subjects:
+  - kind: ServiceAccount
+    name: runner-api
+    namespace: replicant-runner
+---
+# Security response automation (tenancy.md §3.5, R1V-059; 02-execution/runner-service.md §1.1 exec-cluster
+# callers). It reads Pods cluster-wide to find the runs on a node (label replicant.example.com/run-id) and
+# cordons the node; it never deletes Pods or touches AgentRuns (cancellation goes through runner-api).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: replicant-security-automation
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch", "patch"]   # patch: spec.unschedulable and the quarantine taint only
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: replicant-security-automation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: replicant-security-automation
+subjects:
+  - kind: ServiceAccount
+    name: security-automation
+    namespace: replicant-security

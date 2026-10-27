@@ -1,0 +1,22 @@
+{
+  "rules": [
+    {
+      "rulePriority": 1,
+      "description": "Keep every image referenced by a release bundle (tag prefix bundle-ref; XD-06-14). Count limit far above any real count, so nothing matching is ever expired, and lower-priority rules cannot expire it.",
+      "selection": {"tagStatus": "tagged", "tagPrefixList": ["bundle-ref-"], "countType": "imageCountMoreThan", "countNumber": 9999},
+      "action": {"type": "expire"}
+    },
+    {
+      "rulePriority": 10,
+      "description": "Untagged layers/manifests left by failed pushes",
+      "selection": {"tagStatus": "untagged", "countType": "sinceImagePushed", "countUnit": "days", "countNumber": 14},
+      "action": {"type": "expire"}
+    },
+    {
+      "rulePriority": 20,
+      "description": "Any other image (CI builds never referenced by a bundle) after 180 days",
+      "selection": {"tagStatus": "any", "countType": "sinceImagePushed", "countUnit": "days", "countNumber": 180},
+      "action": {"type": "expire"}
+    }
+  ]
+}

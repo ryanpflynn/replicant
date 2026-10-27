@@ -1,0 +1,360 @@
+{
+  "uid": "replicant-job",
+  "title": "Job drilldown",
+  "tags": [
+    "replicant",
+    "job"
+  ],
+  "timezone": "utc",
+  "schemaVersion": 41,
+  "version": 1,
+  "editable": false,
+  "graphTooltip": 1,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "templating": {
+    "list": [
+      {
+        "name": "job_id",
+        "label": "job_id",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "value": ""
+        }
+      },
+      {
+        "name": "trace_id",
+        "label": "trace_id",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "replicant-pg"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT substr(encode(sha256(convert_to('replicant.job.trace.v1:' || j, 'UTF8')), 'hex'), 1, 32) FROM (SELECT '$job_id' AS j) s WHERE j ~ '^job_[0-9a-hjkmnp-tv-z]{26}$'"
+      },
+      {
+        "name": "level",
+        "label": "Level",
+        "type": "custom",
+        "query": "debug,info,warn,error",
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Job",
+      "type": "table",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "replicant-pg"
+      },
+      "description": "Read model row (C-STATE section 2).",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 16,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "replicant-pg"
+          },
+          "rawSql": "SELECT j.job_id, j.tenant_id, j.workflow_type, j.status, j.phase, j.release_bundle_id, j.created_at, j.updated_at FROM jobs_read.jobs j WHERE j.job_id = '$job_id'",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 2,
+      "title": "Jump to",
+      "type": "text",
+      "datasource": null,
+      "description": "One click to every store holding this job.",
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "[Control plane](https://app.prod.replicant.internal/jobs/$job_id) | [Temporal](https://temporal.prod.replicant.internal/namespaces/replicant-prod/workflows?query=ReplicantJobId%3D%22$job_id%22) | [Langfuse trace](https://langfuse.prod.replicant.internal/project/replicant-prod/traces/$trace_id) | [Langfuse session](https://langfuse.prod.replicant.internal/project/replicant-prod/sessions/$job_id) | [Tempo trace](/explore?left=%7B%22datasource%22:%22tempo%22,%22queries%22:%5B%7B%22refId%22:%22A%22,%22queryType%22:%22traceql%22,%22query%22:%22$trace_id%22%7D%5D%7D)"
+      }
+    },
+    {
+      "id": 3,
+      "title": "Timeline",
+      "type": "table",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "replicant-pg"
+      },
+      "description": "Workflow-generated timeline (never model text).",
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 12
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "replicant-pg"
+          },
+          "rawSql": "SELECT t.seq, t.at, t.type, t.summary, t.actor FROM jobs_read.job_timeline t WHERE t.job_id = '$job_id' ORDER BY t.seq",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 4,
+      "title": "Runs",
+      "type": "table",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "replicant-pg"
+      },
+      "description": "AgentRuns (Runner GET /v1/runs?job_id= is the live source).",
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 12
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "replicant-pg"
+          },
+          "rawSql": "SELECT r.run_id, r.node_key, r.cycle, r.ordinal, r.role, r.phase, r.reason, r.isolation, r.started_at, r.finished_at FROM jobs_read.job_runs r WHERE r.job_id = '$job_id' ORDER BY r.started_at",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 5,
+      "title": "Logs (platform and sandbox)",
+      "type": "logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Structured metadata job_id (C-IDS section 9). Derived fields link trace_id to Tempo and Langfuse.",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 24,
+        "h": 12
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{env=\"prod\"} | job_id=\"$job_id\" | level=~\"$level\"",
+          "queryType": "range"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 6,
+      "title": "Transcript events",
+      "type": "logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Redacted, truncated transcript events shipped by the sandbox uploader. Full transcript: S3 transcripts bucket.",
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 24,
+        "h": 12
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{source=\"transcript\"} | job_id=\"$job_id\"",
+          "queryType": "range"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 7,
+      "title": "Trace",
+      "type": "traces",
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "description": "One trace per job (C-IDS T-1).",
+      "gridPos": {
+        "x": 0,
+        "y": 40,
+        "w": 24,
+        "h": 14
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "query": "$trace_id"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 8,
+      "title": "Cost by run (ledger)",
+      "type": "table",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "replicant-pg"
+      },
+      "description": "Postgres cost schema (WS-03).",
+      "gridPos": {
+        "x": 0,
+        "y": 54,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "replicant-pg"
+          },
+          "rawSql": "SELECT run_id, sum(cost_micros) / 1e6 AS usd, sum(input_tokens) AS input_tokens, sum(output_tokens) AS output_tokens FROM cost.usage_events WHERE job_id = '$job_id' GROUP BY run_id ORDER BY usd DESC",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 9,
+      "title": "Approvals",
+      "type": "table",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "replicant-pg"
+      },
+      "description": "Who decided, where, and the digest of what they saw (audit.md section 5).",
+      "gridPos": {
+        "x": 12,
+        "y": 54,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "replicant-pg"
+          },
+          "rawSql": "SELECT g.gate_id, g.kind, d.decision, d.principal_id, d.channel, d.decided_at, g.presented_digest FROM approvals.gates g LEFT JOIN approvals.gate_decisions d USING (gate_id) WHERE g.job_id = '$job_id' ORDER BY g.opened_at",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    }
+  ],
+  "links": [],
+  "annotations": {
+    "list": [
+      {
+        "name": "Job terminal (failed)",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "replicant-pg"
+        },
+        "enable": false,
+        "iconColor": "#c4162a",
+        "rawQuery": "SELECT terminal_at AS time, job_id AS text FROM jobs_read.jobs WHERE terminal_outcome = 'failed' AND $__timeFilter(terminal_at)"
+      }
+    ]
+  }
+}

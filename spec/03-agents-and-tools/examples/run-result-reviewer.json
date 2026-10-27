@@ -1,0 +1,79 @@
+{
+  "schema": "replicant.run-result/v1",
+  "run_id": "run_9k2m4p6r8t0v2x4z6b8d0f2h4j",
+  "job_id": "job_01m5p7x7r0bt69j0h0fbxepw90",
+  "role": "reviewer",
+  "outcome": "completed",
+  "summary": "Change is correct and scoped. One minor finding: missing test for negative proration.",
+  "outputs": {
+    "review_report": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_9k2m4p6r8t0v2x4z6b8d0f2h4j/review_report/review.json"
+  },
+  "usage": {
+    "wall_seconds": 611.0,
+    "model_calls": 19,
+    "input_tokens": 402118,
+    "output_tokens": 9120,
+    "cache_read_tokens": 350112,
+    "cost_usd_reported": 1.12,
+    "peak_memory_bytes": 2147483648,
+    "peak_workspace_bytes": 5368709120
+  },
+  "role_result": {
+    "schema": "replicant.role-result.reviewer/v1",
+    "agent_report": {
+      "outcome": "completed",
+      "verdict": "approve",
+      "summary": "Correct and in scope.",
+      "findings": [
+        {
+          "severity": "minor",
+          "category": "tests",
+          "path": "internal/billing/proration_test.go",
+          "line_start": 88,
+          "line_end": 88,
+          "title": "No test for credit (negative) proration",
+          "detail": "Credits use the same path; add a case.",
+          "suggestion": "Add {amount: -1000, days: 15} to the table."
+        }
+      ],
+      "tests_run": [
+        {
+          "command": "go test ./internal/billing/...",
+          "exit_code": 0,
+          "passed": 48,
+          "failed": 0
+        }
+      ],
+      "scope_ok": true
+    },
+    "cli": {
+      "cli": "codex",
+      "version": "0.164.0",
+      "session_id": "0199a213-81c0-7800-8aa1-bbab2a035a53",
+      "exit_code": 0,
+      "terminated_by": "none",
+      "result_subtype": "turn.completed",
+      "num_turns": 1
+    },
+    "budget": {
+      "effective_usd": 8,
+      "spent_usd": 1.15,
+      "soft_limit_reached": false,
+      "hard_limit_reached": false,
+      "rate_limited_seconds": 0
+    },
+    "integrity": {
+      "mode": "enforce",
+      "tracked_files_modified": false,
+      "modified_paths": [],
+      "tree_before": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+      "tree_after": "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+    },
+    "counts": {
+      "blocker": 0,
+      "major": 0,
+      "minor": 1,
+      "nit": 0
+    }
+  }
+}

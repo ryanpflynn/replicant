@@ -1,0 +1,87 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadManifestAndHeadRunObjects",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/*",
+        "arn:aws:s3:::acme-replicant-prod-transcripts/tenants/*/jobs/*/runs/*/*",
+        "arn:aws:s3:::acme-replicant-prod-session/tenants/*/jobs/*/runs/*/*"
+      ]
+    },
+    {
+      "Sid": "ReadRegistryBlobsAndBundlePointers",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-registry/blobs/sha256/*",
+        "arn:aws:s3:::acme-replicant-prod-registry/bundles/*"
+      ]
+    },
+    {
+      "Sid": "WriteAgentrunRecordAndInboxControlWriteOnce",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/agentrun_record/*",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/inbox/_control.json"
+      ],
+      "Condition": {
+        "Null": {
+          "s3:if-none-match": "false"
+        }
+      }
+    },
+    {
+      "Sid": "TenantAndRegistryKeysViaS3Only",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Decrypt",
+        "kms:GenerateDataKey"
+      ],
+      "Resource": "arn:aws:kms:us-east-1:111111111111:key/*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "s3.us-east-1.amazonaws.com"
+        },
+        "StringLike": {
+          "aws:ResourceTag/replicant-key-class": [
+            "tenant",
+            "registry"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "NothingElse",
+      "Effect": "Deny",
+      "NotAction": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:PutObjectTagging",
+        "kms:Decrypt",
+        "kms:GenerateDataKey"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "NoDirectKms",
+      "Effect": "Deny",
+      "Action": [
+        "kms:Decrypt",
+        "kms:GenerateDataKey"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "kms:ViaService": "s3.us-east-1.amazonaws.com"
+        }
+      }
+    }
+  ]
+}

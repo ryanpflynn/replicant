@@ -1,0 +1,141 @@
+# Loki 3.7.x configuration, production (core cluster, namespace observability). Owner WS-08.
+# Deployed with the grafana/loki Helm chart, deploymentMode: Distributed (Simple Scalable is deprecated and removed
+# in Loki 4.0; see platform.md section 3.2). This file is the rendered `loki.config`; component replica counts and
+# resources are in platform.md. Validated with `loki -config.file=loki.yaml -verify-config -config.expand-env=true`
+# (Loki 3.7.9, 2026-10-24).
+auth_enabled: true        # X-Scope-OrgID required; tenants: platform, sandbox, audit (ADR-002)
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9095
+  grpc_server_max_recv_msg_size: 16777216
+  grpc_server_max_send_msg_size: 16777216
+  log_level: warn
+
+common:
+  path_prefix: /var/loki
+  replication_factor: 3
+  compactor_grpc_address: loki-compactor.observability.svc.cluster.local:9095
+  ring:
+    kvstore:
+      store: memberlist
+  storage:
+    s3:
+      region: ${AWS_REGION}
+      bucketnames: ${LOKI_CHUNKS_BUCKET}
+      s3forcepathstyle: false
+      sse:
+        type: SSE-KMS
+        kms_key_id: ${OBS_KMS_KEY_ARN}
+
+memberlist:
+  join_members:
+    - loki-memberlist.observability.svc.cluster.local:7946
+
+schema_config:
+  configs:
+    - from: "2026-10-01"
+      store: tsdb
+      object_store: s3
+      schema: v13
+      index:
+        prefix: loki_index_
+        period: 24h
+
+storage_config:
+  tsdb_shipper:
+    active_index_directory: /var/loki/tsdb-index
+    cache_location: /var/loki/tsdb-cache
+  aws:
+    region: ${AWS_REGION}
+    bucketnames: ${LOKI_CHUNKS_BUCKET}
+
+ingester:
+  chunk_encoding: zstd
+  chunk_target_size: 1572864
+  chunk_idle_period: 30m
+  max_chunk_age: 2h
+  wal:
+    enabled: true
+    dir: /var/loki/wal
+
+distributor:
+  otlp_config:
+    # OTLP is not Replicant's log path (Alloy pushes via /loki/api/v1/push with explicit labels). If anything does
+    # send OTLP, nothing becomes an index label implicitly.
+    default_resource_attributes_as_index_labels: []
+
+querier:
+  multi_tenant_queries_enabled: true    # operators query "platform|sandbox" from one data source (platform.md 3.6)
+  max_concurrent: 8
+
+query_range:
+  align_queries_with_step: true
+  cache_results: true
+
+frontend:
+  max_outstanding_per_tenant: 2048
+
+compactor:
+  working_directory: /var/loki/compactor
+  compaction_interval: 10m
+  retention_enabled: true
+  retention_delete_delay: 2h
+  retention_delete_worker_count: 150
+  delete_request_store: s3
+  delete_request_cancel_period: 2h      # purge requests become irreversible after 2 h (session-capture.md s.8)
+  delete_max_interval: 24h
+
+ruler:
+  storage:
+    type: s3
+    s3:
+      region: ${AWS_REGION}
+      bucketnames: ${LOKI_RULER_BUCKET}
+  rule_path: /var/loki/rules-temp
+  alertmanager_url: http://mimir-alertmanager.observability.svc.cluster.local:8080/alertmanager
+  enable_alertmanager_v2: true
+  enable_api: true
+  ring:
+    kvstore:
+      store: memberlist
+  remote_write:
+    enabled: true
+    clients:
+      mimir:
+        url: http://mimir-distributor.observability.svc.cluster.local:8080/api/v1/push
+        headers:
+          X-Scope-OrgID: replicant
+
+limits_config:
+  # Defaults for every tenant; per-tenant values are in runtime-overrides.yaml.
+  allow_structured_metadata: true
+  max_structured_metadata_size: 16KB
+  max_structured_metadata_entries_count: 24
+  max_label_names_per_series: 10          # 9 replicant labels + headroom (C-IDS section 9)
+  discover_service_name: []               # never synthesize service_name (closed label set)
+  discover_log_levels: false              # level is a label set by Alloy; no detected_level metadata
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  max_line_size: 256KB
+  max_line_size_truncate: true
+  ingestion_rate_strategy: global
+  ingestion_rate_mb: 8
+  ingestion_burst_size_mb: 16
+  per_stream_rate_limit: 3MB
+  per_stream_rate_limit_burst: 15MB
+  max_global_streams_per_user: 20000
+  max_query_lookback: 0s
+  max_query_length: 721h
+  max_query_series: 2000
+  split_queries_by_interval: 1h
+  retention_period: 720h                  # 30 days unless a tenant or stream rule says otherwise
+  deletion_mode: filter-and-delete
+  volume_enabled: true
+
+runtime_config:
+  file: /etc/loki/runtime/runtime-overrides.yaml
+  period: 30s
+
+analytics:
+  reporting_enabled: false

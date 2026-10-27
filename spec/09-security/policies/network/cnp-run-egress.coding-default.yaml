@@ -1,0 +1,89 @@
+# Rendered by agentrun-controller (WS-02) from network profile `coding-default` (policy type
+# `network_profiles`, WS-02 with WS-09) as child object `ar-<body>-egress` (C-CRD section 6).
+# Example values: tenant payments, run run_gj3h3ep3phjfs9e23v768zrca5, env prod.
+# Roles using this profile: planner, implementer, repair, reviewer (see agent-capabilities.md section 3).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: ar-gj3h3ep3phjfs9e23v768zrca5-egress
+  namespace: sbx-payments
+  labels:
+    app.kubernetes.io/managed-by: agentrun-controller
+    replicant.example.com/tenant: payments
+    replicant.example.com/run-id: run_gj3h3ep3phjfs9e23v768zrca5
+    replicant.example.com/network-profile: coding-default
+spec:
+  endpointSelector:
+    matchLabels:
+      replicant.example.com/run-id: run_gj3h3ep3phjfs9e23v768zrca5
+  egress:
+    # 1. DNS: only kube-dns, and the DNS proxy answers only allowlisted names (blocks DNS tunneling).
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+          rules:
+            dns:
+              - matchName: ai-gateway.prod.replicant.internal
+              - matchName: memory-mcp.prod.replicant.internal
+              - matchName: context-mcp.prod.replicant.internal
+              - matchName: runner-sandbox.prod.replicant.internal
+              - matchName: repo-mirror.prod.replicant.internal
+              - matchName: otel-sandbox.prod.replicant.internal
+              - matchName: artifactory.acme.internal
+              - matchName: acme-replicant-prod-artifacts.s3.us-east-1.amazonaws.com
+              - matchName: acme-replicant-prod-transcripts.s3.us-east-1.amazonaws.com
+              - matchName: acme-replicant-prod-session.s3.us-east-1.amazonaws.com
+    # 2. Replicant and platform services, TLS only.
+    - toFQDNs:
+        - matchName: ai-gateway.prod.replicant.internal
+        - matchName: memory-mcp.prod.replicant.internal
+        - matchName: context-mcp.prod.replicant.internal
+        - matchName: runner-sandbox.prod.replicant.internal
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    # 3. Package mirror (one Artifactory host; curated virtual repos by path, agent-capabilities.md section 7), TLS only.
+    - toFQDNs:
+        - matchName: artifactory.acme.internal
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    # 4. S3 run prefixes through the sandbox gateway endpoint. IP enforcement is S3-wide (shared IPs);
+    #    the VPC endpoint policy and the run-scoped IAM session are what restrict buckets and prefixes.
+    - toFQDNs:
+        - matchName: acme-replicant-prod-artifacts.s3.us-east-1.amazonaws.com
+        - matchName: acme-replicant-prod-transcripts.s3.us-east-1.amazonaws.com
+        - matchName: acme-replicant-prod-session.s3.us-east-1.amazonaws.com
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    # 5. In-cluster repo-mirror (smart HTTP over TLS), then the sandbox OTLP endpoint.
+    # repo-mirror: the name resolves to the in-cluster Service (CoreDNS rewrite of repo-mirror.<env>.replicant.internal
+    # to repo-mirror.replicant-mirror.svc). Cilium enforces Service traffic after load-balancing translation, so the
+    # rule selects the backend pods and their container port, not an FQDN.
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: replicant-mirror
+            k8s:app.kubernetes.io/name: repo-mirror
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
+    # Sandbox OTLP (XD-FIX-R1-041): otel-sandbox.prod.replicant.internal is a CoreDNS rewrite to the WS-08
+    # Service alloy-sandbox-otlp; Cilium enforces Service traffic on the backend pods.
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: replicant-observability
+            k8s:app.kubernetes.io/name: alloy-sandbox-otlp
+      toPorts:
+        - ports:
+            - port: "4318"
+              protocol: TCP

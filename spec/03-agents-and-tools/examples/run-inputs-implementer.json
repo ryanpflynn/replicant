@@ -1,0 +1,98 @@
+{
+  "schema": "replicant.run-inputs/v1",
+  "tenant_id": "payments",
+  "job_id": "job_01m5p7x7r0bt69j0h0fbxepw90",
+  "run_id": "run_gj3h3ep3phjfs9e23v768zrca5",
+  "role": "implementer",
+  "release_bundle_id": "rb_ds5p3wmcj4dag2e9a8ncp4py6k",
+  "created_at": "2026-10-24T08:01:05Z",
+  "agent_definition": {
+    "name": "implementer-claude",
+    "version": 7,
+    "digest": "sha256:9f2c4e1a7b3d5f60812a4c6e8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4b6d"
+  },
+  "environment_definition": {
+    "name": "go-service",
+    "version": 12,
+    "digest": "sha256:1b3d5f7a9c0e2b4d6f8a0c2e4b6d8f0a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b0d"
+  },
+  "memory_snapshot_id": "msnap_my7g26p6dy194fr4kjdehzb5hr",
+  "memory_entries": [
+    "mem_01m42qyvr0dzhe1xg73b1bq38b@3"
+  ],
+  "objects": [
+    {
+      "name": "run_plan",
+      "type": "run_inputs",
+      "bucket_class": "artifacts",
+      "key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/inputs/run-plan.json",
+      "sha256": "2f48c274c4d10d8e47f69a2941c1ac4b6576873430fab84b349aeead11f5f6b2",
+      "size_bytes": 7158,
+      "content_type": "application/json",
+      "place": "run_plan"
+    },
+    {
+      "name": "system_append",
+      "type": "agent_prompt",
+      "bucket_class": "artifacts",
+      "key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/inputs/system-append.md",
+      "sha256": "b4825a09ac52ad2c27b1b5af588fe35e5e4f78dfc3baa8e483a997a16e67888b",
+      "size_bytes": 586,
+      "content_type": "text/markdown",
+      "place": "system_append"
+    },
+    {
+      "name": "first_message",
+      "type": "agent_prompt",
+      "bucket_class": "artifacts",
+      "key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/inputs/first-message.md",
+      "sha256": "32df5c72febe0b1a4c518d1f7707b54fe75aa6f9227a33178f7fd163418e7963",
+      "size_bytes": 285,
+      "content_type": "text/markdown",
+      "place": "first_message"
+    },
+    {
+      "name": "task_packet",
+      "type": "task_packet",
+      "bucket_class": "artifacts",
+      "key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/inputs/task_packet.json",
+      "sha256": "6b1f3d5a7c9e0b2d4f6a8c1e3b5d7f9a0c2e4b6d8f1a3c5e7b9d0f2a4c6e8b1d",
+      "size_bytes": 18233,
+      "content_type": "application/json",
+      "place": "context_file",
+      "path": "task_packet.json"
+    },
+    {
+      "name": "plan",
+      "type": "plan",
+      "bucket_class": "artifacts",
+      "key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/inputs/plan.md",
+      "sha256": "7c2a4e6b8d0f1a3c5e7b9d2f4a6c8e0b1d3f5a7c9e2b4d6f8a0c1e3b5d7f9a2c",
+      "size_bytes": 5120,
+      "content_type": "text/markdown",
+      "place": "context_file",
+      "path": "plan.md"
+    },
+    {
+      "name": "briefing",
+      "type": "briefing",
+      "bucket_class": "artifacts",
+      "key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/inputs/briefing.md",
+      "sha256": "8d3b5f7a9c1e2b4d6f8a0c3e5b7d9f1a2c4e6b8d0f3a5c7e9b1d2f4a6c8e0b3d",
+      "size_bytes": 64211,
+      "content_type": "text/markdown",
+      "place": "context_file",
+      "path": "briefing.md"
+    },
+    {
+      "name": "memory_injection",
+      "type": "memory_injection",
+      "bucket_class": "artifacts",
+      "key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/inputs/memory-injection.json",
+      "sha256": "9e4c6a8b0d2f3a5c7e9b1d4f6a8c0e2b3d5f7a9c1e4b6d8f0a2c3e5b7d9f1a4c",
+      "size_bytes": 3311,
+      "content_type": "application/json",
+      "place": "system_append_memory"
+    }
+  ]
+}

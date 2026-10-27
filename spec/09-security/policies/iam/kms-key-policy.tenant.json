@@ -1,0 +1,227 @@
+{
+  "Version": "2012-10-17",
+  "Id": "replicant-prod-tenant-payments",
+  "Statement": [
+    {
+      "Sid": "AccountRootForIamDelegationOnly",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::111111111111:root"
+      },
+      "Action": [
+        "kms:DescribeKey",
+        "kms:GetKeyPolicy",
+        "kms:ListResourceTags",
+        "kms:GetKeyRotationStatus"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "KeyAdministrationWithoutUse",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::111111111111:role/replicant-prod-platform-deployer"
+      },
+      "Action": [
+        "kms:Create*",
+        "kms:Describe*",
+        "kms:Enable*",
+        "kms:List*",
+        "kms:Put*",
+        "kms:Update*",
+        "kms:Revoke*",
+        "kms:Disable*",
+        "kms:Get*",
+        "kms:TagResource",
+        "kms:UntagResource",
+        "kms:RotateKeyOnDemand"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CryptoShredOnlyByOffboardingRoleWithTwoPersonApproval",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::111111111111:role/replicant-prod-tenant-offboarding"
+      },
+      "Action": [
+        "kms:ScheduleKeyDeletion",
+        "kms:CancelKeyDeletion"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:PrincipalTag/approved-change": "true"
+        },
+        "NumericGreaterThanEquals": {
+          "kms:ScheduleKeyDeletionPendingWindowInDays": "30"
+        }
+      }
+    },
+    {
+      "Sid": "CoreServicesUseViaS3ForThisTenantsBuckets",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": [
+          "arn:aws:iam::111111111111:role/replicant-prod-replicant-worker",
+          "arn:aws:iam::111111111111:role/replicant-prod-publisher-worker",
+          "arn:aws:iam::111111111111:role/replicant-prod-github-integration",
+          "arn:aws:iam::111111111111:role/replicant-prod-memory-service",
+          "arn:aws:iam::111111111111:role/replicant-prod-control-plane-api",
+          "arn:aws:iam::111111111111:role/replicant-prod-replicant-projector",
+          "arn:aws:iam::111111111111:role/replicant-prod-eval-worker",
+          "arn:aws:iam::111111111111:role/replicant-prod-leak-purge",
+          "arn:aws:iam::111111111111:role/replicant-prod-retention-sweeper",
+          "arn:aws:iam::111111111111:role/replicant-prod-tenant-offboarding",
+          "arn:aws:iam::111111111111:role/replicant-prod-audit-exporter"
+        ]
+      },
+      "Action": [
+        "kms:GenerateDataKey",
+        "kms:Decrypt"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringLike": {
+          "kms:ViaService": [
+            "s3.us-east-1.amazonaws.com",
+            "s3.us-west-2.amazonaws.com"
+          ]
+        },
+        "ForAnyValue:StringLike": {
+          "kms:EncryptionContext:aws:s3:arn": [
+            "arn:aws:s3:::acme-replicant-prod-artifacts*",
+            "arn:aws:s3:::acme-replicant-prod-transcripts*",
+            "arn:aws:s3:::acme-replicant-prod-session",
+            "arn:aws:s3:::acme-replicant-prod-memory",
+            "arn:aws:s3:::acme-replicant-prod-legal"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "ExecRolesUseViaS3RunBucketsOnly",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": [
+          "arn:aws:iam::222222222222:role/replicant-prod-sandbox-artifacts",
+          "arn:aws:iam::222222222222:role/replicant-prod-runner-api",
+          "arn:aws:iam::222222222222:role/replicant-prod-agentrun-controller"
+        ]
+      },
+      "Action": [
+        "kms:GenerateDataKey",
+        "kms:Decrypt"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "s3.us-east-1.amazonaws.com"
+        },
+        "ForAnyValue:StringEquals": {
+          "kms:EncryptionContext:aws:s3:arn": [
+            "arn:aws:s3:::acme-replicant-prod-artifacts",
+            "arn:aws:s3:::acme-replicant-prod-transcripts",
+            "arn:aws:s3:::acme-replicant-prod-session"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "TemporalClientsAndWorkersUseTenantContext",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": [
+          "arn:aws:iam::111111111111:role/replicant-prod-control-plane-api",
+          "arn:aws:iam::111111111111:role/replicant-prod-github-integration",
+          "arn:aws:iam::111111111111:role/replicant-prod-replicant-worker",
+          "arn:aws:iam::111111111111:role/replicant-prod-publisher-worker",
+          "arn:aws:iam::111111111111:role/replicant-prod-replicant-projector",
+          "arn:aws:iam::111111111111:role/replicant-prod-eval-worker",
+          "arn:aws:iam::111111111111:role/replicant-prod-temporal-codec-server",
+          "arn:aws:iam::111111111111:role/replicant-prod-leak-purge"
+        ]
+      },
+      "Action": [
+        "kms:GenerateDataKey",
+        "kms:Decrypt"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:EncryptionContext:replicant:purpose": "temporal-payload",
+          "kms:EncryptionContext:replicant:tenant": "payments"
+        }
+      }
+    },
+    {
+      "Sid": "RunNotifierEncryptOnly",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::222222222222:role/replicant-prod-run-notifier"
+      },
+      "Action": "kms:GenerateDataKey",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:EncryptionContext:replicant:purpose": "temporal-payload",
+          "kms:EncryptionContext:replicant:tenant": "payments"
+        }
+      }
+    },
+    {
+      "Sid": "RunNotifierNeverDecrypts",
+      "Effect": "Deny",
+      "Principal": {
+        "AWS": "arn:aws:iam::222222222222:role/replicant-prod-run-notifier"
+      },
+      "Action": [
+        "kms:Decrypt",
+        "kms:ReEncrypt*",
+        "kms:Encrypt",
+        "kms:GenerateDataKeyWithoutPlaintext",
+        "kms:CreateGrant"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "S3ReplicationToDrRegion",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::111111111111:role/replicant-prod-s3-replication"
+      },
+      "Action": [
+        "kms:Decrypt",
+        "kms:Encrypt",
+        "kms:GenerateDataKey"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringLike": {
+          "kms:ViaService": [
+            "s3.us-east-1.amazonaws.com",
+            "s3.us-west-2.amazonaws.com"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "NobodyDecryptsOutsideTheseServicePaths",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "kms:Decrypt",
+      "Resource": "*",
+      "Condition": {
+        "StringNotLike": {
+          "kms:ViaService": [
+            "s3.us-east-1.amazonaws.com",
+            "s3.us-west-2.amazonaws.com"
+          ]
+        },
+        "Null": {
+          "kms:EncryptionContext:replicant:purpose": "true"
+        }
+      }
+    }
+  ]
+}

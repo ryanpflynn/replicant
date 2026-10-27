@@ -1,0 +1,151 @@
+apiVersion: replicant.example.com/v1
+kind: Policy
+metadata:
+  name: risk-rules
+  scope: {level: global}
+  owners: [replicant-platform, replicant-security]
+  description: Global deterministic risk rules (D-19). Tenant layers may add rules, never remove.
+spec:
+  policyType: risk_rules
+  default_level: low
+  never_publish_paths: [".github/workflows/**", ".github/actions/**"]
+  # R2-001 base list (non-removable floor; tenants and WS-04's workflow parser may only add)
+  # Base list = WS-09 agent-capabilities.md §6 sensitive_paths.ci_executed_paths (XD-FIX-R2-001-WS07).
+  # Non-removable: the ADR-013 tightening check rejects a tenant layer that drops any entry.
+  ci_executed_paths:
+    - "**/conftest.py"
+    - "**/Makefile"
+    - "**/*.mk"
+    - "**/GNUmakefile"
+    - "**/justfile"
+    - "**/Justfile"
+    - "**/Taskfile*"
+    - "**/Rakefile"
+    - "**/Earthfile"
+    - "scripts/**"
+    - "ci/**"
+    - ".ci/**"
+    - "tools/ci/**"
+    - "**/package.json"
+    - "**/.npmrc"
+    - "**/.yarnrc*"
+    - "**/pyproject.toml"
+    - "**/setup.py"
+    - "**/setup.cfg"
+    - "**/tox.ini"
+    - "**/noxfile.py"
+    - "**/uv.lock"                # XD-W3-R1V-171, matches WS-09
+    - "**/pytest.ini"
+    - "**/build.gradle*"
+    - "**/settings.gradle*"
+    - "**/gradle/wrapper/**"
+    - "**/pom.xml"
+    - "**/build.rs"
+    - "**/Cargo.toml"
+    - "**/go.mod"
+    - "**/Dockerfile*"
+    - "**/docker-compose*.y*ml"
+    - "**/compose*.y*ml"
+    - ".husky/**"
+    - ".pre-commit-config.yaml"
+    - ".github/**"
+    - "Jenkinsfile"
+    - "**/Jenkinsfile"
+    - ".gitlab-ci.yml"
+    - ".circleci/**"
+    - ".buildkite/**"
+    - "azure-pipelines.yml"
+    - ".drone.yml"
+    - "bitbucket-pipelines.yml"
+    - ".travis.yml"
+  llm_raise: {enabled: true, max_level: critical, require_rationale: true}
+  rules:
+    - id: ci.executed_paths
+      description: Change touches a path target CI executes (built-in, non-removable, R2-001)
+      level: critical
+      when: {ci_executed_paths_touched: true}
+    - id: tests.changed
+      description: Test code changed; CI executes it (built-in floor, R2-001)
+      level: medium
+      when: {test_files_changed: true}
+    - id: diff.unicode_controls
+      description: An added line contains a bidi control or zero-width character (R2-007, R1V-175)
+      level: high
+      when: {diff_unicode_controls: true}
+    - id: ecosystem.blast_radius_high
+      description: Briefing blast radius is high or critical (XD-04-06, raise-only)
+      level: high
+      when: {blast_radius_at_least: high}
+    - id: contract.breaking_with_consumers
+      description: Breaking contract change with known consumers (XD-04-06)
+      level: critical
+      when: {contract_breaking_with_consumers: true}
+    - id: docs.only
+      description: Every changed path is documentation
+      level: low
+      when: {paths_all_within: ["docs/**", "**/*.md", "**/*.mdx", "**/*.rst"]}
+    - id: diff.size_medium
+      description: More than 50 changed lines
+      level: medium
+      when: {diff_lines_changed_gt: 50}
+      evidence_template: "{lines} changed lines (threshold 50)"
+    - id: diff.size_large
+      description: More than 400 changed lines or 25 files
+      level: high
+      when: {any_of: [{diff_lines_changed_gt: 400}, {diff_files_changed_gt: 25}]}
+    - id: deps.manifest
+      description: Dependency manifests or lockfiles changed
+      level: medium
+      when: {dependency_manifest_changed: true}
+    - id: deps.new_external
+      description: A new third-party dependency is introduced
+      level: high
+      when: {new_external_dependency: true}
+    - id: api.breaking
+      description: Extracted API contract has a breaking change
+      level: high
+      when: {api_contract_changed: breaking}
+    - id: db.migration
+      description: Database migration files changed
+      level: high
+      when: {migration_files_changed: true}
+    - id: service.tier1
+      description: Target service is tier 0 or tier 1 in the catalog
+      level: high
+      when: {service_tier_in: [tier0, tier1]}
+    - id: data.regulated
+      description: Code handling PII, PCI, PHI or secrets
+      level: high
+      when: {data_classification_any: [pii, pci, phi, secrets]}
+    - id: workflow.hotfix
+      description: Hotfixes always get a human
+      level: high
+      when: {workflow_type_in: [hotfix]}
+    - id: security.sensitive_critical
+      description: WS-09 raise_to_critical class (ownership, infrastructure, build and registry config)
+      level: critical
+      when: {paths_any: ["CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS", ".github/dependabot.yml", "**/*.tf", "**/terraform/**", "**/helm/**/values*.yaml", "**/k8s/**", "**/Dockerfile*", "**/.npmrc", "**/.pypirc", "**/settings.xml", "**/go.mod"]}
+    - id: security.sensitive_high
+      description: WS-09 raise_to_high class (auth, crypto, migrations, lockfiles, agent configuration files)
+      level: high
+      when: {paths_any: ["**/auth/**", "**/crypto/**", "**/security/**", "**/migrations/**", "**/package.json", "**/package-lock.json", "**/pnpm-lock.yaml", "**/yarn.lock", "**/requirements*.txt", "**/poetry.lock", "**/Cargo.lock", "**/go.sum", ".claude/**", ".mcp.json", "**/CLAUDE.md", "**/AGENTS.md"]}
+    - id: diff.too_large_for_no_gate
+      description: WS-09 diff rule (more than 25 files or 600 changed lines)
+      level: medium
+      when: {any_of: [{diff_files_changed_gt: 25}, {diff_lines_changed_gt: 600}]}
+    - id: diff.binary
+      description: Binary files changed
+      level: high
+      when: {binary_files_changed: true}
+    - id: tests.deleted_or_skipped
+      description: Tests deleted or newly skipped vs base
+      level: high
+      when: {deleted_or_skipped_tests: true}
+    - id: plan.outside_paths
+      description: Files changed that the approved plan did not name
+      level: high
+      when: {outside_plan_paths: true}
+    - id: secrets.finding
+      description: Secret scanner finding (publish is blocked independently)
+      level: critical
+      when: {secret_scan_finding: true}

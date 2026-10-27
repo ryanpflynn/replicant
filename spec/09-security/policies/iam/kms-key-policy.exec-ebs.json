@@ -1,0 +1,94 @@
+{
+  "Version": "2012-10-17",
+  "Id": "replicant-prod-exec-ebs",
+  "Statement": [
+    {
+      "Sid": "MetadataForAccount",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::222222222222:root"
+      },
+      "Action": [
+        "kms:DescribeKey",
+        "kms:GetKeyPolicy",
+        "kms:ListResourceTags"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AdminWithoutUse",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::222222222222:role/replicant-prod-platform-deployer"
+      },
+      "Action": [
+        "kms:Create*",
+        "kms:Describe*",
+        "kms:Enable*",
+        "kms:List*",
+        "kms:Put*",
+        "kms:Update*",
+        "kms:Disable*",
+        "kms:Get*",
+        "kms:TagResource",
+        "kms:UntagResource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "EbsUseThroughEc2Only",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": [
+          "arn:aws:iam::222222222222:role/replicant-prod-karpenter-controller",
+          "arn:aws:iam::222222222222:role/replicant-prod-ebs-csi-driver",
+          "arn:aws:iam::222222222222:role/replicant-prod-exec-node"
+        ]
+      },
+      "Action": [
+        "kms:Encrypt",
+        "kms:Decrypt",
+        "kms:ReEncrypt*",
+        "kms:GenerateDataKey*",
+        "kms:DescribeKey"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "ec2.us-east-1.amazonaws.com",
+          "kms:CallerAccount": "222222222222"
+        }
+      }
+    },
+    {
+      "Sid": "GrantsOnlyForAwsResources",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": [
+          "arn:aws:iam::222222222222:role/replicant-prod-karpenter-controller",
+          "arn:aws:iam::222222222222:role/replicant-prod-ebs-csi-driver"
+        ]
+      },
+      "Action": "kms:CreateGrant",
+      "Resource": "*",
+      "Condition": {
+        "Bool": {
+          "kms:GrantIsForAWSResource": "true"
+        }
+      }
+    },
+    {
+      "Sid": "NoSandboxOrRunnerUse",
+      "Effect": "Deny",
+      "Principal": {
+        "AWS": [
+          "arn:aws:iam::222222222222:role/replicant-prod-sandbox-artifacts",
+          "arn:aws:iam::222222222222:role/replicant-prod-runner-api",
+          "arn:aws:iam::222222222222:role/replicant-prod-run-notifier"
+        ]
+      },
+      "Action": "kms:*",
+      "Resource": "*"
+    }
+  ]
+}

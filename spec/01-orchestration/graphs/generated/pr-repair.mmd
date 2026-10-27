@@ -1,0 +1,67 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	context(context)
+	triage(triage)
+	reply_ack(reply_ack)
+	repair(repair)
+	qa_repair(qa_repair)
+	verify_repair(verify_repair)
+	risk_repair(risk_repair)
+	push_gate(push_gate)
+	push(push)
+	reply_fix(reply_fix)
+	reply_no_action(reply_no_action)
+	memory(memory)
+	end__gate_expired(end__gate_expired)
+	end__policy_violation(end__policy_violation)
+	end__qa_failed(end__qa_failed)
+	end__rejected_at_gate(end__rejected_at_gate)
+	end__repair_pushed(end__repair_pushed)
+	__end__([<p>__end__</p>]):::last
+	__start__ -.-> context;
+	__start__ -.-> memory;
+	__start__ -.-> push;
+	__start__ -.-> push_gate;
+	__start__ -.-> qa_repair;
+	__start__ -.-> repair;
+	__start__ -.-> reply_ack;
+	__start__ -.-> reply_fix;
+	__start__ -.-> reply_no_action;
+	__start__ -.-> risk_repair;
+	__start__ -.-> triage;
+	__start__ -.-> verify_repair;
+	context --> triage;
+	memory --> end__repair_pushed;
+	push --> reply_fix;
+	push_gate -.-> end__gate_expired;
+	push_gate -.-> end__rejected_at_gate;
+	push_gate -.-> push;
+	push_gate -.-> qa_repair;
+	push_gate -.-> repair;
+	qa_repair -.-> end__qa_failed;
+	qa_repair -.-> repair;
+	qa_repair -.-> verify_repair;
+	repair -.-> qa_repair;
+	repair -.-> reply_no_action;
+	reply_ack --> repair;
+	reply_fix --> memory;
+	reply_no_action --> memory;
+	risk_repair --> push_gate;
+	triage -.-> reply_ack;
+	triage -.-> reply_no_action;
+	verify_repair -.-> end__policy_violation;
+	verify_repair -.-> risk_repair;
+	end__gate_expired --> __end__;
+	end__policy_violation --> __end__;
+	end__qa_failed --> __end__;
+	end__rejected_at_gate --> __end__;
+	end__repair_pushed --> __end__;
+	qa_repair -.-> qa_repair;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc

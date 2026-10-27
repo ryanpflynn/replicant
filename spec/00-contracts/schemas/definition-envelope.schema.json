@@ -1,0 +1,260 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/contracts/definition-envelope/v1.json",
+  "title": "Registry definition envelope",
+  "description": "Contract C-DEF v3.0.0 (WS-00). Envelope for every authored registry object in the Git config repo: AgentDefinition, EnvironmentDefinition, GraphDefinition, Policy, NodeCatalog. 'spec' is validated by the kind-specific schema owned by a Phase 2 workstream (see definitions-contracts.md section 2). ReleaseBundle has its own schema (release-bundle.schema.json).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "properties": {
+    "apiVersion": {
+      "description": "Envelope plus spec major version. A breaking change to a kind's spec schema introduces replicant.example.com/v2 for that kind; the registry serves both during migration.",
+      "const": "replicant.example.com/v1"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "AgentDefinition",
+        "EnvironmentDefinition",
+        "GraphDefinition",
+        "Policy",
+        "NodeCatalog"
+      ]
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "scope",
+        "owners"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 63,
+          "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+        },
+        "scope": {
+          "description": "global: usable by every tenant's bundles. tenant: usable only in that tenant's derived bundles (tenant layer).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "level"
+          ],
+          "properties": {
+            "level": {
+              "type": "string",
+              "enum": [
+                "global",
+                "tenant"
+              ]
+            },
+            "tenant_id": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 32,
+              "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+            }
+          },
+          "if": {
+            "properties": {
+              "level": {
+                "const": "tenant"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "tenant_id"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "tenant_id"
+              ]
+            }
+          }
+        },
+        "owners": {
+          "description": "Okta groups whose members must approve changes (CODEOWNERS in the config repo is generated from this).",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10,
+          "items": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "labels": {
+          "type": "object",
+          "maxProperties": 20,
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9_.-]{0,62}$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 63
+          }
+        }
+      }
+    },
+    "spec": {
+      "description": "Kind-specific. Must not contain secrets (references to secret names only). References to other registry objects use the reference string grammar (definitions-contracts.md section 3).",
+      "type": "object"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "Policy"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "spec": {
+            "type": "object",
+            "required": [
+              "policyType"
+            ],
+            "properties": {
+              "policyType": {
+                "type": "string",
+                "enum": [
+                  "router_rules",
+                  "risk_rules",
+                  "gate_rules",
+                  "approval_channels",
+                  "budgets",
+                  "runtime_selection",
+                  "network_profiles",
+                  "memory_snapshot",
+                  "codebase_bindings",
+                  "repair_limits",
+                  "retention",
+                  "runner_polling"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "NodeCatalog"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "metadata": {
+            "properties": {
+              "scope": {
+                "properties": {
+                  "level": {
+                    "const": "global"
+                  }
+                }
+              }
+            }
+          },
+          "spec": {
+            "type": "object",
+            "required": [
+              "workerDeployment",
+              "nodes"
+            ],
+            "properties": {
+              "workerDeployment": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "deploymentName",
+                  "buildId",
+                  "imageDigest"
+                ],
+                "properties": {
+                  "deploymentName": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9-]{1,62}$"
+                  },
+                  "buildId": {
+                    "type": "string",
+                    "pattern": "^b[0-9]{8}-[0-9a-f]{12}$"
+                  },
+                  "imageDigest": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$"
+                  }
+                }
+              },
+              "nodes": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "nodeType",
+                    "role",
+                    "inputSchema",
+                    "outputSchema",
+                    "configSchema"
+                  ],
+                  "properties": {
+                    "nodeType": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{1,40}$"
+                    },
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "intake_router",
+                        "planner",
+                        "implementer",
+                        "reviewer",
+                        "skeptic",
+                        "verifier",
+                        "qa",
+                        "human_gate",
+                        "publisher",
+                        "feedback_ingestor",
+                        "memory_writer",
+                        "context_assembler",
+                        "auxiliary"
+                      ]
+                    },
+                    "inputSchema": {
+                      "type": "object"
+                    },
+                    "outputSchema": {
+                      "type": "object"
+                    },
+                    "configSchema": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

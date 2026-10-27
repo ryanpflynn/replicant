@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/role-results/takeover/v1.json",
+  "title": "Role result: takeover",
+  "description": "Owner: WS-03. Role takeover: restore the latest diff and session, then archive the workspace (workspace_archive) for the requester. No CLI turn is required (cli.exit_code 0 with result_subtype 'not_run').",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "agent_report",
+    "cli",
+    "archive"
+  ],
+  "properties": {
+    "schema": {
+      "const": "replicant.role-result.takeover/v1"
+    },
+    "agent_report": {
+      "$ref": "#/$defs/agent_report"
+    },
+    "cli": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/cli_execution"
+    },
+    "budget": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/budget_observation"
+    },
+    "archive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bytes",
+        "files"
+      ],
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "excluded_globs": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "string",
+            "maxLength": 256
+          }
+        },
+        "includes_untracked": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "agent_report": {
+      "description": "Takeover runs do not need the agent to produce anything; the entrypoint writes a fixed report.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcome",
+        "summary"
+      ],
+      "properties": {
+        "outcome": {
+          "description": "Agent's own claim of task outcome. The entrypoint copies it to run_result.outcome unless an entrypoint-detected condition overrides it (e.g. diff empty -> no_changes; integrity violation -> failed).",
+          "type": "string",
+          "enum": [
+            "completed",
+            "no_changes",
+            "blocked",
+            "failed"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 8000
+        }
+      }
+    }
+  }
+}

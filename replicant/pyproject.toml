@@ -1,0 +1,34 @@
+# Replicant monorepo: uv workspace root (Python 3.12). One lockfile (uv.lock) for every Python member.
+# Register a new member by appending its directory to [tool.uv.workspace].members below (one line, keep the
+# list explicit: uv fails on a glob that matches a directory without pyproject.toml), and give the member its
+# own pyproject.toml with a [build-system]. Workspace libraries are consumed as
+#   dependencies = ["replicant-ids"]   plus   [tool.uv.sources] replicant-ids = { workspace = true }
+[project]
+name = "replicant-monorepo"
+version = "0.0.0"
+requires-python = ">=3.12,<3.13"
+description = "Replicant monorepo workspace root (not a package)"
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = [
+  "workers/publisher-worker",
+  "workers/replicant-projector",
+  "workers/replicant-worker",
+  "libs/python/replicant-temporal",
+  "libs/python/replicant-ids",
+  "libs/python/replicant-telemetry",
+  "libs/python/replicant-db",
+  "cli",
+  "tests/e2e",
+  "libs/python/replicant-scm",
+  "services/control-plane-api",
+  "services/control-plane-api/replicant-dev-auth",
+  "services/github-integration",
+  "services/github-token-broker",
+  "libs/python/replicant-cdef",
+  "services/slack-integration",
+  "tools/slack-mock",
+]

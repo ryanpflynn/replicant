@@ -1,0 +1,32 @@
+# Temporal dynamic config for the local stack. Keep in sync with deploy/helm/temporal/values-*.yaml; every
+# key that differs from prod is listed in parity.md (P-02).
+limit.maxIDLength:
+  - value: 255            # C-IDS IDs are <= 120 chars; 255 matches the SQL visibility column limit in prod
+    constraints: {}
+system.forceSearchAttributesCacheRefreshOnRead:
+  - value: true           # local only: search attributes registered by temporal-bootstrap are visible at once
+    constraints: {}
+frontend.enableUpdateWorkflowExecution:
+  - value: true
+    constraints: {}
+frontend.enableUpdateWorkflowExecutionAsyncAccepted:
+  - value: true
+    constraints: {}
+system.enableDeploymentVersions:
+  - value: true
+    constraints: {}
+frontend.workerVersioningWorkflowAPIs:
+  - value: true
+    constraints: {}
+frontend.namespaceRPS:
+  - value: 2400
+    constraints: {}
+history.maximumSignalsPerExecution:
+  - value: 10000
+    constraints: {}
+limit.historyCount.warn:
+  - value: 10240
+    constraints: {}
+limit.historyCount.error:
+  - value: 51200
+    constraints: {}

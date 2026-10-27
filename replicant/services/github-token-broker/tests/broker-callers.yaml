@@ -1,0 +1,27 @@
+# Allowlisted callers and the maximum permissions each may request (ADR-011). Locally callers authenticate
+# with static tokens from the dev secret store; in prod with projected ServiceAccount tokens.
+callers:
+  publisher-worker:
+    max_permissions: {contents: write, pull_requests: write}
+    repos_per_request: 1
+  github-integration:
+    max_permissions: {issues: write, pull_requests: write, checks: write}
+    repos_per_request: 1
+  identity-service:
+    max_permissions: {metadata: read}         # collaborator-permission checks (C-STATE: live, never stored)
+    repos_per_request: 1
+  repo-mirror:
+    max_permissions: {contents: read, metadata: read}
+    repos_per_request: 5
+providers:
+  gitea:
+    # Gitea scopes are not per-repository (parity.md P-12). The broker maps:
+    #   contents:read -> read:repository; contents:write -> write:repository;
+    #   issues:write/pull_requests:write -> write:issue + write:repository; checks:write -> write:repository
+    scope_map:
+      contents:read: [read:repository]
+      contents:write: [write:repository]
+      issues:write: [write:issue]
+      pull_requests:write: [write:repository, write:issue]
+      checks:write: [write:repository]
+      metadata:read: [read:repository, read:organization]

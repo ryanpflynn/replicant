@@ -1,0 +1,347 @@
+# Exec-cluster system namespaces: replicant-runner (runner-api, agentrun-controller, run-notifier)
+# and replicant-mirror (repo-mirror). Exec VPC 10.41.0.0/16 (account replicant-<env>-exec, CCR-09-07).
+# NLB subnets (XD-FIX-R1-211): the orchestration listener's PrivateLink NLB lives in 10.41.8.0/24 and
+# the sandbox listener's internal NLB in 10.41.9.0/24. Both target groups use IP targets with client
+# IP preservation OFF, so pods see the NLB's private address as the source; which clients may reach
+# each NLB is enforced by the NLB security group (core endpoint ENIs only / sandbox node subnets only)
+# and by the PrivateLink endpoint-service allowlist.
+# Every pod with an EKS Pod Identity association must reach the agent at 169.254.170.23:80 (IPv4) and
+# [fd00:ec2::23]:80 (IPv6) [verified: https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html, 2026-10-24].
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: runner-api
+  namespace: replicant-runner
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: runner-api
+  enableDefaultDeny:
+    egress: true
+    ingress: true
+  ingress:
+    # Orchestration listener: core replicant-worker and eval-worker through the PrivateLink NLB.
+    - fromCIDRSet:
+        - cidr: 10.41.8.0/24
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
+    # Sandbox listener: sandbox pods through the internal sandbox NLB.
+    - fromCIDRSet:
+        - cidr: 10.41.9.0/24
+      toPorts:
+        - ports:
+            - port: "9443"
+              protocol: TCP
+    # Exec-cluster callers on the orchestration listener by ClusterIP (02-execution/runner-service.md §1.1):
+    # repo-mirror (GET /v1/revocations) and the security response automation (security cancel, R1V-059).
+    # runner-api's exec-issuer verifier limits each subject to its paths.
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: replicant-mirror
+            app.kubernetes.io/name: repo-mirror
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: replicant-security
+            app.kubernetes.io/name: security-automation
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
+    # Internal mint endpoint (initial token set at pod creation): agentrun-controller only (R1-211 a).
+    - fromEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: agentrun-controller
+      toPorts:
+        - ports:
+            - port: "9444"
+              protocol: TCP
+  egress:
+    - toEntities:
+        - kube-apiserver
+    - toCIDRSet:
+        - cidr: 169.254.170.23/32
+      toPorts:
+        - ports:
+            - port: "80"
+              protocol: TCP
+    - toCIDRSet:
+        - cidr: fd00:ec2::23/128
+      toPorts:
+        - ports:
+            - port: "80"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+          rules:
+            dns:
+              - matchName: kms.us-east-1.amazonaws.com
+              - matchName: sts.us-east-1.amazonaws.com
+              - matchName: acme-replicant-prod-artifacts.s3.us-east-1.amazonaws.com
+              - matchName: acme-replicant-prod-registry.s3.us-east-1.amazonaws.com
+              - matchName: acme-replicant-prod-transcripts.s3.us-east-1.amazonaws.com
+              - matchName: acme-replicant-prod-ops.s3.us-east-1.amazonaws.com
+              - matchName: grants.prod.replicant.internal
+              - matchName: oidc.eks.us-east-1.amazonaws.com
+    - toFQDNs:
+        - matchName: kms.us-east-1.amazonaws.com
+        - matchName: sts.us-east-1.amazonaws.com
+        - matchName: acme-replicant-prod-artifacts.s3.us-east-1.amazonaws.com
+        - matchName: acme-replicant-prod-registry.s3.us-east-1.amazonaws.com
+        # Execution-evidence check: LIST the run's transcripts prefix (runner-service.md RS-3, R1-047).
+        - matchName: acme-replicant-prod-transcripts.s3.us-east-1.amazonaws.com
+        # Kill-switch mirror read (A-5) and exec revocation feed write (C-ART 2.0.0, R1V-002).
+        - matchName: acme-replicant-prod-ops.s3.us-east-1.amazonaws.com
+        # Core run-grant JWKS and /grants/revoked (C-RUNNER 3.0.0), through PrivateLink (R1-211 b).
+        - matchName: grants.prod.replicant.internal
+        # Core cluster OIDC issuer JWKS for worker-token verification, through the domain-allowlisted
+        # egress firewall (the only non-endpoint path from exec-system subnets).
+        - matchName: oidc.eks.us-east-1.amazonaws.com
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: run-notifier
+  namespace: replicant-runner
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: run-notifier
+  enableDefaultDeny:
+    egress: true
+    ingress: true
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: agentrun-controller
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+  egress:
+    - toCIDRSet:
+        - cidr: 169.254.170.23/32
+      toPorts:
+        - ports:
+            - port: "80"
+              protocol: TCP
+    - toCIDRSet:
+        - cidr: fd00:ec2::23/128
+      toPorts:
+        - ports:
+            - port: "80"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+          rules:
+            dns:
+              - matchName: temporal-frontend.prod.replicant.internal
+              - matchName: kms.us-east-1.amazonaws.com
+    - toFQDNs:
+        - matchName: temporal-frontend.prod.replicant.internal
+      toPorts:
+        - ports:
+            - port: "7233"
+              protocol: TCP
+    # Tenant-key GenerateDataKey for the Signal payload codec (C-ARCH 1.4.0 run-notifier role).
+    - toFQDNs:
+        - matchName: kms.us-east-1.amazonaws.com
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: agentrun-controller
+  namespace: replicant-runner
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: agentrun-controller
+  enableDefaultDeny:
+    egress: true
+    ingress: true
+  egress:
+    - toEntities:
+        - kube-apiserver
+    - toCIDRSet:
+        - cidr: 169.254.170.23/32
+      toPorts:
+        - ports:
+            - port: "80"
+              protocol: TCP
+    - toCIDRSet:
+        - cidr: fd00:ec2::23/128
+      toPorts:
+        - ports:
+            - port: "80"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: run-notifier
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: runner-api
+      toPorts:
+        - ports:
+            - port: "9444"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+          rules:
+            dns:
+              - matchName: acme-replicant-prod-registry.s3.us-east-1.amazonaws.com
+              - matchName: acme-replicant-prod-artifacts.s3.us-east-1.amazonaws.com
+              - matchName: acme-replicant-prod-transcripts.s3.us-east-1.amazonaws.com
+              - matchName: acme-replicant-prod-session.s3.us-east-1.amazonaws.com
+              - matchName: kms.us-east-1.amazonaws.com
+    - toFQDNs:
+        - matchName: acme-replicant-prod-registry.s3.us-east-1.amazonaws.com
+        - matchName: acme-replicant-prod-artifacts.s3.us-east-1.amazonaws.com
+        - matchName: acme-replicant-prod-transcripts.s3.us-east-1.amazonaws.com
+        - matchName: acme-replicant-prod-session.s3.us-east-1.amazonaws.com
+        - matchName: kms.us-east-1.amazonaws.com
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: repo-mirror
+  namespace: replicant-mirror
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: repo-mirror
+  enableDefaultDeny:
+    egress: true
+    ingress: true
+  ingress:
+    # Sandboxes reach repo-mirror through its internal NLB (WS-02 fallback rule 6, R2-037) in
+    # 10.41.10.0/24, or directly as endpoints when B-NET-01 shows Kata reaches ClusterIPs.
+    - fromCIDRSet:
+        - cidr: 10.41.10.0/24
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
+    - fromEndpoints:
+        - matchLabels:
+            io.cilium.k8s.namespace.labels.replicant.example.com/zone: sandbox
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
+  egress:
+    # GET /v1/revocations on runner-api by ClusterIP (02-execution/runner-service.md §1.1).
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: replicant-runner
+            app.kubernetes.io/name: runner-api
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+          rules:
+            dns:
+              - matchName: github.com
+              - matchName: api.github.com
+              - matchName: codeload.github.com
+              - matchName: token-broker.prod.replicant.internal
+              - matchName: runner-sandbox.prod.replicant.internal
+              - matchName: grants.prod.replicant.internal
+              - matchName: git.eval.prod.replicant.internal
+    - toFQDNs:
+        - matchName: github.com
+        - matchName: api.github.com
+        - matchName: codeload.github.com
+        - matchName: token-broker.prod.replicant.internal
+        - matchName: runner-sandbox.prod.replicant.internal
+        - matchName: grants.prod.replicant.internal
+        - matchName: git.eval.prod.replicant.internal
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+---
+# Security response automation (tenancy.md §3.5, R1V-059): consumes Tetragon alerts, cordons the node,
+# finds its runs by the pod label replicant.example.com/run-id, and cancels them through runner-api with
+# reason security. No cloud credentials (no Pod Identity association), no internet.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: security-automation
+  namespace: replicant-security
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: security-automation
+  enableDefaultDeny:
+    egress: true
+    ingress: true
+  ingress:
+    # Tetragon export through Alloy (alert webhook).
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: replicant-observability
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+  egress:
+    - toEntities:
+        - kube-apiserver
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: replicant-runner
+            app.kubernetes.io/name: runner-api
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY

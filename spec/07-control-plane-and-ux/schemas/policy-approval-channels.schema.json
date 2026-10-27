@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/kinds/policy-approval_channels/v1.json",
+  "title": "Policy spec: approval_channels",
+  "description": "WS-07. Validates Policy.spec when policyType=approval_channels. Behavioural part of channel selection (which channel TYPES may carry which gates, ADR-013): it is in the bundle. Channel TARGETS (Slack channel IDs, team handles) are operational and live in tenancy.tenant_settings.approval_targets, read at gate open and recorded in the gate state.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "policyType",
+    "routes"
+  ],
+  "properties": {
+    "policyType": {
+      "const": "approval_channels"
+    },
+    "routes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "match",
+          "channels"
+        ],
+        "properties": {
+          "match": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "gate_kind_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "plan_approval",
+                    "publish_approval",
+                    "clarification",
+                    "budget_extension",
+                    "bundle_migration",
+                    "leak_purge"
+                  ]
+                }
+              },
+              "risk_at_least": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "critical"
+                ]
+              },
+              "risk_at_most": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "critical"
+                ]
+              },
+              "workflow_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "channels": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "ui",
+                "slack",
+                "github",
+                "cli"
+              ]
+            }
+          },
+          "slack": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "post_to": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "approval_channel",
+                    "dm_eligible",
+                    "dm_requester_fyi"
+                  ]
+                }
+              },
+              "max_dm_recipients": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 25,
+                "default": 5
+              }
+            }
+          },
+          "github": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "issue_commands": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "low_risk_digest": {
+          "type": "boolean",
+          "default": false,
+          "description": "Low-risk batchable gates are announced in a twice-daily digest instead of one message each"
+        },
+        "times": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+          },
+          "maxItems": 4
+        }
+      }
+    }
+  }
+}

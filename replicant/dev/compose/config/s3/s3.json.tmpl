@@ -1,0 +1,34 @@
+{
+  "identities": [
+    {
+      "name": "replicant-admin",
+      "credentials": [{"accessKey": "replicant-admin", "secretKey": "${S3_ADMIN_SECRET}"}],
+      "actions": ["Admin", "Read", "List", "Tagging", "Write"]
+    },
+    {
+      "name": "runner-local",
+      "credentials": [{"accessKey": "runner-local", "secretKey": "${S3_RUNNER_SECRET}"}],
+      "actions": ["Read:local-replicant-local-registry", "List:local-replicant-local-registry", "Write:local-replicant-local-artifacts", "Tagging:local-replicant-local-artifacts", "Read:local-replicant-local-ops", "Write:local-replicant-local-ops"]
+    },
+    {
+      "name": "replicant-services",
+      "credentials": [{"accessKey": "replicant-services", "secretKey": "${S3_SERVICES_SECRET}"}],
+      "actions": ["Read", "List", "Tagging", "Write"]
+    },
+    {
+      "name": "gateway-shim",
+      "credentials": [{"accessKey": "gateway-shim", "secretKey": "${S3_GATEWAY_SHIM_SECRET}"}],
+      "actions": ["Write:local-replicant-local-artifacts", "Tagging:local-replicant-local-artifacts"]
+    },
+    {
+      "name": "replicant-dev-reader",
+      "credentials": [{"accessKey": "replicant-dev-reader", "secretKey": "${S3_DEV_READER_SECRET}"}],
+      "actions": ["Read", "List"]
+    },
+    {
+      "name": "langfuse",
+      "credentials": [{"accessKey": "langfuse", "secretKey": "${S3_LANGFUSE_SECRET}"}],
+      "actions": ["Read:local-langfuse", "List:local-langfuse", "Write:local-langfuse"]
+    }
+  ]
+}

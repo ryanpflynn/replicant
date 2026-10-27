@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/runtime/rightsizing-proposal/v1.json",
+  "title": "Resource profile right-sizing proposal",
+  "description": "Owner: WS-03. Produced by the profile-rightsizer job (usage-ingestor, weekly and on failure triggers) from cost.run_resource_usage. Served by control-plane-api; the config repo's scheduled workflow turns each open proposal into a pull request that a human (environment owners via CODEOWNERS) approves (environment-definition.md section 5.6).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "proposal_id",
+    "created_at",
+    "environment",
+    "profile",
+    "trigger",
+    "window",
+    "samples",
+    "current",
+    "proposed",
+    "formula_version",
+    "evidence"
+  ],
+  "properties": {
+    "schema": {
+      "const": "replicant.rightsizing-proposal/v1"
+    },
+    "proposal_id": {
+      "type": "string",
+      "pattern": "^rsp_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "created_at": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/timestamp"
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "digest"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/definition_name"
+        },
+        "tenant_id": {
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/tenant_id"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "digest": {
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/digest"
+        }
+      }
+    },
+    "profile": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,62}$"
+    },
+    "roles": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/run_role"
+      }
+    },
+    "runtime_class": {
+      "type": "string",
+      "enum": [
+        "replicant-gvisor",
+        "replicant-kata-fc",
+        "replicant-kata-clh"
+      ]
+    },
+    "trigger": {
+      "type": "string",
+      "enum": [
+        "scheduled_drift",
+        "oom_failures",
+        "disk_failures",
+        "throttling",
+        "waste",
+        "cli_image_change",
+        "base_image_change",
+        "runtime_class_change",
+        "manual_baseline"
+      ]
+    },
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "end"
+      ],
+      "properties": {
+        "start": {
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/timestamp"
+        },
+        "end": {
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/timestamp"
+        }
+      }
+    },
+    "samples": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "current": {
+      "$ref": "https://schemas.replicant.example.com/kinds/environment-definition/v1.json#/$defs/resourceProfile"
+    },
+    "proposed": {
+      "$ref": "https://schemas.replicant.example.com/kinds/environment-definition/v1.json#/$defs/resourceProfile"
+    },
+    "formula_version": {
+      "enum": [
+        "rp-1",
+        "rp-2"
+      ]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "stats"
+      ],
+      "properties": {
+        "stats": {
+          "$ref": "https://schemas.replicant.example.com/kinds/environment-definition/v1.json#/$defs/derivation/properties/baseline/properties/stats"
+        },
+        "failures": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "oom_killed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "workspace_disk_exceeded": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "pod_evicted": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "cpu_throttled_ratio_p95": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "estimated_monthly_cost_delta_usd": {
+          "type": "number"
+        },
+        "grafana_url": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      }
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "open",
+        "pr_opened",
+        "merged",
+        "rejected",
+        "superseded"
+      ]
+    }
+  }
+}

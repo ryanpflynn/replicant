@@ -1,0 +1,33 @@
+{
+  "sts": {
+    "tokenDuration": "1h",
+    "maxSessionLength": "12h",
+    "issuer": "seaweedfs-sts",
+    "signingKey": "${S3_STS_SIGNING_KEY_B64}"
+  },
+  "roles": [
+    {
+      "roleName": "replicant-sandbox-artifacts",
+      "roleArn": "arn:aws:iam::000000000000:role/replicant-sandbox-artifacts",
+      "trustPolicy": {
+        "Version": "2012-10-17",
+        "Statement": [{"Effect": "Allow", "Principal": {"AWS": ["arn:aws:iam::000000000000:user/runner-local", "arn:aws:iam::000000000000:user/replicant-services"]}, "Action": ["sts:AssumeRole"]}]
+      },
+      "attachedPolicies": ["replicant-sandbox-artifacts-max"]
+    }
+  ],
+  "policies": [
+    {
+      "name": "replicant-sandbox-artifacts-max",
+      "document": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {"Effect": "Allow", "Action": ["s3:PutObject", "s3:PutObjectTagging", "s3:AbortMultipartUpload", "s3:GetObject"],
+           "Resource": ["arn:aws:s3:::local-replicant-local-artifacts/tenants/*",
+                        "arn:aws:s3:::local-replicant-local-transcripts/tenants/*",
+                        "arn:aws:s3:::local-replicant-local-session/tenants/*"]}
+        ]
+      }
+    }
+  ]
+}

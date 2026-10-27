@@ -1,0 +1,1008 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/contracts/job-request/v1.json",
+  "title": "JobRequest",
+  "description": "Contract C-JOBREQ v2.0.0 (WS-00). Changelog 2.0.0 (breaking, CCR-ORCH-02): product rename to Replicant; product-named identifiers change (schema $id host schemas.replicant.example.com, names, labels). The single normalized trigger. Every channel adapter (GitHub App, Jira, Slack, UI, CLI, schedules, eval harness) builds one and submits it to control-plane-api POST /v1/jobs. control-plane-api authorizes it, assigns job_id, persists it in intake.job_requests, and starts the ReplicantJob workflow with it as the workflow input (by value; large fields are references). All free text is untrusted input (D-21). Changelog: 1.1.0 CCR-11-01 (gitea channel identity). 1.2.0 (additive) CCR-06-01 options.evaluation. 1.3.0 (additive, wave 1): evaluation_options.memory_replay_job_id (CCR-04-05), harness_task and pipeline_id, pipeline_id required for shadow (CCR-06-07). 1.4.0 (additive): app_registration staging (CCR-07-09); schedule_id is sch_<ulid> (CCR-07-08). 1.4.1: schedule_id pattern tightened to the strict C-IDS ULID regex (ruling). 1.4.2 (wave 3): target_selector.max_repos maximum 15000 (R1V-006, R2-046).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "request_id",
+    "dedupe_key",
+    "tenant_id",
+    "source",
+    "requester",
+    "targets",
+    "intent",
+    "workflow_type",
+    "priority",
+    "received_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "replicant.job-request/v1"
+    },
+    "request_id": {
+      "description": "Minted by the channel adapter. See ids-and-naming.md.",
+      "type": "string",
+      "pattern": "^jrq_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "dedupe_key": {
+      "description": "Same real-world trigger yields the same key. (tenant_id, dedupe_key) is unique; a duplicate submission returns the existing job_id with HTTP 200 instead of 201.",
+      "type": "string",
+      "maxLength": 256,
+      "pattern": "^[a-z]+:[A-Za-z0-9._:/@#-]+$"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/tenant_id"
+    },
+    "source": {
+      "$ref": "#/$defs/source"
+    },
+    "requester": {
+      "$ref": "#/$defs/requester"
+    },
+    "targets": {
+      "description": "Explicit repositories. Exactly one of targets (non-empty) or target_selector is used. For maintenance fan-out with a selector, targets is empty and the batch resolves the selector into child jobs.",
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "$ref": "#/$defs/target"
+      }
+    },
+    "target_selector": {
+      "$ref": "#/$defs/target_selector"
+    },
+    "intent": {
+      "$ref": "#/$defs/intent"
+    },
+    "attachments": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "$ref": "#/$defs/attachment"
+      },
+      "default": []
+    },
+    "workflow_type": {
+      "description": "Requested workflow type, or 'auto' to let the router classify. The router may refuse a requested type that policy does not allow for this target (for example 'docs' for a diff touching code) and escalate it, never downgrade risk (D-19).",
+      "type": "string",
+      "enum": [
+        "auto",
+        "bugfix",
+        "feature",
+        "api_change",
+        "docs",
+        "hotfix",
+        "maintenance",
+        "pr_repair",
+        "qa_only"
+      ]
+    },
+    "priority": {
+      "description": "Maps to Temporal task priority and Kubernetes PriorityClass. 'urgent' is allowed only for workflow_type hotfix and only for principals with the hotfix permission (checked by control-plane-api).",
+      "type": "string",
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "urgent"
+      ]
+    },
+    "constraints": {
+      "$ref": "#/$defs/constraints"
+    },
+    "options": {
+      "$ref": "#/$defs/options"
+    },
+    "related": {
+      "$ref": "#/$defs/related"
+    },
+    "requested_release_bundle_id": {
+      "description": "Explicit bundle pin. Honored only for principals with the release:pin permission (operators, eval harness); otherwise rejected with 403. Normally absent and assigned by bundle assignment rules.",
+      "type": "string",
+      "pattern": "^rb_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "trace_context": {
+      "$ref": "#/$defs/trace_context"
+    },
+    "received_at": {
+      "description": "When the channel adapter received the original event (RFC 3339, UTC).",
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "allOf": [
+    {
+      "description": "Exactly one targeting mode.",
+      "oneOf": [
+        {
+          "properties": {
+            "targets": {
+              "minItems": 1
+            }
+          },
+          "required": [
+            "targets"
+          ],
+          "not": {
+            "required": [
+              "target_selector"
+            ]
+          }
+        },
+        {
+          "properties": {
+            "targets": {
+              "maxItems": 0
+            },
+            "workflow_type": {
+              "const": "maintenance"
+            }
+          },
+          "required": [
+            "target_selector"
+          ]
+        }
+      ]
+    },
+    {
+      "description": "pr_repair requires a PR on its single target.",
+      "if": {
+        "properties": {
+          "workflow_type": {
+            "const": "pr_repair"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "targets": {
+            "minItems": 1,
+            "maxItems": 1,
+            "items": {
+              "required": [
+                "pull_request"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "tenant_id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 32,
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+    },
+    "principal_id": {
+      "type": "string",
+      "pattern": "^(usr_[0-9a-hjkmnp-tv-z]{26}|svc_[a-z][a-z0-9-]{2,40})$"
+    },
+    "job_id": {
+      "type": "string",
+      "pattern": "^job_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "channel",
+        "event_type",
+        "event_id"
+      ],
+      "properties": {
+        "channel": {
+          "type": "string",
+          "enum": [
+            "github",
+            "jira",
+            "slack",
+            "ui",
+            "cli",
+            "schedule",
+            "api",
+            "eval"
+          ]
+        },
+        "event_type": {
+          "description": "Channel-specific event name, for example 'issues.opened', 'issues.labeled', 'issue_comment.created' (/replicant command), 'pull_request_review_comment.created', 'jira:issue_created', 'slack.slash_command', 'slack.message_action', 'ui.form', 'cli.run', 'schedule.fire', 'eval.case'.",
+          "type": "string",
+          "maxLength": 100,
+          "pattern": "^[a-z_:.]+$"
+        },
+        "event_id": {
+          "description": "Channel event identifier: X-GitHub-Delivery GUID, Jira webhook event id, Slack trigger_id or action_ts, UI/CLI client idempotency key, schedule action time.",
+          "type": "string",
+          "maxLength": 200
+        },
+        "url": {
+          "description": "Human link back to the originating object (issue, Jira ticket, Slack permalink).",
+          "type": "string",
+          "format": "uri",
+          "maxLength": 2048
+        },
+        "github": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "installation_id"
+          ],
+          "properties": {
+            "installation_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "app_registration": {
+              "description": "Which registration of the replicant GitHub App received the event (D-24).",
+              "type": "string",
+              "enum": [
+                "prod",
+                "dev",
+                "staging"
+              ]
+            },
+            "comment_id": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "slack": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "team_id",
+            "channel_id"
+          ],
+          "properties": {
+            "team_id": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "enterprise_id": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "channel_id": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "thread_ts": {
+              "type": "string",
+              "maxLength": 32
+            }
+          }
+        },
+        "jira": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "site",
+            "issue_key"
+          ],
+          "properties": {
+            "site": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "issue_key": {
+              "type": "string",
+              "pattern": "^[A-Z][A-Z0-9_]+-[1-9][0-9]*$"
+            }
+          }
+        },
+        "schedule": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schedule_id"
+          ],
+          "properties": {
+            "schedule_id": {
+              "description": "Temporal Schedule ID, sch_<ulid> (C-IDS regex, CCR-07-08). The human name is display_name, never part of the ID.",
+              "type": "string",
+              "pattern": "^sch_[0-9a-hjkmnp-tv-z]{26}$"
+            },
+            "scheduled_time": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        }
+      }
+    },
+    "requester": {
+      "description": "The identity on whose behalf the job runs. Every authorization check (Okta groups plus repo permission, D-18) uses principal_id, or on_behalf_of for service principals. Unlinked channel identities are rejected by the adapter before a JobRequest is built (D-18); they can never appear here.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "principal_id",
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "user",
+            "service"
+          ]
+        },
+        "principal_id": {
+          "$ref": "#/$defs/principal_id"
+        },
+        "on_behalf_of": {
+          "description": "Required when kind=service (schedules, eval): the owning human whose permissions bound the job (no confused deputy).",
+          "$ref": "#/$defs/principal_id"
+        },
+        "channel_identity": {
+          "description": "The raw identity seen on the channel, kept for audit and for replies. Never used for authorization.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "id"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "github",
+                "gitea",
+                "slack",
+                "jira",
+                "okta"
+              ]
+            },
+            "id": {
+              "description": "Stable channel user id: GitHub numeric user id, Slack user id, Jira accountId, Okta sub.",
+              "type": "string",
+              "maxLength": 128
+            },
+            "login": {
+              "type": "string",
+              "maxLength": 128
+            }
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "service"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "on_behalf_of"
+        ],
+        "properties": {
+          "principal_id": {
+            "pattern": "^svc_"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "principal_id": {
+            "pattern": "^usr_"
+          }
+        }
+      }
+    },
+    "repo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "host",
+        "owner",
+        "name",
+        "repo_id"
+      ],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "github",
+            "gitea"
+          ],
+          "description": "gitea is used only by the local profile (D-20)."
+        },
+        "host": {
+          "type": "string",
+          "maxLength": 255,
+          "examples": [
+            "github.com"
+          ]
+        },
+        "owner": {
+          "type": "string",
+          "maxLength": 100,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9-_.]*$"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 100,
+          "pattern": "^[A-Za-z0-9._-]+$"
+        },
+        "repo_id": {
+          "description": "Provider's immutable repository id (GitHub GraphQL node id or numeric id as string). Used for authorization and dedupe because owner/name can be renamed.",
+          "type": "string",
+          "maxLength": 64
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repo"
+      ],
+      "properties": {
+        "repo": {
+          "$ref": "#/$defs/repo"
+        },
+        "base_ref": {
+          "description": "Branch to base work on. Default: the repository default branch, resolved by the router.",
+          "type": "string",
+          "maxLength": 255
+        },
+        "base_sha": {
+          "description": "Optional pinned commit. If absent, the workflow resolves base_ref to a SHA once (activity) and records it.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        },
+        "paths": {
+          "description": "Optional path scope hints (globs). Advisory to the planner; risk rules evaluate the actual diff.",
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "issue": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "number"
+          ],
+          "properties": {
+            "number": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "node_id": {
+              "type": "string",
+              "maxLength": 64
+            }
+          }
+        },
+        "pull_request": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "number"
+          ],
+          "properties": {
+            "number": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "head_ref": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "head_sha": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+            }
+          }
+        }
+      }
+    },
+    "target_selector": {
+      "description": "Repository selection for maintenance fan-out, resolved by the MaintenanceBatch workflow through an activity against the service catalog (WS-04) at batch start and recorded.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "catalog_query"
+      ],
+      "properties": {
+        "catalog_query": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "languages": {
+              "type": "array",
+              "maxItems": 10,
+              "items": {
+                "type": "string",
+                "maxLength": 40
+              }
+            },
+            "service_groups": {
+              "type": "array",
+              "maxItems": 50,
+              "items": {
+                "type": "string",
+                "maxLength": 100
+              }
+            },
+            "repo_globs": {
+              "type": "array",
+              "maxItems": 50,
+              "items": {
+                "type": "string",
+                "maxLength": 255
+              }
+            },
+            "labels": {
+              "type": "object",
+              "maxProperties": 10,
+              "additionalProperties": {
+                "type": "string",
+                "maxLength": 100
+              }
+            }
+          }
+        },
+        "max_repos": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 15000,
+          "description": "Up to 15,000 repositories, 10x the sizing baseline (R2-046). Batches above 2,000 repositories fan out through MaintenanceShard child workflows (C-ARCH \u00a74.1)."
+        }
+      }
+    },
+    "intent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "text",
+        "format"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "text": {
+          "description": "Issue body, command text, or form text. Untrusted. If the original exceeds 64 KiB it is truncated here and the full text is attached as an attachment of kind 'text'.",
+          "type": "string",
+          "maxLength": 65536
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "markdown",
+            "plain",
+            "jira_adf_rendered"
+          ]
+        },
+        "untrusted": {
+          "description": "Always true; present so downstream code cannot forget (D-21).",
+          "const": true,
+          "default": true
+        }
+      }
+    },
+    "attachment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "uri"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "issue",
+            "issue_comments",
+            "pull_request",
+            "jira_issue",
+            "slack_thread",
+            "file",
+            "log",
+            "screenshot",
+            "text",
+            "url"
+          ]
+        },
+        "uri": {
+          "description": "Either an s3:// URI written by the adapter under tenants/<tenant>/intake/<request_id>/ (artifact type intake_attachment), or an https:// link to the provider object. Sandboxes never fetch https attachments directly; the context assembler fetches and stages them.",
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^(s3://|https://)"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "content_type": {
+          "type": "string",
+          "maxLength": 127
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 104857600
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "deadline": {
+          "description": "Requester's desired completion time. Advisory for ordering; expiry is policy-driven.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "budget_usd_max": {
+          "description": "Requester cap on job cost. Effective cap = min(this, policy cap). Can only lower the policy cap.",
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 10000
+        },
+        "require_gates": {
+          "description": "Additional gates the requester asks for. Requests can add gates, never remove them (D-19).",
+          "type": "array",
+          "maxItems": 5,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "plan_approval",
+              "publish_approval"
+            ]
+          }
+        },
+        "labels": {
+          "description": "Free-form labels for search; not used by policy.",
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,39}$"
+          }
+        }
+      }
+    },
+    "options": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": {
+          "description": "Run everything up to the publish gate and stop without publishing.",
+          "type": "boolean",
+          "default": false
+        },
+        "draft_pr": {
+          "type": "boolean",
+          "default": false
+        },
+        "notify": {
+          "description": "Extra notification targets beyond the originating channel and the requester's preferences.",
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "type": "string",
+            "pattern": "^(slack:C[A-Z0-9]{2,30}|principal:usr_[0-9a-hjkmnp-tv-z]{26})$"
+          }
+        },
+        "evaluation": {
+          "$ref": "#/$defs/evaluation_options"
+        }
+      }
+    },
+    "related": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "parent_job_id": {
+          "$ref": "#/$defs/job_id"
+        },
+        "supersedes_job_id": {
+          "$ref": "#/$defs/job_id"
+        },
+        "eval_case": {
+          "description": "Set only by the eval harness (channel=eval).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "eval_run_id",
+            "golden_task_id"
+          ],
+          "properties": {
+            "eval_run_id": {
+              "type": "string",
+              "pattern": "^eval_[0-9a-hjkmnp-tv-z]{26}$"
+            },
+            "golden_task_id": {
+              "type": "string",
+              "pattern": "^gtask_[0-9a-hjkmnp-tv-z]{26}$"
+            }
+          }
+        }
+      }
+    },
+    "trace_context": {
+      "description": "Context of the trigger's request span. Used only for a span link from the job root span (ids-and-naming.md rule T-2).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "traceparent"
+      ],
+      "properties": {
+        "traceparent": {
+          "type": "string",
+          "pattern": "^00-(?!0{32})[0-9a-f]{32}-(?!0{16})[0-9a-f]{16}-[0-9a-f]{2}$"
+        },
+        "tracestate": {
+          "type": "string",
+          "maxLength": 512
+        }
+      }
+    },
+    "evaluation_options": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "eval",
+            "shadow"
+          ]
+        },
+        "gate_script_uri": {
+          "description": "s3:// URI (eval bucket for mode=eval; tenant artifacts bucket under the shadow job's prefix for mode=shadow) of a GateScript document. Required for mode=eval.",
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^s3://[a-z0-9.-]{3,63}/.+$"
+        },
+        "memory_snapshot_id": {
+          "description": "Pre-created memory snapshot to use instead of creating one at context assembly, so that both arms of a comparison see identical memory when their snapshot policies are equal.",
+          "type": "string",
+          "pattern": "^msnap_[0-9a-hjkmnp-tv-z]{26}$"
+        },
+        "memory_scope_context": {
+          "description": "For mode=eval: the scope the snapshot emulates (the golden task's source tenant and repo), so retrieval behaves as it would for the original job. memory-service authorizes svc_eval-worker for read-only snapshot creation in that scope (WS-04 dependency XD-06-04).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tenant_id"
+          ],
+          "properties": {
+            "tenant_id": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+              "minLength": 3,
+              "maxLength": 32
+            },
+            "repo": {
+              "type": "string",
+              "maxLength": 455
+            },
+            "as_of": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "shadow_of_job_id": {
+          "description": "Required for mode=shadow: the live job being shadowed.",
+          "type": "string",
+          "pattern": "^job_[0-9a-hjkmnp-tv-z]{26}$"
+        },
+        "publish_to_eval_git": {
+          "description": "mode=eval only: allow the publish node to push to the eval Git server (git.eval.replicant.internal) to exercise the publisher path. Default false.",
+          "type": "boolean",
+          "default": false
+        },
+        "case_deadline_seconds": {
+          "type": "integer",
+          "minimum": 600,
+          "maximum": 43200,
+          "default": 10800
+        },
+        "memory_replay_job_id": {
+          "description": "CCR-04-05. The source job whose recorded memory this eval job replays exactly (injections, order, renderer version, pull results). Valid only with mode=eval and memory_snapshot_id, which must equal the source job's snapshot (memory-service verifies). No cross-tenant read.",
+          "type": "string",
+          "pattern": "^job_[0-9a-hjkmnp-tv-z]{26}$"
+        },
+        "harness_task": {
+          "description": "CCR-06-07a. mode=eval only: the ReplicantJob skips router and graph and runs only the harness steps (eval_score.c0.n1.run, golden_snapshot.c0.n1..n5.run, compat_check.c0.n1..n9.run).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "spec_uri"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "score",
+                "snapshot_build",
+                "compat_check"
+              ]
+            },
+            "spec_uri": {
+              "type": "string",
+              "maxLength": 2048,
+              "pattern": "^s3://[a-z0-9.-]{3,63}/.+$"
+            }
+          }
+        },
+        "pipeline_id": {
+          "description": "CCR-06-07b. Release pipeline that owns this job; required when mode=shadow. control-plane-api registers the job with gateway budget account fgw:pipeline:<pipeline_id>.",
+          "type": "string",
+          "pattern": "^rpl_[0-9a-hjkmnp-tv-z]{26}$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "eval"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "gate_script_uri"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "shadow"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "shadow_of_job_id"
+            ],
+            "properties": {
+              "publish_to_eval_git": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "memory_replay_job_id"
+            ]
+          },
+          "then": {
+            "required": [
+              "memory_snapshot_id"
+            ],
+            "properties": {
+              "mode": {
+                "const": "eval"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "harness_task"
+            ]
+          },
+          "then": {
+            "properties": {
+              "mode": {
+                "const": "eval"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "shadow"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "pipeline_id"
+            ]
+          }
+        }
+      ],
+      "description": "Evaluation mode (CCR-06-01; WS-06 ADR-06-006). Accepted only from principals holding both release:pin and eval:run, otherwise control-plane-api returns 403. Gates resolve inside the workflow from the gate script (no gate.decide Update, no human; C-MSG V8 unchanged), notifications are suppressed, and publishing is skipped (dry_run semantics) unless mode=eval and publish_to_eval_git=true. GateScript schema: spec/06-releases-and-evals/schemas/evaluation-options.schema.json."
+    }
+  },
+  "examples": [
+    {
+      "schema_version": "replicant.job-request/v1",
+      "request_id": "jrq_01m5p7x694hhkv1314rfwghn9v",
+      "dedupe_key": "github:issue-label:R_kgDOK2a9Xw:1423:replicant",
+      "tenant_id": "payments",
+      "source": {
+        "channel": "github",
+        "event_type": "issues.labeled",
+        "event_id": "6f1b4a40-5f1e-11ef-8a4b-1c9d6e0b2a11",
+        "url": "https://github.com/acme-payments/ledger-api/issues/1423",
+        "github": {
+          "installation_id": 51234567,
+          "app_registration": "prod"
+        }
+      },
+      "requester": {
+        "kind": "user",
+        "principal_id": "usr_01knk8dfr0fvjc7v0b9vhvkzbp",
+        "channel_identity": {
+          "kind": "github",
+          "id": "8812345",
+          "login": "mtorres-acme"
+        }
+      },
+      "targets": [
+        {
+          "repo": {
+            "provider": "github",
+            "host": "github.com",
+            "owner": "acme-payments",
+            "name": "ledger-api",
+            "repo_id": "R_kgDOK2a9Xw"
+          },
+          "base_ref": "main",
+          "issue": {
+            "number": 1423
+          }
+        }
+      ],
+      "intent": {
+        "title": "Refund ledger entries double-count FX fees for partial refunds",
+        "text": "When a payment captured in EUR is partially refunded, `ledger.ApplyRefund` posts the FX fee reversal twice. Repro: capture 100 EUR, refund 40 EUR; the ledger shows two `fx_fee_reversal` rows for the same refund id. Expected: one row prorated to 40%.",
+        "format": "markdown",
+        "untrusted": true
+      },
+      "attachments": [
+        {
+          "kind": "issue_comments",
+          "uri": "s3://acme-replicant-prod-artifacts/tenants/payments/intake/jrq_01m5p7x694hhkv1314rfwghn9v/attachments/issue-comments.json",
+          "content_type": "application/json",
+          "size_bytes": 4210,
+          "sha256": "0c3f0a1e2b7d4c5a69e8f7b6a5d4c3b2a1908f7e6d5c4b3a29180f7e6d5c4b3a"
+        }
+      ],
+      "workflow_type": "auto",
+      "priority": "normal",
+      "constraints": {
+        "budget_usd_max": 40
+      },
+      "trace_context": {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+      },
+      "received_at": "2026-10-24T08:00:00.120Z"
+    }
+  ]
+}

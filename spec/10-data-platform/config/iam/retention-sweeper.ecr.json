@@ -1,0 +1,18 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RemoveBundleRefTagsOnly",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchDeleteImage",
+        "ecr:BatchGetImage",
+        "ecr:DescribeImages"
+      ],
+      "Resource": [
+        "arn:aws:ecr:us-east-1:111111111111:repository/replicant/cli-*",
+        "arn:aws:ecr:us-east-1:111111111111:repository/replicant/env-*"
+      ]
+    }
+  ]
+}

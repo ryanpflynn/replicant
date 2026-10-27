@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/kinds/policy-runtime_selection/v1.json",
+  "title": "Policy spec: runtime_selection",
+  "description": "WS-02 (with WS-09). Validates Policy.spec when policyType = runtime_selection (C-DEF section 2). Resolved by runner-api at admission through the job's Release Bundle (runner-service.md section 3.2). A tenant-scoped document (tenant layer, ADR-013) may only narrow allowedRuntimes and choose defaults within them. kata-fc is not selectable (R1-280); memoryRequestPolicy lives only in the EnvironmentDefinition (R1-050). Workspace and compute ceilings per R2-064.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "policyType",
+    "classes",
+    "workspace"
+  ],
+  "properties": {
+    "policyType": {
+      "const": "runtime_selection"
+    },
+    "hintPolicy": {
+      "description": "honorIfAllowed: use RunSpec.isolation_hint when it is in allowedRuntimes; ignore: always use the class default.",
+      "enum": [
+        "honorIfAllowed",
+        "ignore"
+      ],
+      "default": "honorIfAllowed"
+    },
+    "classes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "coding": {
+          "$ref": "#/$defs/classPolicy"
+        },
+        "qa_build": {
+          "$ref": "#/$defs/classPolicy"
+        },
+        "review": {
+          "$ref": "#/$defs/classPolicy"
+        },
+        "utility": {
+          "$ref": "#/$defs/classPolicy"
+        }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxLocalSize",
+        "maxSize",
+        "localMaxByPool",
+        "overflowStorageClass",
+        "enforcementByRuntime"
+      ],
+      "properties": {
+        "maxLocalSize": {
+          "type": "string",
+          "pattern": "^[0-9]+(Gi|Ti)$",
+          "description": "Deprecated alias of the smallest localMaxByPool value; kept for one version."
+        },
+        "overflowStorageClass": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$"
+        },
+        "enforcementByRuntime": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kata-clh": {
+              "enum": [
+                "guestBlockDevice",
+                "xfsProjectQuota",
+                "fixedSizeVolume"
+              ]
+            },
+            "gvisor": {
+              "enum": [
+                "xfsProjectQuota",
+                "fixedSizeVolume"
+              ]
+            }
+          }
+        },
+        "maxSize": {
+          "type": "string",
+          "pattern": "^[0-9]+(Gi|Ti)$",
+          "description": "Hard ceiling for any workspace (R2-064); also checked at bundle build and by WS-09 VAP CEL."
+        },
+        "localMaxByPool": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[0-9]+(Gi|Ti)$"
+          },
+          "propertyNames": {
+            "pattern": "^sbx-[a-z0-9-]+$"
+          },
+          "description": "Per-pool local workspace maximum (R1-279)."
+        }
+      }
+    },
+    "gvisor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "directfs": {
+          "type": "boolean",
+          "default": false,
+          "description": "WS-09 G-13: false unless the benchmark shows it is needed"
+        },
+        "platform": {
+          "enum": [
+            "systrap",
+            "kvm"
+          ],
+          "default": "systrap"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "runtime": {
+      "enum": [
+        "kata-clh",
+        "gvisor"
+      ],
+      "description": "replicant-kata-fc exists as a RuntimeClass but is never selectable by policy (R1-280)."
+    },
+    "classPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "default",
+        "allowedRuntimes",
+        "maxCpu",
+        "maxMemory"
+      ],
+      "properties": {
+        "default": {
+          "$ref": "#/$defs/runtime"
+        },
+        "allowedRuntimes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/runtime"
+          }
+        },
+        "maxCpu": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?m?$",
+          "description": "Ceiling on the resolved profile's CPU limit for this class (R2-064)."
+        },
+        "maxMemory": {
+          "type": "string",
+          "pattern": "^[0-9]+(Mi|Gi)$",
+          "description": "Ceiling on the resolved profile's memory limit (R2-064)."
+        }
+      }
+    }
+  }
+}

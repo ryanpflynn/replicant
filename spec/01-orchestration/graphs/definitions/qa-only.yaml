@@ -1,0 +1,37 @@
+# GraphDefinition (kind schema: spec/01-orchestration/schemas/graph-definition.v1.json)
+# Authored in the replicant-config repo under graphs/; published to the registry (C-DEF section 4).
+# Required by the bundle schema (graphs.qa_only).
+apiVersion: replicant.example.com/v1
+kind: GraphDefinition
+metadata:
+  name: qa-only
+  scope:
+    level: global
+  owners: [replicant-platform]
+  description: "QA/QE stage on an existing ref, no changes (first-class QA stage, shared context section 4)"
+  labels:
+    workflow-type: qa_only
+spec:
+  workflowType: qa_only
+  fglVersion: 1
+  params:
+    report_to_pr: true
+  entry: context
+  nodes:
+    - key: context
+      type: context_assembler
+      phase: context
+      config: {briefing: minimal}
+    - key: qa
+      type: qa_run
+      phase: qa
+      maxVisits: 2
+      config: {agent: qa-runner, workloadClass: qa_build}
+  edges:
+    - {from: context, to: qa}
+    - from: qa
+      switch:
+        - {when: "nodes['qa'].decision == 'proceed'", to: "end:qa_completed"}
+        - {when: "nodes['qa'].decision == 'retry_qa'", to: qa}
+        - {when: "nodes['qa'].verdict == 'inconclusive'", to: "end:qa_inconclusive"}
+      default: "end:qa_failed"

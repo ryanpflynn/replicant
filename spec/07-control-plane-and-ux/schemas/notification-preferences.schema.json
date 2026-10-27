@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/ws07/notification-preferences/v1.json",
+  "title": "Notification preferences (per principal)",
+  "description": "WS-07. Stored in notify.preferences (writer control-plane-api). Event catalogue and defaults: notifications.md. Approval requests for gates where the principal is the suggested approver cannot be muted below 'slack_dm' or 'ui' (escalation still reaches them).",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "readOnly": true
+    },
+    "channels": {
+      "type": "object",
+      "description": "event key \u2192 channels. One vocabulary with notify.deliveries.channel (R1-179); 'originating' resolves to the job's source channel, 'none' suppresses (not allowed for obligations, notifications.md N-4).",
+      "propertyNames": {
+        "pattern": "^[a-z]+(\\.[a-z_]+)+$"
+      },
+      "additionalProperties": {
+        "type": "array",
+        "uniqueItems": true,
+        "items": {
+          "type": "string",
+          "enum": [
+            "originating",
+            "ui",
+            "slack_dm",
+            "slack_thread",
+            "slack_channel",
+            "github_comment",
+            "jira_comment",
+            "digest",
+            "none"
+          ]
+        }
+      }
+    },
+    "digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "times": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "type": "string",
+            "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+          }
+        },
+        "weekdays_only": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "quiet_hours": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "type": "string",
+          "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+        },
+        "end": {
+          "type": "string",
+          "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+        },
+        "timezone": {
+          "type": "string",
+          "maxLength": 64
+        }
+      }
+    },
+    "watch": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repos": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "maxLength": 255
+          }
+        },
+        "tenants": {
+          "type": "array",
+          "maxItems": 40,
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,10 @@
+# WS-08 dashboards (deploy/grafana/dashboards, mounted at /var/lib/grafana/dashboards).
+apiVersion: 1
+providers:
+  - name: replicant
+    folder: Replicant
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards

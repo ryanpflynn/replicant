@@ -1,0 +1,24 @@
+# v0 (M1): the v0 subset of the spec dependencies of the services whose depends_on compose.v0.yaml reset
+# (see the header there). Conditions are the spec's.
+x-requires-db-temporal: &requires-db-temporal
+  migrate:
+    condition: service_completed_successfully
+  s3-init:
+    condition: service_completed_successfully
+  temporal-bootstrap:
+    condition: service_completed_successfully
+
+services:
+  temporal-ui:
+    depends_on:
+      temporal-bootstrap: {condition: service_completed_successfully}
+  s3-init:
+    depends_on:
+      s3: {condition: service_healthy}
+  control-plane-api:
+    depends_on: *requires-db-temporal
+  replicant-worker:
+    depends_on:
+      <<: *requires-db-temporal
+      gateway-shim: {condition: service_started}
+      runner-local: {condition: service_started}

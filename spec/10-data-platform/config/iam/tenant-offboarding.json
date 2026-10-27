@@ -1,0 +1,111 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ListTenantPrefixes",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket",
+        "s3:ListBucketVersions"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts",
+        "arn:aws:s3:::acme-replicant-prod-transcripts",
+        "arn:aws:s3:::acme-replicant-prod-session",
+        "arn:aws:s3:::acme-replicant-prod-memory",
+        "arn:aws:s3:::acme-replicant-prod-eval",
+        "arn:aws:s3:::acme-replicant-prod-artifacts-us-west-2",
+        "arn:aws:s3:::acme-replicant-prod-transcripts-us-west-2",
+        "arn:aws:s3:::acme-replicant-prod-memory-us-west-2",
+        "arn:aws:s3:::acme-replicant-prod-eval-us-west-2"
+      ],
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": [
+            "tenants/*"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "DeleteAllVersionsUnderTenantPrefixes",
+      "Effect": "Allow",
+      "Action": [
+        "s3:DeleteObjectVersion"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*",
+        "arn:aws:s3:::acme-replicant-prod-transcripts/tenants/*",
+        "arn:aws:s3:::acme-replicant-prod-session/tenants/*",
+        "arn:aws:s3:::acme-replicant-prod-memory/tenants/*",
+        "arn:aws:s3:::acme-replicant-prod-eval/tenants/*",
+        "arn:aws:s3:::acme-replicant-prod-artifacts-us-west-2/tenants/*",
+        "arn:aws:s3:::acme-replicant-prod-transcripts-us-west-2/tenants/*",
+        "arn:aws:s3:::acme-replicant-prod-memory-us-west-2/tenants/*",
+        "arn:aws:s3:::acme-replicant-prod-eval-us-west-2/tenants/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:PrincipalTag/approved-change": "true"
+        }
+      }
+    },
+    {
+      "Sid": "ScheduleTenantKeyDeletion",
+      "Effect": "Allow",
+      "Action": [
+        "kms:ScheduleKeyDeletion",
+        "kms:CancelKeyDeletion",
+        "kms:DisableKey",
+        "kms:DescribeKey"
+      ],
+      "Resource": [
+        "arn:aws:kms:us-east-1:111111111111:key/*",
+        "arn:aws:kms:us-west-2:111111111111:key/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/replicant-key-class": "tenant",
+          "aws:PrincipalTag/approved-change": "true"
+        }
+      }
+    },
+    {
+      "Sid": "WriteDeletionLedgerEntryFirst",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-audit/org/deletion-ledger/*"
+    },
+    {
+      "Sid": "LedgerEntriesWriteOnce",
+      "Effect": "Deny",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-audit/org/deletion-ledger/*",
+      "Condition": {
+        "Null": {
+          "s3:if-none-match": "true"
+        },
+        "Bool": {
+          "s3:ObjectCreationOperation": "true"
+        }
+      }
+    },
+    {
+      "Sid": "AuditKeyViaS3ForLedger",
+      "Effect": "Allow",
+      "Action": [
+        "kms:GenerateDataKey"
+      ],
+      "Resource": "arn:aws:kms:us-east-1:111111111111:key/*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "s3.us-east-1.amazonaws.com",
+          "aws:ResourceTag/replicant-key-class": "audit"
+        }
+      }
+    }
+  ]
+}

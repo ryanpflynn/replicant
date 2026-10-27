@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/data-platform/deletion-ledger-entry/v1.json",
+  "title": "Deletion ledger entry (WS-10; CCR-10-06)",
+  "description": "Written write-once (If-None-Match: *) to the audit bucket at org/deletion-ledger/<yyyy>/<mm>/<dd>/<del_id>.json (C-ART \u00a72; del_ per C-IDS) BEFORE the deleting transaction commits. Replayed after every restore so restores never resurrect deleted data (recovery.md \u00a73.3). Contains identifiers and digests only, never the deleted content.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "ledger_id",
+    "requested_at",
+    "reason",
+    "requested_by",
+    "approved_by",
+    "scope",
+    "targets",
+    "executor"
+  ],
+  "properties": {
+    "schema": {
+      "const": "replicant.deletion-ledger/v1"
+    },
+    "ledger_id": {
+      "type": "string",
+      "pattern": "^del_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "requested_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "reason": {
+      "enum": [
+        "tenant_offboarding",
+        "secret_purge",
+        "subject_erasure",
+        "memory_hard_delete",
+        "legal_hold_release",
+        "retention_sweep"
+      ]
+    },
+    "ticket": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "requested_by": {
+      "type": "string",
+      "pattern": "^(usr_[0-9a-hjkmnp-tv-z]{26}|svc_[a-z][a-z0-9-]{2,40})$"
+    },
+    "approved_by": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^usr_[0-9a-hjkmnp-tv-z]{26}$"
+      },
+      "maxItems": 5
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tenant_id"
+      ],
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+        },
+        "job_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^job_[0-9a-hjkmnp-tv-z]{26}$"
+          },
+          "maxItems": 10000
+        },
+        "principal_id": {
+          "type": "string",
+          "pattern": "^usr_[0-9a-hjkmnp-tv-z]{26}$"
+        }
+      }
+    },
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "store",
+          "selector"
+        ],
+        "properties": {
+          "store": {
+            "enum": [
+              "s3",
+              "postgres",
+              "temporal",
+              "langfuse",
+              "loki",
+              "kms"
+            ]
+          },
+          "selector": {
+            "type": "string",
+            "maxLength": 2048,
+            "description": "Store-specific: an S3 prefix or key (logical form bucket_class:key), schema.table + key predicate as JSON, a workflow ID, a Langfuse trace ID list reference, a LogQL selector, or a KMS key ARN."
+          },
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "executor": {
+      "type": "string",
+      "pattern": "^svc_[a-z][a-z0-9-]{2,40}$"
+    },
+    "replay": {
+      "type": "string",
+      "enum": [
+        "always",
+        "never"
+      ],
+      "default": "always",
+      "description": "never only for retention_sweep entries (lifecycle re-expires them anyway)"
+    }
+  }
+}

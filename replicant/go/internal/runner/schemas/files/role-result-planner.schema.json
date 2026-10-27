@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/role-results/planner/v1.json",
+  "title": "Role result: planner",
+  "description": "Owner: WS-03. run_result.role_result for role planner. The planner never produces a diff (agent outputContract diff_bundle=forbidden).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "agent_report",
+    "cli"
+  ],
+  "properties": {
+    "schema": {
+      "const": "replicant.role-result.planner/v1"
+    },
+    "agent_report": {
+      "$ref": "#/$defs/agent_report"
+    },
+    "cli": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/cli_execution"
+    },
+    "budget": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/budget_observation"
+    },
+    "integrity": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/integrity"
+    }
+  },
+  "$defs": {
+    "agent_report": {
+      "description": "Agent-produced plan summary (structured output). The full plan is the plan artifact (plan.json + plan.md).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcome",
+        "summary",
+        "steps",
+        "acceptance_criteria"
+      ],
+      "properties": {
+        "outcome": {
+          "description": "Agent's own claim of task outcome. The entrypoint copies it to run_result.outcome unless an entrypoint-detected condition overrides it (e.g. diff empty -> no_changes; integrity violation -> failed).",
+          "type": "string",
+          "enum": [
+            "completed",
+            "no_changes",
+            "blocked",
+            "failed"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 8000
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "title"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^s[0-9]{1,3}$"
+              },
+              "title": {
+                "type": "string",
+                "maxLength": 300
+              },
+              "files": {
+                "type": "array",
+                "maxItems": 50,
+                "items": {
+                  "type": "string",
+                  "maxLength": 1024
+                }
+              },
+              "rationale": {
+                "type": "string",
+                "maxLength": 2000
+              }
+            }
+          }
+        },
+        "risks": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "estimated_scope": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "files": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "lines": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "touches_services": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "blocked": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "detail"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "needs_clarification",
+                "missing_access",
+                "environment_broken",
+                "out_of_scope",
+                "conflicting_instructions"
+              ]
+            },
+            "detail": {
+              "type": "string",
+              "maxLength": 4000
+            },
+            "question": {
+              "description": "Question for the requester (clarification gate). Untrusted model text.",
+              "type": "string",
+              "maxLength": 4000
+            }
+          }
+        },
+        "acceptance_criteria": {
+          "description": "Testable acceptance criteria with stable IDs (XD-05-05). QA stages them as qa/plan-acceptance.json and generates smoke flows G1-G3 from them; IDs are cited by QA results.",
+          "type": "array",
+          "maxItems": 30,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "text"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^ac[0-9]{1,3}$"
+              },
+              "text": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "verifiable_by": {
+                "type": "string",
+                "enum": [
+                  "unit_test",
+                  "integration_test",
+                  "ui_flow",
+                  "api_check",
+                  "manual"
+                ]
+              }
+            }
+          }
+        },
+        "expected_ui_changes": {
+          "description": "Routes whose rendering the change is expected to alter (XD-05-05; QA visual rule V1 treats differences on these routes as expected).",
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "route"
+            ],
+            "properties": {
+              "route": {
+                "type": "string",
+                "maxLength": 300,
+                "pattern": "^/"
+              },
+              "description": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "acceptance_criteria": {
+                "type": "array",
+                "maxItems": 10,
+                "items": {
+                  "type": "string",
+                  "pattern": "^ac[0-9]{1,3}$"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

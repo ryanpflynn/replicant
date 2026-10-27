@@ -1,0 +1,421 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/kinds/common/v1.json",
+  "title": "WS-03 shared definitions",
+  "description": "Shared $defs for WS-03 kind schemas (AgentDefinition, EnvironmentDefinition, budgets and codebase_bindings policies) and WS-03 runtime documents (run inputs manifest, role results, usage events). Owner: WS-03. Contract basis: C-DEF 3.0.0, C-IDS 2.0.0.",
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "sha256_hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "image_by_digest": {
+      "description": "Full OCI image reference pinned by digest (same grammar as release-bundle.schema.json cli_images[].image). Tags are rejected.",
+      "type": "string",
+      "maxLength": 512,
+      "pattern": "^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$"
+    },
+    "definition_name": {
+      "type": "string",
+      "maxLength": 63,
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 32,
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+    },
+    "job_id": {
+      "type": "string",
+      "pattern": "^job_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^run_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "release_bundle_id": {
+      "type": "string",
+      "pattern": "^rb_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "memory_entry_ref": {
+      "type": "string",
+      "pattern": "^mem_[0-9a-hjkmnp-tv-z]{26}@[1-9][0-9]*$"
+    },
+    "memory_snapshot_id": {
+      "type": "string",
+      "pattern": "^msnap_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "run_role": {
+      "type": "string",
+      "enum": [
+        "planner",
+        "implementer",
+        "qa",
+        "reviewer",
+        "repair",
+        "takeover",
+        "eval"
+      ]
+    },
+    "workload_class": {
+      "type": "string",
+      "enum": [
+        "coding",
+        "qa_build",
+        "review",
+        "utility"
+      ]
+    },
+    "isolation": {
+      "type": "string",
+      "enum": [
+        "gvisor",
+        "kata-fc",
+        "kata-clh"
+      ]
+    },
+    "gateway_model_id": {
+      "description": "Gateway model identifier <provider>/<exact snapshot>. Aliases ending in 'latest' are rejected (C-DEF section 4.3 step 3).",
+      "type": "string",
+      "maxLength": 200,
+      "pattern": "^[a-z0-9][a-z0-9-]{0,40}/[A-Za-z0-9][A-Za-z0-9._:@-]{0,150}$",
+      "not": {
+        "pattern": "latest$"
+      }
+    },
+    "prompt_selector": {
+      "description": "Langfuse prompt selector (C-DEF section 3). Authored documents may use a label or an exact version; the bundle build resolves it to {name, version, digest} in ReleaseBundle.spec.prompts.",
+      "type": "string",
+      "maxLength": 240,
+      "pattern": "^prompt/[a-z0-9][a-z0-9._/-]{0,199}@(label:[a-z0-9][a-z0-9_-]{0,63}|[1-9][0-9]*)$",
+      "x-replicant-ref": "prompt"
+    },
+    "agent_selector": {
+      "description": "Agent definition selector: agent/<name>[.<tenant_id>] or agent/<name>[.<tenant_id>]@<version>.",
+      "type": "string",
+      "maxLength": 140,
+      "pattern": "^agent/[a-z][a-z0-9]*(-[a-z0-9]+)*(\\.[a-z][a-z0-9-]{1,31})?(@[1-9][0-9]*)?$",
+      "x-replicant-ref": "agent"
+    },
+    "environment_selector": {
+      "type": "string",
+      "maxLength": 140,
+      "pattern": "^environment/[a-z][a-z0-9]*(-[a-z0-9]+)*(\\.[a-z][a-z0-9-]{1,31})?(@[1-9][0-9]*)?$",
+      "x-replicant-ref": "environment"
+    },
+    "cpu_quantity": {
+      "type": "string",
+      "maxLength": 16,
+      "pattern": "^[0-9]+(\\.[0-9]+)?m?$"
+    },
+    "byte_quantity": {
+      "type": "string",
+      "maxLength": 16,
+      "pattern": "^[0-9]+(Ki|Mi|Gi|Ti)?$"
+    },
+    "disk_quantity": {
+      "description": "Matches AgentRun spec.workspace.sizeLimit grammar.",
+      "type": "string",
+      "maxLength": 16,
+      "pattern": "^[0-9]+(Mi|Gi|Ti)$"
+    },
+    "env_name": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "protected_env_name": {
+      "description": "Environment variable names definitions may NOT set: they are owned by the controller (C-IDS section 7), the entrypoint (gateway and CLI wiring), or are credentials. Enforced by schema (not) and again by the entrypoint at materialization.",
+      "type": "string",
+      "pattern": "^(REPLICANT_.*|TRACEPARENT|TRACESTATE|OTEL_.*|ANTHROPIC_.*|CLAUDE_.*|OPENAI_.*|CODEX_.*|AWS_.*|GOOGLE_.*|CLOUD_ML_REGION|HOME|USER|PATH|SHELL|HTTP_PROXY|HTTPS_PROXY|NO_PROXY|http_proxy|https_proxy|no_proxy|NODE_EXTRA_CA_CERTS|SSL_CERT_FILE|SSL_CERT_DIR|GIT_.*|LD_PRELOAD|LD_LIBRARY_PATH|DISABLE_.*|IS_SANDBOX|MCP_.*|MAX_MCP_OUTPUT_TOKENS|API_TIMEOUT_MS|BASH_.*)$"
+    },
+    "env_map": {
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/env_name"
+          },
+          {
+            "not": {
+              "$ref": "#/$defs/protected_env_name"
+            }
+          }
+        ]
+      },
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 4096
+      }
+    },
+    "secret_ref": {
+      "description": "Reference to a secret by name (C-DEF section 2: no secret values in definitions).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "secretRef"
+      ],
+      "properties": {
+        "secretRef": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "store",
+            "name"
+          ],
+          "properties": {
+            "store": {
+              "type": "string",
+              "enum": [
+                "aws-secrets-manager",
+                "vault"
+              ]
+            },
+            "name": {
+              "type": "string",
+              "maxLength": 256,
+              "pattern": "^replicant/(local|dev|staging|prod)/[A-Za-z0-9/_.-]+$"
+            },
+            "key": {
+              "type": "string",
+              "maxLength": 128
+            }
+          }
+        }
+      }
+    },
+    "shell_pattern": {
+      "description": "Command prefix pattern in Claude Code permission-rule syntax without the tool wrapper, e.g. 'npm test:*' or 'go test *'. Translated per CLI by the entrypoint adapter.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[^\\n\\r()]+$"
+    },
+    "artifact_requirement": {
+      "type": "string",
+      "enum": [
+        "required",
+        "optional",
+        "forbidden"
+      ]
+    },
+    "cli_execution": {
+      "description": "What the entrypoint observed about the CLI process. Filled from the Claude Code stream-json system/init and result events, or from the Codex --json thread.started / turn.completed / turn.failed events.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cli",
+        "version",
+        "exit_code"
+      ],
+      "properties": {
+        "cli": {
+          "type": "string",
+          "enum": [
+            "claude-code",
+            "claude-agent-sdk",
+            "codex"
+          ]
+        },
+        "version": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "session_id": {
+          "description": "Claude Code session_id (UUID) or Codex thread_id.",
+          "type": "string",
+          "maxLength": 128
+        },
+        "exit_code": {
+          "type": "integer"
+        },
+        "terminated_by": {
+          "type": "string",
+          "enum": [
+            "none",
+            "sigint",
+            "sigterm",
+            "sigkill"
+          ]
+        },
+        "result_subtype": {
+          "description": "Claude Code result.subtype (success, error_max_turns, error_during_execution, error_max_budget_usd, error_max_structured_output_retries) or Codex terminal event (turn.completed, turn.failed).",
+          "type": "string",
+          "maxLength": 64
+        },
+        "stop_reason": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "num_turns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "duration_api_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "permission_denials": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mcp_servers": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "status"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "status": {
+                "type": "string",
+                "maxLength": 32
+              }
+            }
+          }
+        },
+        "instruction_files_loaded": {
+          "description": "Paths reported by the managed InstructionsLoaded hook (Claude Code). Any path under /workspace while repoInstructionFiles=ignore fails the run (exit 12).",
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "string",
+            "maxLength": 512
+          }
+        }
+      }
+    },
+    "budget_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "effective_usd",
+        "spent_usd"
+      ],
+      "properties": {
+        "effective_usd": {
+          "description": "Run budget the gateway enforced (run token budget_usd).",
+          "type": "number",
+          "minimum": 0
+        },
+        "spent_usd": {
+          "description": "Last X-Replicant-Budget-Run-Spent-Usd seen by agentd (C-IDS section 7; gateway-computed). The cost ledger is authoritative.",
+          "type": "number",
+          "minimum": 0
+        },
+        "soft_limit_reached": {
+          "type": "boolean"
+        },
+        "hard_limit_reached": {
+          "type": "boolean"
+        },
+        "rate_limited_seconds": {
+          "description": "Cumulative time agentd spent waiting on 429/529 retries.",
+          "type": "number",
+          "minimum": 0
+        },
+        "estimated_usage_requests": {
+          "description": "Requests the gateway settled at the reserved estimate because usage could not be parsed (R2-058).",
+          "type": "integer",
+          "minimum": 0
+        },
+        "turns_used": {
+          "description": "Cumulative turns counted by the entrypoint/agentd across the whole run, including steering-started turns (R2-043).",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "test_run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command",
+        "exit_code"
+      ],
+      "properties": {
+        "command": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "exit_code": {
+          "type": "integer"
+        },
+        "passed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 2000
+        }
+      }
+    },
+    "integrity": {
+      "description": "Workspace integrity check for read-only-intent roles (agent outputContract.workspaceIntegrity).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "tracked_files_modified"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "off",
+            "detect",
+            "enforce"
+          ]
+        },
+        "tracked_files_modified": {
+          "type": "boolean"
+        },
+        "modified_paths": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        },
+        "tree_before": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        },
+        "tree_after": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        }
+      }
+    }
+  }
+}

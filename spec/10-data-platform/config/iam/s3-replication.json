@@ -1,0 +1,50 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadSourceForReplication",
+      "Effect": "Allow",
+      "Action": ["s3:GetReplicationConfiguration", "s3:ListBucket"],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts", "arn:aws:s3:::acme-replicant-prod-transcripts",
+        "arn:aws:s3:::acme-replicant-prod-audit", "arn:aws:s3:::acme-replicant-prod-memory",
+        "arn:aws:s3:::acme-replicant-prod-eval", "arn:aws:s3:::acme-replicant-prod-registry"
+      ]
+    },
+    {
+      "Sid": "ReadSourceObjectVersions",
+      "Effect": "Allow",
+      "Action": ["s3:GetObjectVersionForReplication", "s3:GetObjectVersionAcl", "s3:GetObjectVersionTagging",
+                 "s3:GetObjectRetention", "s3:GetObjectLegalHold"],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts/*", "arn:aws:s3:::acme-replicant-prod-transcripts/*",
+        "arn:aws:s3:::acme-replicant-prod-audit/*", "arn:aws:s3:::acme-replicant-prod-memory/*",
+        "arn:aws:s3:::acme-replicant-prod-eval/*", "arn:aws:s3:::acme-replicant-prod-registry/*"
+      ]
+    },
+    {
+      "Sid": "WriteReplicas",
+      "Effect": "Allow",
+      "Action": ["s3:ReplicateObject", "s3:ReplicateTags", "s3:ObjectOwnerOverrideToBucketOwner"],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts-us-west-2/*", "arn:aws:s3:::acme-replicant-prod-transcripts-us-west-2/*",
+        "arn:aws:s3:::acme-replicant-prod-audit-us-west-2/*", "arn:aws:s3:::acme-replicant-prod-memory-us-west-2/*",
+        "arn:aws:s3:::acme-replicant-prod-eval-us-west-2/*", "arn:aws:s3:::acme-replicant-prod-registry-us-west-2/*"
+      ]
+    },
+    {
+      "Sid": "DecryptSourceViaS3",
+      "Effect": "Allow",
+      "Action": "kms:Decrypt",
+      "Resource": "arn:aws:kms:us-east-1:111111111111:key/*",
+      "Condition": {"StringEquals": {"kms:ViaService": "s3.us-east-1.amazonaws.com"}}
+    },
+    {
+      "Sid": "EncryptReplicasWithDrKeys",
+      "Effect": "Allow",
+      "Action": ["kms:Encrypt", "kms:GenerateDataKey"],
+      "Resource": "arn:aws:kms:us-west-2:111111111111:key/*",
+      "Condition": {"StringEquals": {"kms:ViaService": "s3.us-west-2.amazonaws.com"}}
+    }
+  ]
+}

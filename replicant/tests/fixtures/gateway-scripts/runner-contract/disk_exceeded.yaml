@@ -1,0 +1,12 @@
+# runner-local contract scenario disk_exceeded: fill the workspace beyond its size limit (RC-RUN-14).
+schema: replicant.gateway-script/v1
+name: runner-contract-disk-exceeded
+protocol: anthropic_messages
+finish: "Done."
+turns:
+  - respond:
+      tool_use: {name: Bash, input: {command: "dd if=/dev/zero of=/workspace/fill.bin bs=1M count=5000 status=none; sleep 240; true", description: "Write a large file", timeout: 600000}}
+      usage: {input_tokens: 1000, output_tokens: 20}
+  - respond:
+      tool_use: {name: Bash, input: {command: "sleep 240; true", description: "Wait"}}
+      usage: {input_tokens: 1000, output_tokens: 20}

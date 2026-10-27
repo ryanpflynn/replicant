@@ -1,0 +1,87 @@
+# Mimir Alertmanager configuration for tenant "replicant". Owner WS-08. Load with:
+#   mimirtool alertmanager load --address=http://mimir-alertmanager.observability.svc:8080 --id=replicant alertmanager.yaml
+# Validated with `mimirtool alertmanager verify` (3.2.3), 2026-10-24.
+# Receivers are the enterprise's own on-call system (webhook) and Slack; no SaaS observability vendor (D-17).
+global:
+  resolve_timeout: 5m
+  slack_api_url_file: /etc/alertmanager/secrets/slack-webhook-url
+route:
+  receiver: replicant-tickets
+  group_by: [alertname, tenant, owner]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # Memory curation alerts go to the replicant-admins channel only (XD-FIX-R2-052, D-25).
+    - matchers: ['audience="replicant-admins"']
+      receiver: replicant-admins
+      repeat_interval: 24h
+    # WS-06 release rules and WS-07's release spike (XD-FIX-R1-140): the release team's receiver, then the
+    # severity routes below (page -> on-call, ticket -> tickets).
+    - matchers: ['owner="ws-06"']
+      receiver: replicant-release
+      continue: true
+    - matchers: ['team="replicant-release"']
+      receiver: replicant-release
+      continue: true
+    - matchers: ['owner="ws-09"', 'severity="page"']
+      receiver: security-oncall
+      continue: true
+    - matchers: ['severity="page"']
+      receiver: replicant-oncall
+      repeat_interval: 1h
+    - matchers: ['severity="ticket"']
+      receiver: replicant-tickets
+      repeat_interval: 24h
+    - matchers: ['severity="info"']
+      receiver: replicant-slack
+inhibit_rules:
+  # A control-plane outage explains first-progress and projection alerts.
+  - source_matchers: ['alertname="ReplicantControlPlaneAvailabilityFastBurn"']
+    target_matchers: ['alertname=~"ReplicantFirstProgressSLOBurn|ReplicantProjectionLag"']
+  # A Temporal backlog explains first-progress burn. It no longer inhibits ReplicantWorkflowsStalled: that gauge
+  # counts only jobs without JobSnapshot.waiting (XD-FIX-R2-020), which a backlog does not explain.
+  - source_matchers: ['alertname="TemporalWorkflowTaskBacklog"']
+    target_matchers: ['alertname="ReplicantFirstProgressSLOBurn"']
+  # A WS-06 ReleasePipeline guardrail alert for the same bundle explains the release failure spike.
+  - source_matchers: ['alertname=~"ReplicantCandidateRunFailureElevated|ReplicantOnlineQualityRegression"']
+    target_matchers: ['alertname="ReplicantReleaseFailureSpike"']
+    equal: [bundle]
+  # Pending sandbox capacity explains the sandbox-ready SLO burn.
+  - source_matchers: ['alertname="ReplicantSandboxPoolPending"']
+    target_matchers: ['alertname="ReplicantSandboxReadySLOBurn"']
+receivers:
+  - name: replicant-oncall
+    webhook_configs:
+      - url_file: /etc/alertmanager/secrets/oncall-webhook-url
+        send_resolved: true
+        max_alerts: 20
+    slack_configs:
+      - channel: '#replicant-alerts'
+        send_resolved: true
+        title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }} <{{ .Annotations.runbook_url }}|runbook>{{ "\n" }}{{ end }}'
+  - name: security-oncall
+    webhook_configs:
+      - url_file: /etc/alertmanager/secrets/security-oncall-webhook-url
+        send_resolved: true
+  - name: replicant-tickets
+    webhook_configs:
+      - url_file: /etc/alertmanager/secrets/ticket-webhook-url
+        send_resolved: false
+  - name: replicant-release
+    slack_configs:
+      - channel: '#replicant-release'
+        send_resolved: true
+        title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }} {{ .Annotations.ui }}{{ "\n" }}{{ end }}'
+  - name: replicant-admins
+    slack_configs:
+      - channel: '#replicant-admins'
+        send_resolved: true
+        title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ "\n" }}{{ end }}'
+  - name: replicant-slack
+    slack_configs:
+      - channel: '#replicant-observability'
+        send_resolved: true

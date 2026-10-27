@@ -1,0 +1,38 @@
+[project]
+name = "github-token-broker"
+version = "0.1.0"
+description = "Replicant github-token-broker (WS-07, ADR-011): sole holder of the SCM bot credential. M1: Gitea token backend."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "replicant-telemetry",
+  "fastapi==0.162.0",
+  "uvicorn==0.54.0",
+  "sqlalchemy[asyncio]==2.1.6",
+  "psycopg[binary]==3.3.6",
+  "httpx==0.28.1",
+  "pyyaml==6.0.3",
+  "replicant-scm",
+  "replicant-ids",
+]
+
+[project.scripts]
+github-token-broker = "github_token_broker.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=1.0"]
+
+[tool.uv.sources]
+replicant-telemetry = { workspace = true }
+replicant-scm = { workspace = true }
+replicant-ids = { workspace = true }
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/github_token_broker"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

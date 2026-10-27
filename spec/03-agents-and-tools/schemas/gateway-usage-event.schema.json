@@ -1,0 +1,309 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/runtime/gateway-usage-event/v1.json",
+  "title": "Gateway usage event",
+  "description": "Owner: WS-03. One event per model request that reached the gateway shim (including denied requests, with zero tokens). Emitted by replicant-gateway-shim to usage-ingestor POST /internal/v1/usage-events (batched, idempotent on event_id) and written to cost.usage_events. This is the minimum usage-export record Replicant needs from ANY gateway (gateway.md section 3, GW-7). The shim also writes every event to a durable 72-hour usage log in S3 before acknowledging it locally, so usage-ingestor can replay after a database restore (XD-10-13, R1-077).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "event_id",
+    "occurred_at",
+    "tenant_id",
+    "caller",
+    "gateway_model_id",
+    "protocol",
+    "status",
+    "http_status",
+    "usage",
+    "cost",
+    "latency_ms",
+    "purpose",
+    "usage_source"
+  ],
+  "properties": {
+    "schema": {
+      "const": "replicant.gateway-usage/v1"
+    },
+    "event_id": {
+      "description": "gwu_<ulid> minted by the shim before forwarding; also sent upstream as X-Replicant-Request-Id.",
+      "type": "string",
+      "pattern": "^gwu_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "occurred_at": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/timestamp"
+    },
+    "tenant_id": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/tenant_id"
+    },
+    "job_id": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/job_id"
+    },
+    "run_id": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/run_id"
+    },
+    "role": {
+      "description": "Run role from the token, or eval-judge for eval-worker judge calls (XD-FIX-R2-063).",
+      "anyOf": [
+        {
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/run_role"
+        },
+        {
+          "const": "eval-judge"
+        }
+      ]
+    },
+    "release_bundle_id": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/release_bundle_id"
+    },
+    "caller": {
+      "description": "run: sandbox with a run token. service: replicant-worker in-worker LLM call (service credential, attributed by X-Replicant-Job-Id).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "run",
+            "service"
+          ]
+        },
+        "token_jti": {
+          "type": "string",
+          "pattern": "^rtk_[0-9a-hjkmnp-tv-z]{26}$"
+        },
+        "service_principal": {
+          "type": "string",
+          "pattern": "^svc_(replicant-worker|memory-service|eval-worker)$"
+        },
+        "grant_jti": {
+          "description": "Run grant id embedded in the token (CCR-09-02).",
+          "type": "string",
+          "pattern": "^rgr_[0-9a-hjkmnp-tv-z]{26}$"
+        }
+      }
+    },
+    "gateway_model_id": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/gateway_model_id"
+    },
+    "protocol": {
+      "type": "string",
+      "enum": [
+        "anthropic_messages",
+        "anthropic_count_tokens",
+        "openai_responses",
+        "bedrock_invoke",
+        "vertex_raw_predict",
+        "embeddings"
+      ]
+    },
+    "streaming": {
+      "type": "boolean"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "upstream_error",
+        "rate_limited",
+        "overloaded",
+        "budget_denied",
+        "model_denied",
+        "auth_denied",
+        "client_aborted",
+        "timeout"
+      ]
+    },
+    "http_status": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 599
+    },
+    "upstream_request_id": {
+      "description": "Provider request id (Anthropic request-id / OpenAI x-request-id) or enterprise gateway id.",
+      "type": "string",
+      "maxLength": 128
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input_tokens",
+        "output_tokens"
+      ],
+      "properties": {
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_read_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_write_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reasoning_tokens": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "cost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "micros_usd",
+        "source"
+      ],
+      "properties": {
+        "micros_usd": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source": {
+          "description": "price_book: computed by the shim. upstream: reported by the enterprise gateway (preferred when present; reconciled nightly).",
+          "type": "string",
+          "enum": [
+            "price_book",
+            "upstream"
+          ]
+        },
+        "price_book_version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "budget_after": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_spent_micros": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "job_spent_micros": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tenant_period_spent_micros": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "account_spent_micros": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "latency_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "ttfb_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "retry_attempt": {
+      "description": "X-Replicant-Retry-Attempt from agentd (0 = first attempt).",
+      "type": "integer",
+      "minimum": 0
+    },
+    "trace_id": {
+      "type": "string",
+      "pattern": "^(?!0{32})[0-9a-f]{32}$"
+    },
+    "span_id": {
+      "type": "string",
+      "pattern": "^(?!0{16})[0-9a-f]{16}$"
+    },
+    "acting_for": {
+      "description": "Run token acting_for claim (CCR-09-03): requester principal, or on_behalf_of for service-triggered jobs. For service callers, the job's requester as asserted by the worker.",
+      "type": "string",
+      "pattern": "^(usr_[0-9a-hjkmnp-tv-z]{26}|svc_[a-z][a-z0-9-]{2,40})$"
+    },
+    "purpose": {
+      "description": "Why the call was made (R2-057, R2-061). agent: sandbox CLI. worker_llm: router/triage/extraction (tool-less, G-24). embedding: memory-service embeddings. eval_judge: eval-worker judge calls. qa_agent: QA advisory agent tasks.",
+      "type": "string",
+      "enum": [
+        "agent",
+        "worker_llm",
+        "embedding",
+        "eval_judge",
+        "qa_agent"
+      ]
+    },
+    "usage_source": {
+      "description": "parsed: usage read from the provider response. estimated: usage missing, zero on a 200, or unparseable, so the shim settled at the reserved estimate (R2-058).",
+      "type": "string",
+      "enum": [
+        "parsed",
+        "estimated",
+        "upstream_reported"
+      ]
+    },
+    "served_model": {
+      "description": "Model ID the upstream reports it served (response body `model`), also returned to the caller as X-Replicant-Served-Model (R1-150, XD-06-06).",
+      "type": "string",
+      "maxLength": 200
+    },
+    "pipeline_id": {
+      "description": "Release pipeline or backfill counter the call is charged to in addition to tenant counters (shadow evaluation, re-embedding backfill).",
+      "type": "string",
+      "maxLength": 64
+    },
+    "evaluation_mode": {
+      "description": "eval: eval cases, harness tasks, judge calls; shadow: shadow runs; none: production work charged to the tenant quota (XD-FIX-R2-061).",
+      "type": "string",
+      "enum": [
+        "eval",
+        "shadow",
+        "none"
+      ],
+      "default": "none"
+    },
+    "budget_account": {
+      "description": "Budget account the call is charged to instead of the tenant quota; present exactly when evaluation_mode is not none (XD-FIX-R2-061).",
+      "type": "string",
+      "pattern": "^fgw:(eval|pipeline|proposal):[A-Za-z0-9_.:-]{1,120}$"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "evaluation_mode": {
+            "enum": [
+              "eval",
+              "shadow"
+            ]
+          }
+        },
+        "required": [
+          "evaluation_mode"
+        ]
+      },
+      "then": {
+        "required": [
+          "budget_account"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "budget_account"
+          ]
+        }
+      }
+    }
+  ]
+}

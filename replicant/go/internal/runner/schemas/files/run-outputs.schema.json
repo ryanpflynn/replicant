@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/runtime/run-outputs/v1.json",
+  "title": "Run outputs index (entrypoint -> uploader)",
+  "description": "Owner: WS-03 (consumer: WS-02 uploader, a regular container that outlives the agent container, uid 10003; XD-02-01). Local file /replicant/out/outputs.json, written by replicant-entrypoint as its LAST action before exiting (atomic rename). The uploader uploads each entry to <prefix of bucket_class><type>/<name>, sets the tags from C-ART section 5, then writes manifest.json. A missing outputs.json means the entrypoint died: the uploader uploads streamed transcripts and logs only and writes a partial manifest. Required entries that fail to upload give ArtifactUploadFailed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "run_id",
+    "exit_code",
+    "partial",
+    "entries"
+  ],
+  "properties": {
+    "schema": {
+      "const": "replicant.run-outputs/v1"
+    },
+    "run_id": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/run_id"
+    },
+    "exit_code": {
+      "description": "The exit code the entrypoint is about to return (cli-invocation.md section 4.6).",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 255
+    },
+    "partial": {
+      "description": "true for cancel, deadline, budget, or any non-zero exit.",
+      "type": "boolean"
+    },
+    "result": {
+      "description": "Path of run_result/result.json if one was produced (absent for exit codes that mean no valid result).",
+      "type": "string",
+      "const": "/replicant/out/run_result/result.json"
+    },
+    "entries": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "bucket_class",
+          "path",
+          "name",
+          "content_type",
+          "required"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "run_result",
+              "diff_bundle",
+              "handoff",
+              "plan",
+              "review_report",
+              "cli_session_state",
+              "workspace_archive",
+              "memory_candidates",
+              "transcript",
+              "cli_events",
+              "sandbox_log",
+              "qa_report",
+              "junit_xml",
+              "build_log",
+              "health_log",
+              "screenshot",
+              "playwright_trace",
+              "video",
+              "a11y_report",
+              "sbom",
+              "image_metadata",
+              "secret_scan_report",
+              "qa_generated_flow"
+            ],
+            "description": "C-ART 2.0.0 section 4 types a run may produce. The 12 QA types (qa_report \u2026 qa_generated_flow) are written by the replicant-qa harness under /replicant/out/qa/<type>/<name>; replicant-entrypoint merges the harness's entries into this index (R1-073, XD-05-17). The uploader rejects any other type."
+          },
+          "bucket_class": {
+            "type": "string",
+            "enum": [
+              "artifacts",
+              "transcripts",
+              "session"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "maxLength": 1024,
+            "pattern": "^/replicant/out/[A-Za-z0-9._/-]+$"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 1024,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,199}(/[A-Za-z0-9][A-Za-z0-9._-]{0,199}){0,4}$"
+          },
+          "content_type": {
+            "type": "string",
+            "maxLength": 127
+          },
+          "content_encoding": {
+            "type": "string",
+            "enum": [
+              "identity",
+              "zstd",
+              "gzip"
+            ]
+          },
+          "sha256": {
+            "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/sha256_hex"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "redaction": {
+            "description": "Copied from the C-ART type registry so the uploader can route content through the WS-08 redaction pipeline.",
+            "type": "string",
+            "enum": [
+              "required",
+              "scan-block",
+              "raw-restricted",
+              "n/a"
+            ]
+          },
+          "attributes": {
+            "type": "object",
+            "maxProperties": 20,
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            }
+          },
+          "producer": {
+            "description": "Which process wrote the file (for audit); the entrypoint validates harness entries before merging.",
+            "type": "string",
+            "enum": [
+              "entrypoint",
+              "replicant-qa"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

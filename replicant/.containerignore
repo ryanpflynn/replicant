@@ -1,0 +1,12 @@
+.git
+.venv
+**/.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+**/.pytest_cache
+dev/.secrets
+dev/.env
+dev/compose/.env
+dev/compose/.replicant-dev
+**/node_modules

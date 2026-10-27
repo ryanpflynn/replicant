@@ -1,0 +1,42 @@
+# Chaos override (R1-270). `replicant dev test chaos` runs:
+#   docker compose -f compose.yaml -f compose.chaos.yaml --profile core --profile s3-seaweedfs --profile chaos up -d --wait
+# and recreates only the services below, so their traffic to the Runner, Temporal, replicant Postgres and S3 flows
+# through toxiproxy (proxies defined in config/runner-local/toxiproxy.json; toxics added per test through
+# toxiproxy's API on 127.0.0.1:8474). Everything else keeps direct connections, so a fault is targeted.
+#
+# | client                 | variable                     | direct                       | through toxiproxy        |
+# |------------------------|------------------------------|------------------------------|--------------------------|
+# | replicant-worker         | REPLICANT_RUNNER_URL           | http://runner-local:8480     | http://toxiproxy:18480   |
+# | replicant-worker         | REPLICANT_TEMPORAL_ADDRESS     | temporal:7233                | toxiproxy:17233          |
+# | replicant-projector      | REPLICANT_DB_DSN host          | postgres-replicant:5432        | toxiproxy:15432          |
+# | control-plane-api      | REPLICANT_DB_DSN host          | postgres-replicant:5432        | toxiproxy:15432          |
+# | runner-local           | RUNNER_S3_ENDPOINT           | http://s3.replicant.localhost:8333 | http://toxiproxy:18333 |
+# Sandboxes keep reaching S3 through sbx-edge; CH-S3-01 injects at the uploader path by pointing sbx-edge's
+# s3 upstream at toxiproxy (REPLICANT_SBX_EDGE_S3_UPSTREAM below).
+services:
+  toxiproxy:
+    profiles: [chaos]
+  replicant-worker:
+    environment:
+      REPLICANT_RUNNER_URL: http://toxiproxy:18480
+      REPLICANT_TEMPORAL_ADDRESS: toxiproxy:17233
+    depends_on:
+      toxiproxy: {condition: service_started}
+  replicant-projector:
+    environment:
+      REPLICANT_DB_DSN: postgresql+psycopg://svc_replicant_projector@toxiproxy:15432/replicant
+    depends_on:
+      toxiproxy: {condition: service_started}
+  control-plane-api:
+    environment:
+      REPLICANT_DB_DSN: postgresql+psycopg://svc_control_plane_api@toxiproxy:15432/replicant
+    depends_on:
+      toxiproxy: {condition: service_started}
+  runner-local:
+    environment:
+      RUNNER_S3_ENDPOINT: http://toxiproxy:18333
+    depends_on:
+      toxiproxy: {condition: service_started}
+  sbx-edge:
+    environment:
+      REPLICANT_SBX_EDGE_S3_UPSTREAM: http://toxiproxy:18333

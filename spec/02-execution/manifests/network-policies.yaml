@@ -1,0 +1,65 @@
+# Rendered per-run policy for the C-CRD example run (network.md section 3). The baseline default deny is
+# WS-09's sbx-baseline-deny / sbx-no-east-west (09-security/policies/network/ccnp-sandbox-baseline.yaml),
+# deployed unchanged; WS-02 keeps no copy (R1-031).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: ar-gj3h3ep3phjfs9e23v768zrca5-egress
+  namespace: sbx-payments
+  labels:
+    app.kubernetes.io/managed-by: agentrun-controller
+    replicant.example.com/network-profile: coding-default
+    replicant.example.com/tenant: payments
+    replicant.example.com/job-id: job_01m5p7x7r0bt69j0h0fbxepw90
+    replicant.example.com/run-id: run_gj3h3ep3phjfs9e23v768zrca5
+spec:
+  endpointSelector:
+    matchLabels:
+      replicant.example.com/run-id: run_gj3h3ep3phjfs9e23v768zrca5
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - {port: "53", protocol: UDP}
+            - {port: "53", protocol: TCP}
+          rules:
+            dns:
+              - matchName: ai-gateway.prod.replicant.internal
+              - matchName: memory-mcp.prod.replicant.internal
+              - matchName: context-mcp.prod.replicant.internal
+              - matchName: runner-sandbox.prod.replicant.internal
+              - matchName: repo-mirror.prod.replicant.internal
+              - matchName: otel-sandbox.prod.replicant.internal
+              - matchName: acme-replicant-prod-artifacts.s3.us-east-1.amazonaws.com
+              - matchName: acme-replicant-prod-transcripts.s3.us-east-1.amazonaws.com
+              - matchName: acme-replicant-prod-session.s3.us-east-1.amazonaws.com
+              - matchName: artifactory.acme.internal
+    - toFQDNs:
+        - matchName: ai-gateway.prod.replicant.internal
+        - matchName: memory-mcp.prod.replicant.internal
+        - matchName: context-mcp.prod.replicant.internal
+        - matchName: runner-sandbox.prod.replicant.internal
+        - matchName: acme-replicant-prod-artifacts.s3.us-east-1.amazonaws.com
+        - matchName: acme-replicant-prod-transcripts.s3.us-east-1.amazonaws.com
+        - matchName: acme-replicant-prod-session.s3.us-east-1.amazonaws.com
+        - matchName: artifactory.acme.internal
+      toPorts:
+        - ports:
+            - {port: "443", protocol: TCP}
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: replicant-mirror
+            app.kubernetes.io/name: repo-mirror
+      toPorts:
+        - ports:
+            - {port: "8443", protocol: TCP}
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: replicant-observability
+            app.kubernetes.io/name: alloy-sandbox-otlp
+      toPorts:
+        - ports:
+            - {port: "4318", protocol: TCP}

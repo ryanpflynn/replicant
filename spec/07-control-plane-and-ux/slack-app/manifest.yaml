@@ -1,0 +1,62 @@
+# Slack app manifest for the replicant (production registration).
+# Local development uses the same manifest with socket_mode_enabled: true and no request URLs
+# (rendered by `replicant dev slack-app manifest --socket-mode`).
+# Field names follow Slack's app manifest format; [unverified: complete manifest schema at time of
+# writing; validate with Slack's apps.manifest.validate before first install].
+_metadata:
+  major_version: 1
+  minor_version: 1
+display_information:
+  name: Replicant
+  description: Start, watch, steer, and approve Replicant jobs.
+  background_color: "#211d18"
+features:
+  app_home:
+    home_tab_enabled: true
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: replicant
+    always_online: true
+  slash_commands:
+    - command: /replicant
+      url: https://slack.replicant.acme.example.com/slack/commands
+      description: Start a job, check status, or approve
+      usage_hint: "run <repo> <title> | status [job] | approve <gate> | link"
+      should_escape: false
+  shortcuts:
+    - name: Start replicant job from message
+      type: message
+      callback_id: replicant_job_from_message
+      description: Turn this message (and its thread) into a replicant job
+    - name: New replicant job
+      type: global
+      callback_id: replicant_job_new
+      description: Open the job form
+oauth_config:
+  redirect_urls:
+    - https://replicant.acme.example.com/v1/identity/links/slack/callback
+  scopes:
+    bot:
+      - chat:write
+      - im:write
+      - commands
+      - users:read
+      - users:read.email
+    # Sign in with Slack (OIDC) for identity linking (ADR-07-003, R1-185); requested in a separate
+    # OAuth flow from the bot scopes, as Slack requires.
+    user:
+      - openid
+      - profile
+      - email
+settings:
+  interactivity:
+    is_enabled: true
+    request_url: https://slack.replicant.acme.example.com/slack/interactions
+  event_subscriptions:
+    request_url: https://slack.replicant.acme.example.com/slack/events
+    bot_events:
+      - app_home_opened
+  org_deploy_enabled: true
+  socket_mode_enabled: false
+  token_rotation_enabled: false

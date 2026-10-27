@@ -1,0 +1,17 @@
+apiVersion: replicant.example.com/v1
+kind: Policy
+metadata:
+  name: retention-payments
+  scope: {level: tenant, tenant_id: payments}
+  owners: [payments-tenant-admins]
+  description: Payments keeps Playwright traces and build logs for 30 days instead of 90 (PCI data-minimization).
+spec:
+  policyType: retention
+  artifactRetention:
+    playwright_trace: r30d
+    build_log: r30d
+    video: r7d
+    transcript: r30d
+    workflow_history_skeleton: r7y
+  sessionStateGraceDays: 3
+  screenshotsRequireMasking: true

@@ -1,0 +1,105 @@
+# WS-06 → WS-08: rules file replicant-release.rules.yaml (Prometheus 3.x / Mimir ruler format).
+# Authoritative copy; online-metrics.md §3.1 and §7 describe it. Alerts carry `owner: ws-06`, which WS-08's
+# Alertmanager routes to the `replicant-release` receiver (XD-FIX-R1-140). Labels stay inside C-IDS §11.
+groups:
+  - name: replicant-release-cohorts
+    interval: 1m
+    rules:
+      - record: replicant:run_bundle_failure:ratio_rate6h
+        expr: |
+          sum by (env, release_cohort, bundle) (increase(replicant_runs_terminal_total{outcome="Failed", reason=~"AgentExitedNonZero|AgentResultMissing|AgentResultInvalid|SessionRestoreFailed|GatewayBudgetExceeded|AdmissionDenied|DefinitionUnavailable"}[6h]))
+          /
+          sum by (env, release_cohort, bundle) (increase(replicant_runs_terminal_total{outcome=~"Succeeded|Failed"}[6h]))
+      - record: replicant:qa_first_pass:ratio_rate1d
+        expr: |
+          sum by (env, release_cohort, bundle) (increase(replicant_qa_first_pass_total{outcome="pass"}[1d]))
+          /
+          sum by (env, release_cohort, bundle) (increase(replicant_qa_first_pass_total[1d]))
+      - record: replicant:job_failure:ratio_rate1d
+        expr: |
+          sum by (env, release_cohort, bundle) (increase(replicant_jobs_terminal_total{outcome=~"failed|expired"}[1d]))
+          /
+          sum by (env, release_cohort, bundle) (increase(replicant_jobs_terminal_total{outcome!="cancelled"}[1d]))
+      - record: replicant:job_cost_usd:p50_1d
+        expr: |
+          histogram_quantile(0.5, sum by (env, release_cohort, bundle, le) (increase(replicant_jobs_cost_usd_bucket[1d])))
+      - record: replicant:time_to_pr_active:p50_1d
+        expr: |
+          histogram_quantile(0.5, sum by (env, release_cohort, bundle, le) (increase(replicant_jobs_time_to_pr_active_seconds_bucket[1d])))
+      - record: replicant:gate_override:ratio_rate1d
+        expr: |
+          sum by (env, gate_kind, release_cohort, bundle) (increase(replicant_gate_decisions_total{gate_kind=~"plan_approval|publish_approval", outcome=~"reject|request_changes"}[1d]))
+          /
+          sum by (env, gate_kind, release_cohort, bundle) (increase(replicant_gate_decisions_total{gate_kind=~"plan_approval|publish_approval", outcome!="expired"}[1d]))
+      - record: replicant:scope_violation:ratio_rate1d
+        expr: |
+          sum by (env, release_cohort, bundle) (increase(replicant_jobs_scope_violations_total[1d]))
+          /
+          sum by (env, release_cohort, bundle) (increase(replicant_jobs_started_total[1d]))
+  - name: replicant-release-alerts
+    rules:
+      - alert: ReplicantCandidateRunFailureElevated
+        expr: |
+          replicant:run_bundle_failure:ratio_rate6h{release_cohort="candidate"}
+            - on (env) group_left () replicant:run_bundle_failure:ratio_rate6h{release_cohort="default"} > 0.05
+        for: 30m
+        labels: {severity: page, owner: ws-06}
+        annotations:
+          summary: "Candidate bundle {{ $labels.bundle }} run failures exceed control by > 5 pt for 30 m"
+          runbook: "https://runbooks.replicant.example.com/release/guardrails#r1"
+      - alert: ReplicantReleaseGuardrailDataStale
+        expr: time() - max by (env) (replicant_release_guardrail_last_evaluation_timestamp_seconds) > 1800
+        for: 5m
+        labels: {severity: page, owner: ws-06}
+        annotations:
+          summary: "Release guardrails have not evaluated for 30 minutes; ramp progression is frozen"
+          runbook: "https://runbooks.replicant.example.com/release/guardrails#stale"
+      - alert: ReplicantReleaseRollbackBlocked
+        # Series: control-plane-api counter, incremented on every failed rollback attempt (reason = db_unavailable,
+        # target_not_serving, target_revoked, preview_stale, authz_unavailable).
+        expr: sum by (env) (increase(replicant_release_rollback_failures_total[5m])) > 0
+        for: 2m
+        labels: {severity: page, owner: ws-06}
+        annotations:
+          summary: "Rollback in {{ $labels.env }} is failing; use the bundle-scope kill switch (promotion.md §7.4)"
+          runbook: "https://runbooks.replicant.example.com/release/rollback#blocked"
+      - alert: ReplicantIntakeBundleUnresolvable
+        # Series: control-plane-api counter, incremented when intake returns 503 bundle_unresolvable (release-bundle.md §8.5).
+        expr: sum by (env, tenant) (increase(replicant_intake_bundle_unresolvable_total[5m])) > 0
+        labels: {severity: page, owner: ws-06}
+        annotations:
+          summary: "Intake cannot resolve a bundle for tenant {{ $labels.tenant }}; jobs are being refused"
+          runbook: "https://runbooks.replicant.example.com/release/intake#unresolvable"
+      - alert: ReplicantSentinelOutOfControl
+        # Series: eval-worker gauges after each daily sentinel (eval-harness.md §9).
+        expr: |
+          replicant_eval_sentinel_resolved_rate < replicant_eval_sentinel_control_lower
+            or replicant_eval_sentinel_resolved_rate > replicant_eval_sentinel_control_upper
+        labels: {severity: ticket, owner: ws-06}
+        annotations:
+          summary: "Sentinel resolved rate left its control limits; the eval environment changed"
+          runbook: "https://runbooks.replicant.example.com/evals/sentinel"
+      - alert: ReplicantJudgeDrift
+        # Series: eval-worker gauge = number of judges currently in state 'suspect' (details in evals.judges).
+        expr: max by (env) (replicant_eval_judges_suspect) > 0
+        labels: {severity: ticket, owner: ws-06}
+        annotations:
+          summary: "{{ $value }} LLM judge(s) are suspect and excluded from gating (eval-harness.md §5)"
+          runbook: "https://runbooks.replicant.example.com/evals/judge-drift"
+      - alert: ReplicantOnlineQualityRegression
+        # Series: eval-worker gauge, 1 when the default's 14-day merge-rate interval lies entirely below the previous
+        # default's (online-metrics.md §4); 0 otherwise.
+        expr: max by (env) (replicant_release_online_regression) == 1
+        for: 1h
+        labels: {severity: ticket, owner: ws-06}
+        annotations:
+          summary: "The current default's merge rate is significantly below the previous default's"
+          runbook: "https://runbooks.replicant.example.com/release/holdback"
+      - alert: ReplicantPromptVersionDeleted
+        # Series: control-plane-api counter, incremented when a Langfuse 'deleted' webhook names a version referenced
+        # by a non-revoked bundle (release-bundle.md §4.3).
+        expr: sum by (env) (increase(replicant_release_prompt_version_deleted_total[1h])) > 0
+        labels: {severity: ticket, owner: ws-06}
+        annotations:
+          summary: "A Langfuse prompt version used by a live bundle was deleted; escrow is serving it"
+          runbook: "https://runbooks.replicant.example.com/release/prompt-escrow"

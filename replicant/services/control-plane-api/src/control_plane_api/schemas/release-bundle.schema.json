@@ -1,0 +1,324 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/contracts/release-bundle/v1.json",
+  "title": "ReleaseBundle",
+  "description": "Contract C-DEF v3.0.0 (WS-00), section 5. A fully resolved, closed, immutable tuple that determines replicant behavior for a job (D-03). release_bundle_id = 'rb_' + b32_130(sha256(JCS(spec))). metadata is excluded from the digest. WS-06 extends spec only through a contract change request; it owns promotion state, which lives outside the bundle document.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "replicant.example.com/v1"
+    },
+    "kind": {
+      "const": "ReleaseBundle"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "display_version",
+        "created_at",
+        "created_by"
+      ],
+      "properties": {
+        "display_version": {
+          "description": "Human label, not an identifier. Format YYYY.MM.DD-N[.tenant].",
+          "type": "string",
+          "pattern": "^[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}-[0-9]{1,3}(\\.[a-z][a-z0-9-]{1,31})?$"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "created_by": {
+          "type": "string",
+          "pattern": "^(usr_[0-9a-hjkmnp-tv-z]{26}|svc_[a-z][a-z0-9-]{2,40})$"
+        },
+        "change_summary": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "source_commit": {
+          "description": "Config repo commit the bundle request came from.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "worker_deployment",
+        "node_catalog",
+        "router",
+        "graphs",
+        "agents",
+        "environments",
+        "policies",
+        "prompts",
+        "cli_images",
+        "models",
+        "memory_snapshot_policy",
+        "lineage"
+      ],
+      "properties": {
+        "worker_deployment": {
+          "description": "The replicant-worker Worker Deployment Version every workflow of this bundle is pinned to (via start-time versioning override, ADR-006).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "deployment_name",
+            "build_id",
+            "image_digest"
+          ],
+          "properties": {
+            "deployment_name": {
+              "const": "replicant-worker"
+            },
+            "build_id": {
+              "type": "string",
+              "pattern": "^b[0-9]{8}-[0-9a-f]{12}$"
+            },
+            "image_digest": {
+              "$ref": "#/$defs/digest"
+            }
+          }
+        },
+        "node_catalog": {
+          "$ref": "#/$defs/pinned_ref"
+        },
+        "router": {
+          "description": "Policy of policyType router_rules.",
+          "$ref": "#/$defs/pinned_ref"
+        },
+        "graphs": {
+          "description": "Graph definition per workflow type. Every type a job can be routed to must be present.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "bugfix",
+            "feature",
+            "api_change",
+            "docs",
+            "hotfix",
+            "maintenance",
+            "pr_repair",
+            "qa_only"
+          ],
+          "properties": {
+            "bugfix": {
+              "$ref": "#/$defs/pinned_ref"
+            },
+            "feature": {
+              "$ref": "#/$defs/pinned_ref"
+            },
+            "api_change": {
+              "$ref": "#/$defs/pinned_ref"
+            },
+            "docs": {
+              "$ref": "#/$defs/pinned_ref"
+            },
+            "hotfix": {
+              "$ref": "#/$defs/pinned_ref"
+            },
+            "maintenance": {
+              "$ref": "#/$defs/pinned_ref"
+            },
+            "pr_repair": {
+              "$ref": "#/$defs/pinned_ref"
+            },
+            "qa_only": {
+              "$ref": "#/$defs/pinned_ref"
+            }
+          }
+        },
+        "agents": {
+          "description": "Every AgentDefinition reachable from graphs and codebase_bindings, and no others. Sorted by name.",
+          "$ref": "#/$defs/ref_list"
+        },
+        "environments": {
+          "description": "Every EnvironmentDefinition reachable from codebase_bindings and graphs. Sorted by name.",
+          "$ref": "#/$defs/ref_list"
+        },
+        "policies": {
+          "description": "Every Policy in force (global, plus tenant layer when tenant_layer is set). At most one per (policyType, scope). Sorted by name.",
+          "$ref": "#/$defs/ref_list"
+        },
+        "prompts": {
+          "description": "Langfuse prompts, resolved from labels to concrete versions at build time. digest = sha256 of JCS({type, prompt, config}) as fetched; the context assembler verifies it at use and fails closed on mismatch.",
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "version",
+              "digest"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 200,
+                "pattern": "^[a-z0-9][a-z0-9._/-]{0,199}$"
+              },
+              "version": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "digest": {
+                "$ref": "#/$defs/digest"
+              },
+              "resolved_from_label": {
+                "type": "string",
+                "maxLength": 100
+              }
+            }
+          }
+        },
+        "cli_images": {
+          "description": "Derived index of CLI images used by the bundle's agent definitions (D-10). Must equal the set referenced by agents.",
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "cli",
+              "version",
+              "image"
+            ],
+            "properties": {
+              "cli": {
+                "type": "string",
+                "enum": [
+                  "claude-code",
+                  "claude-agent-sdk",
+                  "codex"
+                ]
+              },
+              "version": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "image": {
+                "description": "Full image reference by digest, e.g. <account>.dkr.ecr.us-east-1.amazonaws.com/replicant/cli-claude-code@sha256:<hex>.",
+                "type": "string",
+                "maxLength": 512,
+                "pattern": "^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$"
+              }
+            }
+          }
+        },
+        "models": {
+          "description": "Derived index of gateway model identifiers used by agents and by in-worker LLM calls (router, extraction). Each is the provider's exact published model ID: current Claude models use undated IDs as-is (e.g. anthropic/claude-opus-5-5); aliases such as '-latest' and shorthand aliases of dated snapshots are rejected at build (C-DEF 4.3).",
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "gateway_model_id",
+              "used_by"
+            ],
+            "properties": {
+              "gateway_model_id": {
+                "type": "string",
+                "maxLength": 200,
+                "not": {
+                  "pattern": "latest$"
+                }
+              },
+              "used_by": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 200
+                }
+              }
+            }
+          }
+        },
+        "memory_snapshot_policy": {
+          "description": "Policy of policyType memory_snapshot (WS-04): which scopes, states, and limits form the job's memory snapshot at context assembly. Memory entries themselves are not in the bundle; the snapshot id is recorded per job.",
+          "$ref": "#/$defs/pinned_ref"
+        },
+        "tenant_layer": {
+          "description": "Present only on tenant-derived bundles (ADR-013). Tenant-scoped policies and bindings layered on base_release_bundle_id.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tenant_id",
+            "base_release_bundle_id",
+            "policies"
+          ],
+          "properties": {
+            "tenant_id": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 32,
+              "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+            },
+            "base_release_bundle_id": {
+              "$ref": "#/$defs/release_bundle_id"
+            },
+            "policies": {
+              "$ref": "#/$defs/ref_list"
+            }
+          }
+        },
+        "lineage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "parent_release_bundle_id": {
+              "$ref": "#/$defs/release_bundle_id"
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "release_bundle_id": {
+      "type": "string",
+      "pattern": "^rb_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "pinned_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ref",
+        "digest"
+      ],
+      "properties": {
+        "ref": {
+          "description": "<kind>/<name>@<version>",
+          "type": "string",
+          "pattern": "^(agent|environment|graph|policy|nodecatalog)/[a-z][a-z0-9]*(-[a-z0-9]+)*(\\.[a-z][a-z0-9-]{1,31})?@[1-9][0-9]*$"
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "ref_list": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "$ref": "#/$defs/pinned_ref"
+      }
+    }
+  }
+}

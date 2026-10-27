@@ -1,0 +1,101 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyLeavingOrgAndDisablingDetective",
+      "Effect": "Deny",
+      "Action": [
+        "organizations:LeaveOrganization",
+        "cloudtrail:StopLogging",
+        "cloudtrail:DeleteTrail",
+        "cloudtrail:PutEventSelectors",
+        "guardduty:DeleteDetector",
+        "guardduty:UpdateDetector",
+        "guardduty:DisassociateFromMasterAccount",
+        "config:StopConfigurationRecorder",
+        "config:DeleteConfigurationRecorder",
+        "access-analyzer:DeleteAnalyzer"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyIamWritesExceptPipeline",
+      "Effect": "Deny",
+      "Action": [
+        "iam:Create*",
+        "iam:Put*",
+        "iam:Attach*",
+        "iam:Update*",
+        "iam:Delete*",
+        "iam:PassRole",
+        "iam:AddRoleToInstanceProfile",
+        "iam:Tag*",
+        "iam:Untag*"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ArnNotLike": {
+          "aws:PrincipalArn": [
+            "arn:aws:iam::222222222222:role/replicant-prod-platform-deployer",
+            "arn:aws:iam::222222222222:role/aws-reserved/sso.amazonaws.com/*AWSReservedSSO_ReplicantBreakGlassAdmin_*"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "DenyImdsV1Instances",
+      "Effect": "Deny",
+      "Action": "ec2:RunInstances",
+      "Resource": "arn:aws:ec2:*:*:instance/*",
+      "Condition": {
+        "StringNotEquals": { "ec2:MetadataHttpTokens": "required" }
+      }
+    },
+    {
+      "Sid": "DenyImdsHopLimitAboveOne",
+      "Effect": "Deny",
+      "Action": "ec2:RunInstances",
+      "Resource": "arn:aws:ec2:*:*:instance/*",
+      "Condition": {
+        "NumericGreaterThan": { "ec2:MetadataHttpPutResponseHopLimit": "1" }
+      }
+    },
+    {
+      "Sid": "DenyInternetPaths",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:CreateInternetGateway",
+        "ec2:AttachInternetGateway",
+        "ec2:CreateNatGateway",
+        "ec2:CreateEgressOnlyInternetGateway",
+        "ec2:AssociateAddress",
+        "ec2:AllocateAddress"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ArnNotLike": {
+          "aws:PrincipalArn": "arn:aws:iam::222222222222:role/replicant-prod-platform-deployer"
+        }
+      }
+    },
+    {
+      "Sid": "DenyS3OutsideReplicantAndAwsServiceBuckets",
+      "Effect": "Deny",
+      "Action": ["s3:PutObject", "s3:GetObject"],
+      "NotResource": [
+        "arn:aws:s3:::acme-replicant-prod-*/*",
+        "arn:aws:s3:::prod-us-east-1-starport-layer-bucket/*",
+        "arn:aws:s3:::acme-replicant-prod-exec-logs/*"
+      ]
+    },
+    {
+      "Sid": "RegionLock",
+      "Effect": "Deny",
+      "NotAction": ["iam:*", "sts:*", "organizations:*", "support:*", "route53:*", "cloudfront:*"],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": { "aws:RequestedRegion": ["us-east-1"] }
+      }
+    }
+  ]
+}

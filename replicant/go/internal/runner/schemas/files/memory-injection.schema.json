@@ -1,0 +1,244 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/ws04/memory-injection/v1.json",
+  "title": "Memory injection",
+  "description": "WS-04. Artifact type `memory_injection` (C-ART §4: artifacts bucket, 1 MiB, r2y). Staged by the context assembler under <run>/inputs/memory-injection.json and listed in the inputs manifest. `rendered` is the exact text the entrypoint places in the CLI's system-prompt slot (retrieval-injection.md §5); `items` is the structured record of what was rendered, in order. A run's injection is reproducible byte-for-byte from (snapshot_id, selection inputs) and is recorded in memory.injections.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "job_id",
+    "run_id",
+    "tenant_id",
+    "memory_snapshot_id",
+    "role",
+    "cli",
+    "render_format",
+    "budget",
+    "items",
+    "rendered",
+    "rendered_sha256",
+    "renderer_version"
+  ],
+  "properties": {
+    "schema": {
+      "const": "replicant.memory-injection/v1"
+    },
+    "job_id": {
+      "type": "string",
+      "pattern": "^job_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^run_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "tenant_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+    },
+    "memory_snapshot_id": {
+      "type": "string",
+      "pattern": "^msnap_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "planner",
+        "implementer",
+        "qa",
+        "reviewer",
+        "repair",
+        "takeover",
+        "eval"
+      ]
+    },
+    "cli": {
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "claude-agent-sdk",
+        "codex"
+      ]
+    },
+    "render_format": {
+      "const": "replicant.memory-block/v1"
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "paths": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        },
+        "languages": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "type": "string",
+            "maxLength": 32
+          }
+        },
+        "workflow_type": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "query_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "budget_tokens",
+        "used_tokens",
+        "tokenizer"
+      ],
+      "properties": {
+        "budget_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "used_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tokenizer": {
+          "type": "string",
+          "maxLength": 100,
+          "examples": [
+            "anthropic:count_tokens:claude-sonnet-5-5",
+            "tiktoken:o200k_base"
+          ]
+        }
+      }
+    },
+    "items": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ref",
+          "section",
+          "scope",
+          "precedence_rank",
+          "tokens"
+        ],
+        "properties": {
+          "ref": {
+            "type": "string",
+            "pattern": "^mem_[0-9a-hjkmnp-tv-z]{26}@[1-9][0-9]*$"
+          },
+          "section": {
+            "type": "string",
+            "enum": [
+              "enforced",
+              "rule",
+              "procedure",
+              "negative",
+              "preference"
+            ]
+          },
+          "scope": {
+            "type": "string",
+            "maxLength": 600,
+            "examples": [
+              "repo github.com/acme-payments/ledger-api",
+              "path github.com/acme-payments/ledger-api:internal/billing/**"
+            ]
+          },
+          "precedence_rank": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "overrides": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^mem_[0-9a-hjkmnp-tv-z]{26}@[1-9][0-9]*$"
+            }
+          },
+          "tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "curated": {
+            "type": "boolean",
+            "description": "true when an admin approved this version; false when auto-activated under policy"
+          }
+        }
+      }
+    },
+    "cut": {
+      "description": "Eligible entries dropped by the budget, in rank order.",
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "string",
+        "pattern": "^mem_[0-9a-hjkmnp-tv-z]{26}@[1-9][0-9]*$"
+      }
+    },
+    "suppressed_conflicts": {
+      "description": "Pairs that could not be resolved by precedence: neither side is injected (retrieval-injection.md §3.3).",
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "conflict_id",
+          "refs"
+        ],
+        "properties": {
+          "conflict_id": {
+            "type": "string",
+            "pattern": "^mcfl_[0-9a-hjkmnp-tv-z]{26}$"
+          },
+          "refs": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "string",
+              "pattern": "^mem_[0-9a-hjkmnp-tv-z]{26}@[1-9][0-9]*$"
+            }
+          }
+        }
+      }
+    },
+    "rendered": {
+      "type": "string",
+      "maxLength": 400000
+    },
+    "rendered_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "renderer_version": {
+      "type": "string",
+      "pattern": "^replicant\\.memory-block/v[0-9]+@[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "withheld": {
+      "description": "Applicable entries withheld by this job's holdout arms (never rendered).",
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "string",
+        "pattern": "^mem_[0-9a-hjkmnp-tv-z]{26}@[1-9][0-9]*$"
+      }
+    },
+    "replay_of_run_id": {
+      "type": "string",
+      "pattern": "^run_[0-9a-hjkmnp-tv-z]{26}$"
+    }
+  }
+}

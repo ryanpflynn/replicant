@@ -1,0 +1,69 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RegistryBlobsWriteOnceAndRead",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging",
+        "s3:GetObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-registry/blobs/sha256/*",
+        "arn:aws:s3:::acme-replicant-prod-registry/bundles/*",
+        "arn:aws:s3:::acme-replicant-prod-registry/index/*"
+      ]
+    },
+    {
+      "Sid": "RequireConditionalCreateForRegistryBlobs",
+      "Effect": "Deny",
+      "Action": "s3:PutObject",
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-registry/blobs/sha256/*",
+        "arn:aws:s3:::acme-replicant-prod-registry/bundles/*",
+        "arn:aws:s3:::acme-replicant-prod-registry/index/*"
+      ],
+      "Condition": {
+        "Null": {
+          "s3:if-none-match": "true"
+        },
+        "Bool": {
+          "s3:ObjectCreationOperation": "true"
+        }
+      }
+    },
+    {
+      "Sid": "PresignUiDownloads",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*",
+        "arn:aws:s3:::acme-replicant-prod-transcripts/tenants/*",
+        "arn:aws:s3:::acme-replicant-prod-audit/tenants/*",
+        "arn:aws:s3:::acme-replicant-prod-session/tenants/*/jobs/*/runs/*/workspace_archive/*"
+      ]
+    },
+    {
+      "Sid": "KeysViaS3Only",
+      "Effect": "Allow",
+      "Action": [
+        "kms:GenerateDataKey",
+        "kms:Decrypt"
+      ],
+      "Resource": "arn:aws:kms:us-east-1:111111111111:key/*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "s3.us-east-1.amazonaws.com"
+        },
+        "ForAnyValue:StringEquals": {
+          "aws:ResourceTag/replicant-key-class": [
+            "tenant",
+            "audit",
+            "registry"
+          ]
+        }
+      }
+    }
+  ]
+}

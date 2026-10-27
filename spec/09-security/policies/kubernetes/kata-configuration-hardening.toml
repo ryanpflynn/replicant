@@ -1,0 +1,47 @@
+# Fragment of the Kata Containers configuration for RuntimeClasses replicant-kata-clh and replicant-kata-fc
+# (WS-02 owns the full file; WS-09 owns these keys). WS-02 selected Kata 4.x with the runtime-rs shim and
+# Cloud Hypervisor (spec/02-execution/runtime-evaluation.md R-1, Kata 4.3.1). Minimum version: 4.3.0
+# (GHSA-37rf-pj8c-g5g3: kata-deploy forwarded all io.katacontainers.* annotations; enable_annotations
+# covers only the config.hypervisor prefix; fixed in 4.3.0) [verified:
+# https://github.com/kata-containers/kata-containers/security/advisories/GHSA-37rf-pj8c-g5g3, 2026-10-24].
+# The primary control is upstream of Kata: containerd must forward NO pod annotations to the Kata
+# handlers (containerd-kata-runtime.toml), and the VAP denies io.katacontainers.* annotations.
+# Rationale: the 2026 Kata advisories GHSA-rr59-xxvx-96qr (CVE-2026-44210), GHSA-mp2j-xm59-qfgw
+# (CVE-2026-50540), GHSA-7fhf-v3p3-rp56 and GHSA-37rf-pj8c-g5g3 all turn pod annotations into host
+# compromise; GHSA-2gv2-cffp-j227 (CVE-2026-47243) is a guest-root to host-root escape through
+# virtio-fs [verified: https://github.com/kata-containers/kata-containers/security/advisories, 2026-10-24].
+# Key names and virtiofsd flag spellings are [unverified: checked against Kata 3.x docs from memory, not the
+# pinned release]; WS-02 must confirm them against the Kata version it pins (>= 4.3.0) and its CI asserts
+# the effective config with `kata-runtime env --json`.
+
+[hypervisor.clh]
+# No pod annotation may change hypervisor behavior. The upstream default allowlist includes
+# enable_iommu, virtio_fs_extra_args, kernel_params and kernel_verity_params.
+enable_annotations = []
+# Workspace is a guest block device (ADR-014 guestBlockDevice), so no shared filesystem is needed
+# for the workspace. The container rootfs is shared over virtio-fs (WS-02 runtime-evaluation §11:
+# disable_block_device_use = true), so virtiofsd hardening below is mandatory, not optional. If
+# guestBlockDevice fails its benchmark and WS-02 falls back to virtio-fs for the workspace too,
+# threat-model T-SBX-03's residual rises and WS-09 must re-approve (R2-038).
+shared_fs = "virtio-fs"
+virtio_fs_daemon = "/opt/kata/libexec/virtiofsd"
+# Run virtiofsd sandboxed; never "--sandbox none --seccomp none" (the CVE-2026-47243 precondition).
+virtio_fs_extra_args = ["--thread-pool-size=1", "--announce-submounts", "--sandbox=namespace", "--seccomp=kill"]
+disable_guest_seccomp = false
+# Debug console must be impossible to enable in production.
+guest_hook_path = ""
+
+[hypervisor.firecracker]
+enable_annotations = []
+jailer_path = "/opt/kata/bin/jailer"
+
+[agent.kata]
+debug_console_enabled = false
+enable_tracing = false
+
+[runtime]
+# Disallow every runtime annotation that could pick another config file or hypervisor path.
+experimental = []
+disable_new_netns = false
+sandbox_cgroup_only = true
+enable_pprof = false

@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/role-results/reviewer/v1.json",
+  "title": "Role result: reviewer",
+  "description": "Owner: WS-03. run_result.role_result for role reviewer. integrity is required: a review whose workspace was modified is flagged and the verifier discards the verdict.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "agent_report",
+    "cli",
+    "integrity"
+  ],
+  "properties": {
+    "schema": {
+      "const": "replicant.role-result.reviewer/v1"
+    },
+    "agent_report": {
+      "$ref": "#/$defs/agent_report"
+    },
+    "cli": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/cli_execution"
+    },
+    "budget": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/budget_observation"
+    },
+    "integrity": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/integrity"
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "blocker": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "major": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "minor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "nit": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  "$defs": {
+    "agent_report": {
+      "description": "Agent-produced review (structured output). Untrusted model output; the verifier node treats it as advisory evidence.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcome",
+        "verdict",
+        "summary",
+        "findings"
+      ],
+      "properties": {
+        "outcome": {
+          "description": "Agent's own claim of task outcome. The entrypoint copies it to run_result.outcome unless an entrypoint-detected condition overrides it (e.g. diff empty -> no_changes; integrity violation -> failed).",
+          "type": "string",
+          "enum": [
+            "completed",
+            "no_changes",
+            "blocked",
+            "failed"
+          ]
+        },
+        "verdict": {
+          "type": "string",
+          "enum": [
+            "approve",
+            "request_changes",
+            "comment"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 8000
+        },
+        "findings": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "severity",
+              "category",
+              "title"
+            ],
+            "properties": {
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "blocker",
+                  "major",
+                  "minor",
+                  "nit"
+                ]
+              },
+              "category": {
+                "type": "string",
+                "enum": [
+                  "correctness",
+                  "security",
+                  "tests",
+                  "performance",
+                  "api_compat",
+                  "style",
+                  "scope",
+                  "docs",
+                  "other"
+                ]
+              },
+              "path": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "line_start": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "line_end": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "title": {
+                "type": "string",
+                "maxLength": 300
+              },
+              "detail": {
+                "type": "string",
+                "maxLength": 4000
+              },
+              "suggestion": {
+                "type": "string",
+                "maxLength": 4000
+              }
+            }
+          }
+        },
+        "tests_run": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/test_run"
+          }
+        },
+        "scope_ok": {
+          "description": "Diff stays within the approved plan.",
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

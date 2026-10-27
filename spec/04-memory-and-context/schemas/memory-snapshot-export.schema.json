@@ -1,0 +1,220 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/ws04/memory-snapshot-export/v1.json",
+  "title": "Memory snapshot export",
+  "description": "WS-04. Artifact type `memory_snapshot_export` (C-ART §4: memory bucket, tenants/<tenant>/snapshots/<memory_snapshot_id>.json, 8 MiB, r2y). Written once (If-None-Match: *) when a snapshot is first created. Self-contained: it carries the full content of every pinned entry version, so a job can be reproduced even if Postgres is restored or rebuilt. On purge, the object is deleted (all versions) and re-materialized under CCR-04-01's tombstone key with purged items replaced by tombstones. Holdout arms are per job and are not part of the snapshot (memory.holdout_assignments).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "memory_snapshot_id",
+    "tenant_id",
+    "policy",
+    "created_at",
+    "spec_digest",
+    "items",
+    "renderer_version"
+  ],
+  "properties": {
+    "schema": {
+      "const": "replicant.memory-snapshot-export/v1"
+    },
+    "memory_snapshot_id": {
+      "type": "string",
+      "pattern": "^msnap_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "tenant_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ref",
+        "digest"
+      ],
+      "properties": {
+        "ref": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "spec_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "sha256(JCS({tenant_id, entries: sorted refs, policy: ref})) — the msnap body is b32_130 of this digest; the tenant is part of the hash (CCR-04-04, R1-096)."
+    },
+    "items": {
+      "type": "array",
+      "maxItems": 2000,
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "ref",
+              "section",
+              "precedence_rank",
+              "memory_type",
+              "scope",
+              "statement",
+              "content_digest"
+            ],
+            "properties": {
+              "ref": {
+                "type": "string",
+                "pattern": "^mem_[0-9a-hjkmnp-tv-z]{26}@[1-9][0-9]*$"
+              },
+              "section": {
+                "type": "string",
+                "enum": [
+                  "enforced",
+                  "rule",
+                  "procedure",
+                  "negative",
+                  "preference"
+                ]
+              },
+              "precedence_rank": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "memory_type": {
+                "type": "string",
+                "enum": [
+                  "rule",
+                  "procedure",
+                  "negative",
+                  "preference"
+                ]
+              },
+              "scope": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "level"
+                ],
+                "properties": {
+                  "level": {
+                    "type": "string",
+                    "enum": [
+                      "org",
+                      "tenant",
+                      "service_group",
+                      "repo",
+                      "path"
+                    ]
+                  },
+                  "service_group": {
+                    "type": "string"
+                  },
+                  "repo": {
+                    "type": "string"
+                  },
+                  "path_globs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "languages": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "frameworks": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "workflow_types": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "roles": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "subject_key": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "statement": {
+                "type": "string"
+              },
+              "rationale": {
+                "type": "string"
+              },
+              "structured": {
+                "type": "object"
+              },
+              "examples": {
+                "type": "array"
+              },
+              "enforced": {
+                "type": "boolean"
+              },
+              "overrides": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "content_digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "ref",
+              "purged",
+              "purge_id"
+            ],
+            "properties": {
+              "ref": {
+                "type": "string",
+                "pattern": "^mem_[0-9a-hjkmnp-tv-z]{26}@[1-9][0-9]*$"
+              },
+              "purged": {
+                "const": true
+              },
+              "purge_id": {
+                "type": "string",
+                "pattern": "^mprg_[0-9a-hjkmnp-tv-z]{26}$"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "renderer_version": {
+      "type": "string",
+      "pattern": "^replicant\\.memory-block/v[0-9]+@[0-9]+\\.[0-9]+\\.[0-9]+$"
+    }
+  }
+}

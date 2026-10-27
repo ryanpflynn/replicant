@@ -1,0 +1,61 @@
+{
+  "schema": "replicant.run-outputs/v1",
+  "run_id": "run_gj3h3ep3phjfs9e23v768zrca5",
+  "exit_code": 0,
+  "partial": false,
+  "result": "/replicant/out/run_result/result.json",
+  "entries": [
+    {
+      "type": "run_result",
+      "bucket_class": "artifacts",
+      "path": "/replicant/out/run_result/result.json",
+      "name": "result.json",
+      "content_type": "application/json",
+      "required": true,
+      "redaction": "required"
+    },
+    {
+      "type": "diff_bundle",
+      "bucket_class": "artifacts",
+      "path": "/replicant/out/diff_bundle/changes.tar.zst",
+      "name": "changes.tar.zst",
+      "content_type": "application/vnd.replicant.diff-bundle.v1+tar+zstd",
+      "sha256": "1e3a5c7b9d0f2e4a6c8b0d1f3e5a7c9b2d4f6e8a0c3b5d7f9e1a2c4b6d8f0e3a",
+      "required": true,
+      "redaction": "scan-block",
+      "attributes": {
+        "files_changed": 3,
+        "insertions": 41,
+        "deletions": 12
+      }
+    },
+    {
+      "type": "handoff",
+      "bucket_class": "artifacts",
+      "path": "/replicant/out/handoff/handoff.json",
+      "name": "handoff.json",
+      "content_type": "application/json",
+      "required": true,
+      "redaction": "required"
+    },
+    {
+      "type": "cli_session_state",
+      "bucket_class": "session",
+      "path": "/replicant/out/cli_session_state/claude-session.tar.zst",
+      "name": "claude-session.tar.zst",
+      "content_type": "application/vnd.replicant.session.v1+tar+zstd",
+      "required": false,
+      "redaction": "raw-restricted"
+    },
+    {
+      "type": "transcript",
+      "bucket_class": "transcripts",
+      "path": "/replicant/out/transcript/part-00044.ndjson.zst",
+      "name": "part-00044.ndjson.zst",
+      "content_type": "application/x-ndjson",
+      "content_encoding": "zstd",
+      "required": false,
+      "redaction": "required"
+    }
+  ]
+}

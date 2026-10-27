@@ -1,0 +1,60 @@
+{
+  "Version": "2012-10-17",
+  "Id": "acme-replicant-prod-obs-loki-ruler-policy",
+  "Statement": [
+    {
+      "Sid": "DenyNonTls",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-obs-loki-ruler",
+        "arn:aws:s3:::acme-replicant-prod-obs-loki-ruler/*"
+      ],
+      "Condition": {
+        "Bool": {
+          "aws:SecureTransport": "false"
+        }
+      }
+    },
+    {
+      "Sid": "DenyOutsideOrganization",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-obs-loki-ruler",
+        "arn:aws:s3:::acme-replicant-prod-obs-loki-ruler/*"
+      ],
+      "Condition": {
+        "StringNotEquals": {
+          "aws:PrincipalOrgID": "o-acmereplicant1"
+        },
+        "Bool": {
+          "aws:PrincipalIsAWSService": "false"
+        }
+      }
+    },
+    {
+      "Sid": "NoBucketConfigChangesExceptPlatformPipeline",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:PutBucketPolicy",
+        "s3:DeleteBucketPolicy",
+        "s3:PutLifecycleConfiguration",
+        "s3:PutBucketVersioning",
+        "s3:PutEncryptionConfiguration"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-obs-loki-ruler",
+        "arn:aws:s3:::acme-replicant-prod-obs-loki-ruler/*"
+      ],
+      "Condition": {
+        "ArnNotLike": {
+          "aws:PrincipalArn": "arn:aws:iam::111111111111:role/replicant-prod-platform-deployer"
+        }
+      }
+    }
+  ]
+}

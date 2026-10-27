@@ -1,0 +1,114 @@
+# EnvironmentDefinition: Go service (the go-service@12 referenced by the C-DEF bundle example).
+apiVersion: replicant.example.com/v1
+kind: EnvironmentDefinition
+metadata:
+  name: go-service
+  scope:
+    level: global
+  owners:
+    - replicant-platform
+  description: Go 1.25 toolchain with golangci-lint; go module cache through the GOPROXY mirror.
+spec:
+  codebaseType: go_service
+  image:
+    build:
+      base: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/base-go@sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809
+      packages:
+        apt: [git, jq, make, zstd]
+        goInstall:
+          - github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.5.0
+          - gotest.tools/gotestsum@v1.13.0
+      steps: []
+    resolved:
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/env-go-service@sha256:2b4d6f8a0c1e3b5d7f9a2c4e6b8d0f1a3c5e7b9d2f4a6c8e0b1d3f5a7c9e2b4d
+      buildSpecDigest: sha256:3c5e7a9b1d2f4c6e8a0b3d5f7c9e1a2b4d6f8c0e3a5b7d9f1c2e4a6b8d0f3c5e
+  repo:
+    fetchDepth: 50
+  env:
+    CGO_ENABLED: "0"
+    GOFLAGS: -mod=readonly
+  packageMirrors: [goproxy]
+  bootstrap:
+    forRoles: [implementer, repair, reviewer, qa]
+    steps:
+      - name: go-mod-download
+        run: go mod download
+        when:
+          pathsExist: [go.mod]
+        timeoutSeconds: 600
+  caches:
+    - name: go-build
+      path: /workspace/.cache/go-build
+      kind: workspace
+      env: GOCACHE
+    - name: go-mod
+      path: /workspace/.cache/go-mod
+      kind: workspace
+      env: GOMODCACHE
+  resourceProfiles:
+    default:
+      requests: {cpu: 2750m, memory: 6400Mi, ephemeralStorage: 8Gi}
+      limits: {cpu: 6500m, memory: 8704Mi, ephemeralStorage: 17Gi}
+      memoryRequestPolicy: host_footprint
+      workspace:
+        sizeLimit: 15Gi
+        overflow:
+          policy: local_only
+      derivation:
+        method: measured
+        baseline:
+          codebaseType: go_service
+          roles: [implementer, repair, reviewer]
+          runtimeClass: replicant-kata-clh
+          windowStart: "2026-09-29T00:00:00Z"
+          windowEnd: "2026-10-13T00:00:00Z"
+          sampleCount: 412
+          formulaVersion: rp-2
+          stats:
+            hostFootprintBytesP50: 6549825126
+            cpuMillicoresP50: 2600
+            cpuMillicoresP95: 4800
+            memoryBytesP50: 3328599654
+            memoryBytesP95: 6657199308
+            workspaceBytesP50: 6442450944
+            workspaceBytesP95: 11811160064
+            ephemeralBytesP50: 8053063680
+            ephemeralBytesP95: 13958643712
+    qa:
+      requests: {cpu: 3500m, memory: 11Gi, ephemeralStorage: 10Gi}
+      limits: {cpu: "9", memory: 11Gi, ephemeralStorage: 21Gi}
+      memoryRequestPolicy: match_limit
+      workspace:
+        sizeLimit: 19Gi
+        overflow:
+          policy: local_only
+      derivation:
+        method: measured
+        baseline:
+          codebaseType: go_service
+          roles: [qa]
+          runtimeClass: replicant-kata-clh
+          windowStart: "2026-09-29T00:00:00Z"
+          windowEnd: "2026-10-13T00:00:00Z"
+          sampleCount: 377
+          formulaVersion: rp-2
+          stats:
+            hostFootprintBytesP50: 10307921510
+            cpuMillicoresP50: 3400
+            cpuMillicoresP95: 6900
+            memoryBytesP50: 4724464025
+            memoryBytesP95: 8697308774
+            workspaceBytesP50: 8589934592
+            workspaceBytesP95: 15032385536
+            ephemeralBytesP50: 10200547328
+            ephemeralBytesP95: 17179869184
+  profileByRole:
+    qa: qa
+  isolationHint:
+    coding: kata-clh
+    qa_build: kata-clh
+  networkProfile:
+    coding: coding-default
+    qa_build: qa-with-mirror
+  qa:
+    schema: replicant.env-qa/v1

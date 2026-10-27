@@ -1,0 +1,53 @@
+# sbx-edge: the local stand-in for the prod PrivateLink/NLB endpoints that sandbox node pools may reach (C-ARCH 1.5.2
+# §2 invariant 2). Template: ${REPLICANT_SBX_EDGE_*} are substituted at container start (nginx image envsubst). Upstreams are resolved per request through Docker DNS so a service that is not running
+# (for example alloy without the observability profile) yields 502 instead of preventing startup.
+worker_processes 1;
+events { worker_connections 1024; }
+http {
+  resolver 127.0.0.11 valid=10s ipv6=off;
+  client_max_body_size 300m;
+  proxy_request_buffering off;
+  proxy_buffering off;
+  proxy_read_timeout 900s;
+  proxy_http_version 1.1;
+  log_format edge '$remote_addr $host "$request" $status $body_bytes_sent $request_time';
+  access_log /dev/stdout edge;
+  map $http_upgrade $connection_upgrade { default upgrade; '' close; }
+
+  # replicant-gateway-shim (agentd presents the ai-gateway token; the CLI never reaches this host directly).
+  # Streaming responses pass through unbuffered. /internal/v1/* is not routable from sandboxes.
+  server { listen 80; server_name gateway.sbx.local;
+    location /internal/ { return 404; }
+    location / { set $u http://gateway-shim:8420; proxy_pass $u; proxy_set_header Host $host; } }
+  # Memory MCP (audience memory-mcp). Only the MCP listener is exposed, never the internal API on :8080.
+  server { listen 80; server_name memory-mcp.sbx.local;
+    location /mcp { set $u http://memory-service:8081; proxy_pass $u; proxy_set_header Host $host;
+                    proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection $connection_upgrade; }
+    location / { return 404; } }
+  server { listen 80; server_name context-mcp.sbx.local;
+    location /mcp { set $u http://context-mcp:8080; proxy_pass $u; proxy_set_header Host $host;
+                    proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection $connection_upgrade; }
+    location / { return 404; } }
+  # Runner sandbox listener: only /sandbox/v1/* and the JWKS. The orchestration listener is not routable.
+  server { listen 80; server_name runner-sandbox.sbx.local;
+    location /sandbox/v1/ { set $u http://runner-local:8490; proxy_pass $u; proxy_set_header Host $host; }
+    location = /.well-known/jwks.json { set $u http://runner-local:8490; proxy_pass $u; }
+    location / { return 404; } }
+  # Sandbox listener of the kind runner-api (k8s profile, R1-258): runs created by the kind runner refresh tokens,
+  # fetch credentials and poll steering here, never at runner-local.
+  server { listen 80; server_name runner-sandbox-k8s.sbx.local;
+    location /sandbox/v1/ { set $u ${REPLICANT_SBX_EDGE_K8S_SANDBOX_UPSTREAM}; proxy_pass $u; proxy_set_header Host $host; }
+    location = /.well-known/jwks.json { set $u ${REPLICANT_SBX_EDGE_K8S_SANDBOX_UPSTREAM}; proxy_pass $u; }
+    location / { return 404; } }
+  # repo-mirror: read-only smart HTTP (git-upload-pack only).
+  server { listen 80; server_name git.sbx.local;
+    location ~ ^/.+/(info/refs|git-upload-pack)$ { set $u http://repo-mirror:8080; proxy_pass $u; proxy_set_header Host $host; }
+    location / { return 403; } }
+  # S3 (the prod path is a VPC gateway endpoint). Host is preserved so SigV4 signatures validate.
+  server { listen 80; server_name s3.sbx.local;
+    location / { set $u ${REPLICANT_SBX_EDGE_S3_UPSTREAM}; proxy_pass $u; proxy_set_header Host $host; } }
+  # OTLP/HTTP from sandboxes to Alloy (traces, logs). gRPC is not offered to sandboxes.
+  server { listen 80; server_name otlp.sbx.local;
+    location /v1/ { set $u http://alloy:4318; proxy_pass $u; } }
+  server { listen 80 default_server; return 444; }
+}

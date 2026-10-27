@@ -1,0 +1,35 @@
+{
+  "Rules": [
+    {
+      "ID": "housekeeping",
+      "Status": "Enabled",
+      "Filter": {},
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 2
+      },
+      "Expiration": {
+        "ExpiredObjectDeleteMarker": true
+      }
+    },
+    {
+      "ID": "noncurrent",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": ""
+      },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 7
+      }
+    },
+    {
+      "ID": "expire-all",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": ""
+      },
+      "Expiration": {
+        "Days": 14
+      }
+    }
+  ]
+}

@@ -1,0 +1,110 @@
+{
+  "DBClusterParameterGroupName": "replicant-prod-aurora-pg17",
+  "Parameters": [
+    {
+      "ParameterName": "shared_preload_libraries",
+      "ParameterValue": "pg_stat_statements,pgaudit",
+      "ApplyMethod": "pending-reboot"
+    },
+    {
+      "ParameterName": "rds.force_ssl",
+      "ParameterValue": "1",
+      "ApplyMethod": "immediate"
+    },
+    {
+      "ParameterName": "password_encryption",
+      "ParameterValue": "scram-sha-256",
+      "ApplyMethod": "immediate"
+    },
+    {
+      "ParameterName": "max_connections",
+      "ParameterValue": "1000",
+      "ApplyMethod": "pending-reboot"
+    },
+    {
+      "ParameterName": "pgaudit.log",
+      "ParameterValue": "none",
+      "ApplyMethod": "immediate"
+    },
+    {
+      "ParameterName": "pgaudit.role",
+      "ParameterValue": "rds_pgaudit",
+      "ApplyMethod": "immediate"
+    },
+    {
+      "ParameterName": "log_connections",
+      "ParameterValue": "1",
+      "ApplyMethod": "immediate"
+    },
+    {
+      "ParameterName": "log_disconnections",
+      "ParameterValue": "1",
+      "ApplyMethod": "immediate"
+    },
+    {
+      "ParameterName": "log_lock_waits",
+      "ParameterValue": "1",
+      "ApplyMethod": "immediate"
+    },
+    {
+      "ParameterName": "log_min_duration_statement",
+      "ParameterValue": "2000",
+      "ApplyMethod": "immediate"
+    },
+    {
+      "ParameterName": "log_temp_files",
+      "ParameterValue": "10240",
+      "ApplyMethod": "immediate"
+    },
+    {
+      "ParameterName": "idle_in_transaction_session_timeout",
+      "ParameterValue": "60000",
+      "ApplyMethod": "immediate"
+    },
+    {
+      "ParameterName": "autovacuum_vacuum_scale_factor",
+      "ParameterValue": "0.05",
+      "ApplyMethod": "immediate"
+    },
+    {
+      "ParameterName": "autovacuum_analyze_scale_factor",
+      "ParameterValue": "0.02",
+      "ApplyMethod": "immediate"
+    },
+    {
+      "ParameterName": "autovacuum_vacuum_cost_limit",
+      "ParameterValue": "2000",
+      "ApplyMethod": "immediate"
+    },
+    {
+      "ParameterName": "autovacuum_max_workers",
+      "ParameterValue": "6",
+      "ApplyMethod": "pending-reboot"
+    },
+    {
+      "ParameterName": "maintenance_work_mem",
+      "ParameterValue": "2097152",
+      "ApplyMethod": "immediate"
+    },
+    {
+      "ParameterName": "max_parallel_maintenance_workers",
+      "ParameterValue": "4",
+      "ApplyMethod": "immediate"
+    },
+    {
+      "ParameterName": "track_io_timing",
+      "ParameterValue": "1",
+      "ApplyMethod": "immediate"
+    },
+    {
+      "ParameterName": "pg_stat_statements.track",
+      "ParameterValue": "top",
+      "ApplyMethod": "immediate"
+    },
+    {
+      "ParameterName": "timezone",
+      "ParameterValue": "UTC",
+      "ApplyMethod": "immediate"
+    }
+  ]
+}

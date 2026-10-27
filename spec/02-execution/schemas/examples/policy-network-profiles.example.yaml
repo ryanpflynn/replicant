@@ -1,0 +1,96 @@
+# The eight profiles of WS-09 agent-capabilities.md section 3 (authoritative; XD-FIX-R1-213).
+# When replicant-curation-proxy is deployed (XD-FIX-R2-041), a new policy version replaces every
+# artifactory.acme.internal entry with pkg.{env}.replicant.internal.
+apiVersion: replicant.example.com/v1
+kind: Policy
+metadata:
+  name: network-profiles
+  scope: {level: global}
+  owners: [replicant-platform, replicant-security]
+spec:
+  policyType: network_profiles
+  alwaysAllowed:
+    - {name: runner-sandbox, fqdn: "runner-sandbox.{env}.replicant.internal", ports: [443]}
+    - {name: s3-artifacts, fqdn: "{org}-replicant-{env}-artifacts.s3.{region}.amazonaws.com", ports: [443]}
+    - {name: s3-transcripts, fqdn: "{org}-replicant-{env}-transcripts.s3.{region}.amazonaws.com", ports: [443]}
+    - name: otlp
+      endpoints: {namespace: replicant-observability, matchLabels: {app.kubernetes.io/name: alloy-sandbox-otlp}, dnsName: "otel-sandbox.{env}.replicant.internal"}
+      ports: [4318]
+  profiles:
+    coding-default:
+      workloadClasses: [coding]
+      packageMirrorRepos: [language]
+      destinations:
+        - {name: s3-session, fqdn: "{org}-replicant-{env}-session.s3.{region}.amazonaws.com", ports: [443]}
+        - {name: ai-gateway, fqdn: "ai-gateway.{env}.replicant.internal", ports: [443]}
+        - {name: memory-mcp, fqdn: "memory-mcp.{env}.replicant.internal", ports: [443]}
+        - {name: context-mcp, fqdn: "context-mcp.{env}.replicant.internal", ports: [443]}
+        - name: repo-mirror
+          endpoints: {namespace: replicant-mirror, matchLabels: {app.kubernetes.io/name: repo-mirror}, dnsName: "repo-mirror.{env}.replicant.internal"}
+          ports: [8443]
+        - {name: package-mirror, fqdn: artifactory.acme.internal, ports: [443]}
+    review-readonly:
+      description: Reviewers run tests (package mirror) and do not get memory-mcp or the session bucket.
+      workloadClasses: [review]
+      packageMirrorRepos: [language]
+      destinations:
+        - {name: ai-gateway, fqdn: "ai-gateway.{env}.replicant.internal", ports: [443]}
+        - {name: context-mcp, fqdn: "context-mcp.{env}.replicant.internal", ports: [443]}
+        - name: repo-mirror
+          endpoints: {namespace: replicant-mirror, matchLabels: {app.kubernetes.io/name: repo-mirror}, dnsName: "repo-mirror.{env}.replicant.internal"}
+          ports: [8443]
+        - {name: package-mirror, fqdn: artifactory.acme.internal, ports: [443]}
+    qa-with-mirror:
+      description: AI gateway only when QA agent tasks are on (the controller drops it otherwise). BuildKit mirrors public registries to artifactory docker-virtual (XD-FIX-R1-115).
+      workloadClasses: [qa_build]
+      packageMirrorRepos: [language, container-image, playwright]
+      destinations:
+        - {name: ai-gateway, fqdn: "ai-gateway.{env}.replicant.internal", ports: [443]}
+        - name: repo-mirror
+          endpoints: {namespace: replicant-mirror, matchLabels: {app.kubernetes.io/name: repo-mirror}, dnsName: "repo-mirror.{env}.replicant.internal"}
+          ports: [8443]
+        - {name: package-mirror, fqdn: artifactory.acme.internal, ports: [443]}
+    utility-minimal:
+      workloadClasses: [utility]
+      destinations:
+        - {name: ai-gateway, fqdn: "ai-gateway.{env}.replicant.internal", ports: [443]}
+    takeover:
+      description: Restores the checkout (repo-mirror), archives and uploads; no gateway, no package mirror.
+      workloadClasses: [utility]
+      roles: [takeover]
+      destinations:
+        - {name: s3-session, fqdn: "{org}-replicant-{env}-session.s3.{region}.amazonaws.com", ports: [443]}
+        - name: repo-mirror
+          endpoints: {namespace: replicant-mirror, matchLabels: {app.kubernetes.io/name: repo-mirror}, dnsName: "repo-mirror.{env}.replicant.internal"}
+          ports: [8443]
+    eval-coding:
+      workloadClasses: [coding, review, qa_build]
+      tenants: [replicant-eval]
+      packageMirrorRepos: [language, container-image, playwright]
+      destinations:
+        - {name: s3-session, fqdn: "{org}-replicant-{env}-session.s3.{region}.amazonaws.com", ports: [443]}
+        - {name: ai-gateway, fqdn: "ai-gateway.{env}.replicant.internal", ports: [443]}
+        - {name: memory-mcp, fqdn: "memory-mcp.{env}.replicant.internal", ports: [443]}
+        - {name: context-mcp, fqdn: "context-mcp.{env}.replicant.internal", ports: [443]}
+        - name: repo-mirror
+          endpoints: {namespace: replicant-mirror, matchLabels: {app.kubernetes.io/name: repo-mirror}, dnsName: "repo-mirror.{env}.replicant.internal"}
+          ports: [8443]
+        - {name: package-mirror, fqdn: artifactory.acme.internal, ports: [443]}
+    eval-scoring:
+      workloadClasses: [qa_build, utility]
+      tenants: [replicant-eval]
+      packageMirrorRepos: [language, container-image, playwright]
+      destinations:
+        - name: repo-mirror
+          endpoints: {namespace: replicant-mirror, matchLabels: {app.kubernetes.io/name: repo-mirror}, dnsName: "repo-mirror.{env}.replicant.internal"}
+          ports: [8443]
+        - {name: package-mirror, fqdn: artifactory.acme.internal, ports: [443]}
+    eval-snapshot:
+      description: The only profile under which repo-mirror serves production hosts to replicant-eval, and only for role eval (XD-FIX-R1-134).
+      workloadClasses: [utility]
+      tenants: [replicant-eval]
+      roles: [eval]
+      destinations:
+        - name: repo-mirror
+          endpoints: {namespace: replicant-mirror, matchLabels: {app.kubernetes.io/name: repo-mirror}, dnsName: "repo-mirror.{env}.replicant.internal"}
+          ports: [8443]

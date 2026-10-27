@@ -1,0 +1,57 @@
+{
+  "Version": "2012-10-17",
+  "Id": "replicant-prod-github-app-key-2026q4",
+  "Statement": [
+    {
+      "Sid": "ReadOnlyMetadataForAccount",
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:aws:iam::111111111111:root" },
+      "Action": ["kms:DescribeKey", "kms:GetKeyPolicy", "kms:ListResourceTags", "kms:GetPublicKey"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "KeyCeremonyRoleImportsMaterialOnce",
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:aws:iam::111111111111:role/replicant-prod-key-ceremony" },
+      "Action": ["kms:GetParametersForImport", "kms:ImportKeyMaterial", "kms:DeleteImportedKeyMaterial", "kms:DescribeKey", "kms:TagResource"],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": { "aws:PrincipalTag/approved-change": "true" },
+        "Bool": { "aws:MultiFactorAuthPresent": "true" }
+      }
+    },
+    {
+      "Sid": "OnlyTheBrokerSignsAndOnlyRs256",
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:aws:iam::111111111111:role/replicant-prod-github-token-broker" },
+      "Action": "kms:Sign",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:SigningAlgorithm": "RSASSA_PKCS1_V1_5_SHA_256",
+          "kms:MessageType": "RAW"
+        }
+      }
+    },
+    {
+      "Sid": "DenySignToAnyoneElse",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": ["kms:Sign"],
+      "Resource": "*",
+      "Condition": {
+        "ArnNotEquals": { "aws:PrincipalArn": "arn:aws:iam::111111111111:role/replicant-prod-github-token-broker" }
+      }
+    },
+    {
+      "Sid": "DenyPolicyChangeExceptPipeline",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": ["kms:PutKeyPolicy", "kms:CreateGrant", "kms:ScheduleKeyDeletion"],
+      "Resource": "*",
+      "Condition": {
+        "ArnNotEquals": { "aws:PrincipalArn": "arn:aws:iam::111111111111:role/replicant-prod-platform-deployer" }
+      }
+    }
+  ]
+}

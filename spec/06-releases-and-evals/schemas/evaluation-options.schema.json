@@ -1,0 +1,332 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/evals/evaluation-options/v1.json",
+  "title": "Evaluation options and gate script",
+  "description": "WS-06. Proposed additive field JobRequest.options.evaluation (contract change request CCR-06-01) and the gate script object it references. Accepted only from principals holding both release:pin and eval:run (svc_eval-worker, release operators); control-plane-api rejects it with 403 otherwise. Its presence puts the ReplicantJob in evaluation mode (eval-harness.md section 3.3): gates resolve from the script inside the workflow (no Update, no human), notifications are suppressed, and the publish node is skipped (dry_run semantics) for mode=shadow and for mode=eval unless publish_to_eval_git=true. Fix round: harness_task and pipeline_id are added by CCR-06-07 (R1-134, R2-061). Scripts live at s3://<org>-replicant-<env>-eval/runs/<eval_run_id>/case/<golden_task_id>/{gate-script.json,review-rounds.json}; replicant-worker may read only runs/*/case/* (R1-143).",
+  "$defs": {
+    "EvaluationOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "eval",
+            "shadow"
+          ]
+        },
+        "gate_script_uri": {
+          "description": "s3:// URI (eval bucket for mode=eval; tenant artifacts bucket under the shadow job's prefix for mode=shadow) of a GateScript document. Required for mode=eval.",
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^s3://[a-z0-9.-]{3,63}/.+$"
+        },
+        "memory_snapshot_id": {
+          "description": "Pre-created memory snapshot to use instead of creating one at context assembly, so that both arms of a comparison see identical memory when their snapshot policies are equal.",
+          "type": "string",
+          "pattern": "^msnap_[0-9a-hjkmnp-tv-z]{26}$"
+        },
+        "memory_replay_job_id": {
+          "description": "C-JOBREQ evaluation_options field from CCR-04-05 (accepted): the source job whose recorded memory injections and pull results this eval job replays exactly (eval-harness.md memory replay). Valid only with mode=eval and memory_snapshot_id, which must equal the source job's snapshot; memory-service verifies.",
+          "type": "string",
+          "pattern": "^job_[0-9a-hjkmnp-tv-z]{26}$"
+        },
+        "memory_scope_context": {
+          "description": "For mode=eval: the scope the snapshot emulates (the golden task's source tenant and repo), so retrieval behaves as it would for the original job. memory-service authorizes svc_eval-worker for read-only snapshot creation in that scope (WS-04 dependency XD-06-04).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tenant_id"
+          ],
+          "properties": {
+            "tenant_id": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+              "minLength": 3,
+              "maxLength": 32
+            },
+            "repo": {
+              "type": "string",
+              "maxLength": 455
+            },
+            "as_of": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "shadow_of_job_id": {
+          "description": "Required for mode=shadow: the live job being shadowed.",
+          "type": "string",
+          "pattern": "^job_[0-9a-hjkmnp-tv-z]{26}$"
+        },
+        "publish_to_eval_git": {
+          "description": "mode=eval only: allow the publish node to push to the eval Git server (git.eval.<env>.replicant.internal) to exercise the publisher path. Default false.",
+          "type": "boolean",
+          "default": false
+        },
+        "case_deadline_seconds": {
+          "type": "integer",
+          "minimum": 600,
+          "maximum": 43200,
+          "default": 10800
+        },
+        "harness_task": {
+          "description": "CCR-06-07 (R1-134): mode=eval only. The ReplicantJob skips the router and graph and runs only the harness steps for this kind (eval-harness.md §3.8). Runs use role eval and are owned by this job's workflow, so its Runner-call activity signs the run grants.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "spec_uri"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "score",
+                "snapshot_build",
+                "compat_check"
+              ]
+            },
+            "spec_uri": {
+              "description": "s3:// URI of the harness spec in the eval bucket under runs/<eval_run_id>/case/… (score), runs/<eval_run_id>/snapshot/… or runs/<eval_run_id>/compat/…; lists the steps and the precomputed inputs manifests.",
+              "type": "string",
+              "maxLength": 2048,
+              "pattern": "^s3://[a-z0-9.-]{3,63}/.+$"
+            }
+          }
+        },
+        "pipeline_id": {
+          "description": "CCR-06-07 (R2-061): mode=shadow: the ReleasePipeline whose gateway budget account (fgw:pipeline:<pipeline_id>) pays for the job; control-plane-api registers the job with that account at intake.",
+          "type": "string",
+          "pattern": "^rpl_[0-9a-hjkmnp-tv-z]{26}$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "eval"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "gate_script_uri"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "shadow"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "shadow_of_job_id",
+              "pipeline_id"
+            ],
+            "properties": {
+              "publish_to_eval_git": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "memory_replay_job_id"
+            ]
+          },
+          "then": {
+            "properties": {
+              "mode": {
+                "const": "eval"
+              }
+            }
+          }
+        }
+      ],
+      "dependentRequired": {
+        "memory_replay_job_id": [
+          "memory_snapshot_id"
+        ]
+      }
+    },
+    "GateScript": {
+      "description": "Read by the workflow's evaluation-mode gate resolver (WS-01 implements; activity eval.read_gate_script). Each gate that opens is resolved by the first matching rule; unmatched gates resolve per 'default'. The workflow emits timeline event 'gate.auto_resolved' with the rule index, so scoring can check expected gates (D11).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "default"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.gate-script/v1"
+        },
+        "default": {
+          "type": "string",
+          "enum": [
+            "approve",
+            "reject",
+            "stop_case"
+          ]
+        },
+        "rules": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "gate_kind",
+              "decision"
+            ],
+            "properties": {
+              "gate_kind": {
+                "type": "string",
+                "enum": [
+                  "plan_approval",
+                  "publish_approval",
+                  "clarification",
+                  "budget_extension",
+                  "bundle_migration"
+                ]
+              },
+              "ordinal": {
+                "description": "Match only the n-th opening of this gate kind (1-based). Absent = every opening.",
+                "type": "integer",
+                "minimum": 1
+              },
+              "decision": {
+                "type": "string",
+                "enum": [
+                  "approve",
+                  "reject",
+                  "request_changes",
+                  "answer",
+                  "stop_case"
+                ],
+                "description": "stop_case closes the gate as cancelled with no decision object and no approval record, and ends the job cancelled (reason eval_stop_case); the case is scored resolved=false (R1-143)."
+              },
+              "comment": {
+                "type": "string",
+                "maxLength": 8000
+              },
+              "answer_text": {
+                "type": "string",
+                "maxLength": 16000
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "decision": {
+                      "const": "answer"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "answer_text"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "review_rounds_key": {
+          "description": "Key (eval bucket) of a ReviewRounds document: runs/<eval_run_id>/case/<golden_task_id>/review-rounds.json. Activity eval.read_review_round(k) maps round k to the feedback batch the await_pr_feedback step builds from pr.event Signals (eval-harness.md §3.3).",
+          "type": "string",
+          "maxLength": 1024
+        }
+      }
+    },
+    "ReviewRounds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "rounds"
+      ],
+      "properties": {
+        "schema": {
+          "const": "replicant.review-rounds/v1"
+        },
+        "rounds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "comments"
+            ],
+            "properties": {
+              "comments": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 30,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "body"
+                  ],
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "maxLength": 1024
+                    },
+                    "line": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "body": {
+                      "type": "string",
+                      "maxLength": 8000
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "schema": "replicant.gate-script/v1",
+      "default": "approve",
+      "rules": [
+        {
+          "gate_kind": "plan_approval",
+          "ordinal": 1,
+          "decision": "request_changes",
+          "comment": "Keep the change inside internal/proration; do not touch the public API."
+        },
+        {
+          "gate_kind": "clarification",
+          "decision": "answer",
+          "answer_text": "Use banker's rounding (ROUND_HALF_EVEN) to two decimal places."
+        },
+        {
+          "gate_kind": "budget_extension",
+          "decision": "reject"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,161 @@
+// cluster-metrics.alloy - Grafana Alloy v1.21.x StatefulSet "alloy-metrics" (3 replicas, clustering on) in BOTH
+// clusters, namespace observability (core) / replicant-observability (exec). Owner WS-08.
+//
+// Scrapes Prometheus endpoints and remote-writes to Mimir tenant "replicant". Targets are sharded across replicas by
+// Alloy clustering (--cluster.enabled=true, headless Service alloy-metrics-cluster).
+//   - ServiceMonitor / PodMonitor CRDs (monitoring.coreos.com/v1): every replicant service, Temporal server
+//     (frontend/history/matching/worker :9090), Loki/Tempo/Mimir/Langfuse/ClickHouse exporters.
+//   - kubelet /metrics/cadvisor and /metrics/resource on every node (sandbox resource usage).
+//   - node-exporter DaemonSet, kube-state-metrics.
+// Required environment: REPLICANT_ENV, REPLICANT_CLUSTER, MIMIR_PUSH_URL, MIMIR_TLS_DIR.
+
+logging {
+  level  = "info"
+  format = "json"
+}
+
+prometheus.operator.servicemonitors "all" {
+  forward_to = [prometheus.relabel.common.receiver]
+
+  clustering {
+    enabled = true
+  }
+
+  scrape {
+    default_scrape_interval = "30s"
+    default_scrape_timeout  = "10s"
+  }
+}
+
+prometheus.operator.podmonitors "all" {
+  forward_to = [prometheus.relabel.common.receiver]
+
+  clustering {
+    enabled = true
+  }
+
+  scrape {
+    default_scrape_interval = "30s"
+    default_scrape_timeout  = "10s"
+  }
+}
+
+discovery.kubernetes "nodes" {
+  role = "node"
+}
+
+discovery.relabel "kubelet_cadvisor" {
+  targets = discovery.kubernetes.nodes.targets
+
+  rule {
+    target_label = "__address__"
+    replacement  = "kubernetes.default.svc:443"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_node_name"]
+    regex         = "(.+)"
+    target_label  = "__metrics_path__"
+    replacement   = "/api/v1/nodes/${1}/proxy/metrics/cadvisor"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_node_name"]
+    target_label  = "node"
+  }
+}
+
+prometheus.scrape "kubelet_cadvisor" {
+  targets           = discovery.relabel.kubelet_cadvisor.output
+  job_name          = "kubelet-cadvisor"
+  scheme            = "https"
+  scrape_interval   = "30s"
+  bearer_token_file = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
+  tls_config {
+    ca_file = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+  }
+
+  clustering {
+    enabled = true
+  }
+
+  forward_to = [prometheus.relabel.cadvisor.receiver]
+}
+
+// cAdvisor: keep only the series dashboards and alerts use; drop the per-cgroup "id" label (very high cardinality).
+prometheus.relabel "cadvisor" {
+  forward_to = [prometheus.relabel.common.receiver]
+
+  rule {
+    source_labels = ["__name__"]
+    regex         = "container_(cpu_usage_seconds_total|cpu_cfs_throttled_periods_total|cpu_cfs_periods_total|memory_working_set_bytes|memory_rss|oom_events_total|fs_usage_bytes|fs_limit_bytes|network_receive_bytes_total|network_transmit_bytes_total|spec_memory_limit_bytes|spec_cpu_quota)"
+    action        = "keep"
+  }
+
+  rule {
+    regex  = "id|name|image"
+    action = "labeldrop"
+  }
+}
+
+// Labels common to every scraped series. C-IDS section 11 identifiers never appear as labels: any target that
+// leaks them (for example a misconfigured exporter) has them marked forbidden_label=<key> and then dropped here;
+// alert ReplicantForbiddenMetricLabel fires on {forbidden_label!=""} (CCR-08-07).
+prometheus.relabel "common" {
+  forward_to = [prometheus.remote_write.mimir.receiver]
+
+  // Mark before dropping (CCR-08-07 diagnostic label forbidden_label), so ReplicantForbiddenMetricLabel can fire.
+  rule {
+    source_labels = ["job_id"]
+    regex         = ".+"
+    target_label  = "forbidden_label"
+    replacement   = "job_id"
+  }
+
+  rule {
+    source_labels = ["run_id"]
+    regex         = ".+"
+    target_label  = "forbidden_label"
+    replacement   = "run_id"
+  }
+
+  rule {
+    source_labels = ["principal_id"]
+    regex         = ".+"
+    target_label  = "forbidden_label"
+    replacement   = "principal_id"
+  }
+
+  rule {
+    regex  = "job_id|run_id|workflow_id|workflow_run_id|gate_id|decision_id|principal_id|requester_id|repo|repository"
+    action = "labeldrop"
+  }
+}
+
+prometheus.remote_write "mimir" {
+  endpoint {
+    url            = sys.env("MIMIR_PUSH_URL")
+    send_exemplars = true
+    headers        = {
+      "X-Scope-OrgID" = "replicant",
+    }
+
+    tls_config {
+      ca_file   = sys.env("MIMIR_TLS_DIR") + "/ca.crt"
+      cert_file = sys.env("MIMIR_TLS_DIR") + "/tls.crt"
+      key_file  = sys.env("MIMIR_TLS_DIR") + "/tls.key"
+    }
+
+    queue_config {
+      capacity             = 20000
+      max_samples_per_send = 4000
+      max_shards           = 50
+    }
+  }
+
+  external_labels = {
+    env     = sys.env("REPLICANT_ENV"),
+    cluster = sys.env("REPLICANT_CLUSTER"),
+  }
+}

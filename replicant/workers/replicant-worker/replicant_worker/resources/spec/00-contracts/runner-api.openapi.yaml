@@ -1,0 +1,1784 @@
+openapi: 3.1.1
+jsonSchemaDialect: https://spec.openapis.org/oas/3.1/dialect/base
+info:
+  title: Replicant Runner API
+  version: 3.0.0
+  summary: The only interface between orchestration (Temporal workers) and the execution environment (D-04).
+  description: |
+    Contract C-RUNNER v3.0.0 (WS-00).
+
+    Changelog 3.0.0 (breaking, CCR-ORCH-02): Product rename to Replicant (CCR-ORCH-02). Every product-named identifier changes; there is no structural change. Domain `factory.example.com` (labels, annotations, schema `$id` host) becomes `replicant.example.com`; env prefix `FACTORY_` becomes `REPLICANT_`; headers `X-Factory-*` become `X-Replicant-*`; names `factory-*`/`factory_*` (services, task queues, Temporal namespace, roles, buckets, groups, hosts, networks) become `replicant-*`/`replicant_*`; CamelCase `Factory*` (workflow types, search attributes) becomes `Replicant*`. Headers `X-Replicant-*`, priority classes `replicant-run-*`/`replicant-eval`, schema `$id` host `schemas.replicant.example.com`. `$id` path majors are unchanged.
+
+    Changelog 2.5.3 (wave 3, citation only): the revocation-feed description cites C-ART 1.10.3.
+
+    Changelog 2.5.2 (additive, CCR-02-12): optional heartbeat body `SandboxHeartbeatRequest` (disk report, copied to the run
+    Lease annotation `replicant.example.com/disk`); optional `Problem.quota_used` / `quota_limit`.
+
+    Changelog 2.5.1 (clarification): the durable revocation feed lives in the `ops` bucket under
+    `exec-revocations/<env>/` (C-ART 1.10.1).
+
+    Changelog 2.5.0 (additive, wave 1): CCR-02-06 maps eval runs to priority `replicant-eval`; CCR-02-07
+    tightens the sandbox session policy; CCR-02-09a adds `POST /sandbox/v1/heartbeat`,
+    `GET /v1/revocations`, `POST /internal/v1/runs/{run_id}:revoke`, and the revocation-feed verifier
+    obligation; CCR-03-08 says agentd is the token custodian; CCR-06-07c adds the eval toolchain
+    admission exception.
+
+    Changelog 2.4.1 (fix, R2-002): `spec_digest` also excludes `trace_context`. Every per-attempt field is now enumerated, and the rule that all other fields are decision fields is normative.
+
+    Changelog 2.4.0 (additive): CCR-08-03 adds optional `RunSpec.workflow_type` (→ CRD `spec.workflowType`, pod label `replicant.example.com/workflow-type`, env `REPLICANT_WORKFLOW_TYPE`).
+
+    Changelog 2.3.0 (additive): CCR-10-03 adds `s3:PutObjectTagging` to sandbox credentials.
+
+    Changelog 2.2.0 (additive): CCR-02-05 failure reason `DefinitionUnavailable`.
+
+    Changelog 2.1.0 (additive): CCR-03-01 failure reason `EnvironmentSetupFailed`.
+
+    Changelog 2.0.0 (breaking): CCR-09-01 one run token per audience (`RunTokenClaims.aud` is a single string;
+    `RunTokenResponse` returns a token set); CCR-09-02 core-signed run grants (`RunSpec.run_grant` required,
+    `RunTokenClaims.grant`/`grant_jti`, `RunGrantClaims`, error code `run_grant_invalid`); CCR-09-03 required
+    claim `acting_for`; CCR-09-04 failure reason `SecurityViolation` and cancel reason `security`. Deployment
+    follows rule CC-4: N and N+1 coexist; during the window verifiers also accept a legacy array `aud` that
+    contains their own name, and refresh responses also carry the legacy `token`/`expires_at` fields.
+
+    WS-02 implements it twice: in Go in the execution cluster, backed by the
+    AgentRun CRD, and as the local Docker/Podman runner. Both implementations must pass the same contract test
+    suite (WS-11).
+
+    ## Listeners
+    The Runner serves two listeners with separate authentication and network exposure:
+
+    * **Orchestration listener** (`https://runner.<env>.replicant.internal`, tag `runs`): called only by Temporal
+      activities on the `replicant-runner-calls` task queue (deployment `replicant-worker`) and by `eval-worker`.
+      It is reachable only from the core cluster's worker security group through an internal NLB.
+    * **Sandbox listener** (`https://runner-sandbox.<env>.replicant.internal`, tag `sandbox`): called only from
+      inside AgentRun pods with the per-run token. Through it a sandbox refreshes its run token and its
+      prefix-scoped AWS credentials, and receives steering messages. Nothing on this listener can create,
+      read, or cancel another run.
+
+    ## Idempotency (D-04)
+    `POST /v1/runs` requires `Idempotency-Key`. The value is the activity's idempotency key
+    `ik1:<workflow_id>:<logical_activity_id>` (ids-and-naming.md), sent as an RFC 9651 sf-string (quoted)
+    per draft-ietf-httpapi-idempotency-key-header-08. `run_id = derived("run", tenant_id, key)`, and the
+    AgentRun is named `ar-<body>`, so Kubernetes name uniqueness is the idempotency store:
+    * The first request creates the AgentRun and returns **201**.
+    * `spec_digest = sha256(JCS(RunSpec without the per-attempt fields))`. The per-attempt fields are
+      exactly these, and each is excluded because an activity retry legitimately produces a new value:
+
+      | Field | Why it changes per attempt | Copy kept on a 200 repeat |
+      |---|---|---|
+      | `run_grant` | the retry re-signs the grant (new `jti`, `iat`) | the **first** create's grant (`spec.runGrant`). The retry's grant is verified, then discarded |
+      | `trace_context` (`traceparent`, `tracestate`) | each activity attempt runs in a new span (R2-002) | the **first** create's context (`spec.traceContext`). The Runner adds the retry's `traceparent` as a span **link** on its `runner.create_run` span, so the retry is still traceable |
+
+    * **Decision fields (normative).** Every other RunSpec field is a decision field. The Runner-call
+      activity builds it only from its activity input, which comes from workflow state recorded in
+      history, never from a live read at call time. Live reads include the current budget spent, the
+      current time, a registry `latest` lookup, and re-staging inputs. Concretely:
+      - `limits.max_cost_usd` is computed by workflow code before the activity is scheduled;
+      - `inputs.manifest_sha256` comes from the inputs-staging step, whose `manifest.json` is
+        write-once (`If-None-Match: *`; on a 412 the stager reuses the existing manifest and its digest).
+
+      RunSpec has no timestamp or attempt-counter fields, and adding one requires listing it in the
+      table above.
+    * A repeat with an identical spec (equal `spec_digest`) returns **200** with the current status. This
+      also covers concurrent duplicates: the loser of the create race receives AlreadyExists, reads the
+      object, and returns 200.
+    * **Test vector.** For the `ImplementerRunSpec` example, `spec_digest = sha256:a05ea6bc4aea3f59a4b8f7a20dea9badc8e8d1dcbb8f21b696224337bbabde06`.
+      The same spec with `trace_context.traceparent = 00-fc0575170c8597ce9805552723c08d6e-7f3e9d2c1b0a4958-01`
+      and a different `run_grant` has the **same** digest. Changing `limits.max_cost_usd` from 15 to 14
+      changes it. JCS here is RFC 8785. For this example it equals sorted-key, compact JSON (UTF-8,
+      integers only).
+    * A repeat with a different spec returns **422 `idempotency_key_reuse`**.
+    * After the AgentRun has been garbage-collected (no earlier than 45 days after its terminal phase), a
+      repeat returns **410 `run_expired`**. Workflows never legitimately retry that late.
+
+    ## Completion notification (D-04, ADR-002)
+    On every AgentRun phase transition the controller POSTs a `RunStatusNotification` to **run-notifier**
+    (internal to the execution cluster). The notifier is the **only** execution-side process holding Temporal
+    client credentials. It sends Temporal Signal `run.status_changed` to `callback.workflow_id` (no run ID, so
+    the Signal reaches the current run after Continue-As-New), with the identical JSON payload (see `webhooks`).
+    The Signal is a **hint**. The workflow always confirms with `GET /v1/runs/{run_id}` before acting, and it
+    polls that endpoint on a timer, so lost or forged Signals cause at most extra latency or an extra poll.
+
+    Polling fallback: after `POST /v1/runs` the workflow waits on
+    `workflow.wait_condition(hint_received, timeout=poll_interval)`, then calls `GET /v1/runs/{run_id}` (activity
+    `runner.get_run`, start_to_close 10 s). The poll interval starts at 15 s while the run is Pending or
+    Provisioning, then 120 s while Running (policy `runner_polling`, bounded 10–600 s). On a hint it polls
+    immediately. When the run passes `timeouts.active_deadline_seconds + timeouts.finalize_seconds +
+    timeouts.startup_seconds + 300` without a terminal status, the workflow calls `:cancel` and treats the run
+    as Failed with reason `OrchestratorDeadlineExceeded`.
+
+    ## Errors
+    Every 4xx/5xx body is `application/problem+json` (RFC 9457) extended with `code`, `retryable`, and
+    optionally `retry_after_seconds`. Temporal activities map `retryable: false` to
+    `ApplicationError(type=<code>, non_retryable=True)` and everything else to a retryable error, honoring
+    `Retry-After`.
+
+    | code | HTTP | retryable |
+    |---|---|---|
+    | invalid_request | 400 | no |
+    | missing_idempotency_key | 400 | no |
+    | unauthenticated | 401 | yes (after token refresh) |
+    | forbidden | 403 | no |
+    | run_not_found | 404 | no |
+    | steering_not_supported | 409 | no |
+    | run_not_active | 409 | no |
+    | run_expired | 410 | no |
+    | idempotency_key_reuse | 422 | no |
+    | admission_denied | 422 | no |
+    | run_grant_invalid | 422 | no |
+    | definition_not_resolvable | 422 | no |
+    | tenant_quota_exceeded | 429 | yes |
+    | rate_limited | 429 | yes |
+    | internal | 500 | yes |
+    | kubernetes_unavailable | 503 | yes |
+    | runner_unavailable | 503 | yes |
+
+    ## Authentication
+    * Orchestration listener: `Authorization: Bearer <JWT>`. The JWT is a Kubernetes projected ServiceAccount
+      token from the core cluster with audience `replicant-runner` and expiry ≤ 1 h (kubelet-rotated). The Runner
+      verifies it against the core cluster's OIDC issuer JWKS and allows only the subjects
+      `system:serviceaccount:replicant-workers:replicant-worker` and `system:serviceaccount:replicant-eval:eval-worker`.
+      The Runner does not trust caller-supplied tenant claims for authorization: it enforces tenant policy at
+      admission from the spec plus its own policy cache. Local profile: a static development key.
+    * Sandbox listener: `Authorization: Bearer <run token>` with audience `runner-sandbox` (claims:
+      `RunTokenClaims`). Tokens are signed by the Runner with an ES256 key held in AWS KMS (exec account) and
+      published at `/.well-known/jwks.json` on both listeners. The token for run R authorizes only operations
+      on R, and only while R is non-terminal (plus `finalize_seconds`).
+
+    ## Run grants and per-audience run tokens (CCR-09-01, CCR-09-02, CCR-09-03)
+    * **Run grant.** Before `POST /v1/runs`, the Runner-call activity (replicant-worker, core account) signs a
+      compact JWS (`typ: replicant-run-grant+jwt`, ES256, KMS key class `run-grant`, ECC_NIST_P256) with claims
+      `RunGrantClaims` and sends it as `RunSpec.run_grant`. runner-api verifies it at admission against the
+      core run-grant JWKS (`https://grants.<env>.replicant.internal/.well-known/jwks.json`, served by
+      control-plane-api, cached ≤ 10 min). It also checks that `grant.spec_digest` equals the request's
+      `spec_digest`, that `run_id`, `tenant_id`, `job_id`, and `role` match, and that `repo_ids` cover
+      `repo.repo_id` and `additional_repos`. Failure gives 422 `run_grant_invalid`. The grant is stored
+      immutably in `AgentRun.spec.runGrant`.
+    * **Per-audience tokens.** For each audience in `grant.audiences` the Runner mints a separate token,
+      `aud` a single string. Each token embeds the grant (`grant`, `grant_jti`) and claims a subset of it:
+      `aud ∈ audiences`, `scopes ⊆`, `repo_ids ⊆`, `budget_usd ≤`, `exp ≤ grant.exp`, `acting_for` equal. The
+      controller projects them as files `/run/replicant/tokens/<audience>` (`REPLICANT_RUN_TOKEN_DIR`).
+    * **Verifier obligations** (AI gateway, memory-mcp, context-mcp, repo-mirror, sandbox listener):
+      1. Verify the token signature (Runner JWKS) with `aud` **equal** to the verifier's own name.
+      2. Verify the embedded grant signature (core run-grant JWKS) and the subset relation above.
+      3. Reject tokens whose grant's `job_id` or `run_id` is on the core revocation list (`/grants/revoked`
+         on the grants host, polled every 60 s; entries are `job_id`s and `run_id`s, see C-STATE).
+      4. Authorize by `tenant_id`, `repo_ids`, `scopes`, and, for context and memory, `acting_for` (D-18).
+      5. Reject tokens whose `run_id` appears in the **exec revocation feed** (`GET /v1/revocations`,
+         CCR-02-09). The controller adds every run at its terminal phase through
+         `POST /internal/v1/runs/{run_id}:revoke`, so a partitioned sandbox cannot keep spending
+         while its retry runs (R2-030).
+  contact:
+    name: WS-02 Execution (implementation), WS-00 (contract)
+servers:
+  - url: https://runner.prod.replicant.internal
+    description: Orchestration listener (production, internal NLB in the execution cluster VPC)
+  - url: https://runner-sandbox.prod.replicant.internal
+    description: Sandbox listener (production; reachable only from sandbox node pools)
+  - url: https://runner-internal.prod.replicant.internal
+    description: Internal listener (execution cluster only; agentrun-controller is the only caller, CCR-02-09)
+  - url: http://localhost:8480
+    description: Local runner (compose profile)
+tags:
+  - name: runs
+    description: Orchestration listener. Create, inspect, cancel, and steer runs.
+  - name: sandbox
+    description: Sandbox listener. Per-run credentials and steering inbox.
+  - name: internal
+    description: Internal listener. Called by agentrun-controller only.
+  - name: meta
+    description: Health and keys.
+security:
+  - workerToken: []
+paths:
+  /v1/runs:
+    post:
+      tags: [runs]
+      operationId: createRun
+      summary: Start (or idempotently re-acknowledge) a run.
+      description: |
+        Validates and admits the spec, resolves the isolation runtime from policy (tenant + workload class;
+        `isolation_hint` is advisory), mints no credentials itself (the controller does, at pod creation),
+        and creates AgentRun `ar-<body>` in namespace `sbx-<tenant_id>`. Returns after the AgentRun is persisted
+        (phase `Pending`). Target latency p99 < 500 ms.
+
+        * **Priority.** `priorityClassName = replicant-run-<priority>`. Runs with `role: eval` or in tenant
+          `replicant-eval` map to `replicant-eval` instead (value 50, `preemptionPolicy: Never`), so eval batches never
+          preempt or starve tenant runs (CCR-02-06).
+        * **Definitions resolve only through the job's bundle** (C-DEF §6), with **one** exception
+          (CCR-06-07c): a run with `role: eval` **in tenant `replicant-eval`** may reference a **global**
+          AgentDefinition labelled `replicant.example.com/eval-toolchain: "true"` that is outside the job's bundle
+          closure, so that a scorer inside the evaluated bundle cannot score the two arms differently. The
+          environment definition must still come from the closure. Admission refuses this exception for any
+          other role or tenant (`admission_denied`).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/Traceparent'
+        - $ref: '#/components/parameters/Tracestate'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunSpec'
+            examples:
+              implementer:
+                $ref: '#/components/examples/ImplementerRunSpec'
+      responses:
+        '201':
+          description: Run created.
+          headers:
+            Location:
+              schema:
+                type: string
+              description: /v1/runs/{run_id}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunStatus'
+              examples:
+                created:
+                  $ref: '#/components/examples/PendingRunStatus'
+        '200':
+          description: A run with this idempotency key and an identical spec already exists. Current status is returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunStatus'
+        '400':
+          $ref: '#/components/responses/Problem'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+        '410':
+          $ref: '#/components/responses/Problem'
+        '422':
+          $ref: '#/components/responses/Problem'
+        '429':
+          $ref: '#/components/responses/ProblemRetryAfter'
+        '500':
+          $ref: '#/components/responses/Problem'
+        '503':
+          $ref: '#/components/responses/ProblemRetryAfter'
+      callbacks:
+        runStatusChanged:
+          'temporal-signal://{$request.body#/callback/namespace}/{$request.body#/callback/workflow_id}/run.status_changed':
+            post:
+              summary: Delivered by run-notifier as a Temporal Signal (not HTTP). Payload documented here for completeness.
+              requestBody:
+                required: true
+                content:
+                  application/json:
+                    schema:
+                      $ref: '#/components/schemas/RunStatusNotification'
+              responses:
+                '200':
+                  description: Signal accepted by Temporal frontend.
+    get:
+      tags: [runs]
+      operationId: listRuns
+      summary: List runs for reconciliation (for example after a Temporal restore) and operator tooling.
+      description: Backed by an AgentRun label-selector list. At least one of `job_id` or `tenant_id` is required.
+      parameters:
+        - name: tenant_id
+          in: query
+          schema:
+            $ref: '#/components/schemas/TenantId'
+        - name: job_id
+          in: query
+          schema:
+            $ref: '#/components/schemas/JobId'
+        - name: phase
+          in: query
+          schema:
+            $ref: '#/components/schemas/RunPhase'
+        - name: terminal
+          in: query
+          schema:
+            type: boolean
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+        - name: page_token
+          in: query
+          description: Opaque continuation token (wraps the Kubernetes list `continue` token).
+          schema:
+            type: string
+            maxLength: 2048
+      responses:
+        '200':
+          description: Runs.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunList'
+        '400':
+          $ref: '#/components/responses/Problem'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '503':
+          $ref: '#/components/responses/ProblemRetryAfter'
+  /v1/runs/{run_id}:
+    parameters:
+      - $ref: '#/components/parameters/RunIdPath'
+    get:
+      tags: [runs]
+      operationId: getRun
+      summary: Authoritative run status (read from the AgentRun object; never cached longer than 1 s).
+      parameters:
+        - $ref: '#/components/parameters/Traceparent'
+      responses:
+        '200':
+          description: Run status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunStatus'
+              examples:
+                succeeded:
+                  $ref: '#/components/examples/SucceededRunStatus'
+                diskExceeded:
+                  $ref: '#/components/examples/FailedDiskRunStatus'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '404':
+          $ref: '#/components/responses/Problem'
+        '410':
+          $ref: '#/components/responses/Problem'
+        '503':
+          $ref: '#/components/responses/ProblemRetryAfter'
+  /v1/runs/{run_id}:cancel:
+    parameters:
+      - $ref: '#/components/parameters/RunIdPath'
+    post:
+      tags: [runs]
+      operationId: cancelRun
+      summary: Request cancellation (idempotent).
+      description: |
+        Sets `spec.cancelRequested=true` on the AgentRun (a one-way field). The controller moves the run to
+        `Cancelling`, sends SIGTERM to the entrypoint, allows up to `timeouts.finalize_seconds` for partial
+        artifact upload, then reaches `Cancelled`. On a run already in a terminal phase it is a no-op that
+        returns 200 with the terminal status. `Idempotency-Key` is optional; cancel is naturally idempotent.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKeyOptional'
+        - $ref: '#/components/parameters/Traceparent'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelRequest'
+      responses:
+        '202':
+          description: Cancellation recorded; run is (or will shortly be) Cancelling.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunStatus'
+        '200':
+          description: Run already terminal; nothing to do.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunStatus'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '404':
+          $ref: '#/components/responses/Problem'
+        '503':
+          $ref: '#/components/responses/ProblemRetryAfter'
+  /v1/runs/{run_id}/messages:
+    parameters:
+      - $ref: '#/components/parameters/RunIdPath'
+    post:
+      tags: [runs]
+      operationId: postRunMessage
+      summary: Deliver a steering message to a running agent (ADR-010).
+      description: |
+        Supported only when the run's agent definition declares `steering.live: true`. Claude Code supports
+        this through `--input-format stream-json`, and Codex through app-server `turn/steer`; `codex exec`
+        does not (see verification log). The Runner writes the message to
+        `<artifact_prefix>inbox/<seq:06d>-<message_id>.json` with `If-None-Match: *` (write-once, deduped by
+        message_id), and the entrypoint receives it through the sandbox listener. Authorization of the *human*
+        sender is done by the workflow before this call; the Runner trusts the worker caller. Message text is
+        treated as untrusted input by the entrypoint (D-21).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/Traceparent'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunMessage'
+      responses:
+        '202':
+          description: Message stored in the run inbox.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunMessageStatus'
+        '200':
+          description: Duplicate message_id; current status returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunMessageStatus'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '404':
+          $ref: '#/components/responses/Problem'
+        '409':
+          $ref: '#/components/responses/Problem'
+        '422':
+          $ref: '#/components/responses/Problem'
+        '503':
+          $ref: '#/components/responses/ProblemRetryAfter'
+  /v1/runs/{run_id}/messages/{message_id}:
+    parameters:
+      - $ref: '#/components/parameters/RunIdPath'
+      - name: message_id
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/MessageId'
+    get:
+      tags: [runs]
+      operationId: getRunMessage
+      summary: Delivery status of a steering message.
+      responses:
+        '200':
+          description: Message status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunMessageStatus'
+        '404':
+          $ref: '#/components/responses/Problem'
+  /sandbox/v1/token:refresh:
+    post:
+      tags: [sandbox]
+      operationId: refreshRunToken
+      summary: Exchange a valid (unexpired) `runner-sandbox` run token for a fresh token set (one token per audience).
+      description: |
+        Tokens live 60 minutes and never beyond the grant's `exp`. **replicant-agentd**, the token custodian (the
+        agent container holds no token), refreshes when fewer than 15 minutes remain. It rewrites the token
+        files in its private directory `$REPLICANT_RUN_TOKEN_DIR`, agentd's tmpfs copy of the projected Secret
+        (CCR-03-08), and during the N/N+1 window also `$REPLICANT_RUN_TOKEN_FILE`, which points at the
+        `runner-sandbox` token. Refresh is refused once the run is terminal (beyond the finalize window) or
+        cancelled, which revokes the run's access to gateway, MCP, and repo-mirror within one token lifetime.
+        Services may also check `GET /v1/runs/{run_id}`; that is not required.
+      security:
+        - runToken: []
+      responses:
+        '200':
+          description: New token set.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunTokenResponse'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '409':
+          $ref: '#/components/responses/Problem'
+  /sandbox/v1/credentials/aws:
+    get:
+      tags: [sandbox]
+      operationId: getRunAwsCredentials
+      summary: Prefix-scoped AWS credentials for this run, in the AWS container-credentials JSON shape.
+      description: |
+        Returns STS credentials whose session policy allows only:
+        `s3:PutObject` / `s3:PutObjectTagging` / `s3:AbortMultipartUpload` on `<each artifact prefix>*` except `inputs/` and `inbox/`
+        (`s3:PutObjectTagging` is required because every upload sends `x-amz-tagging`; CCR-10-03),
+        and `s3:GetObject` on `<each artifact prefix>inputs/*` (the workflow stages inputs, including any session state to restore, by server-side copy into the run's own `inputs/` prefixes, so a run never reads another run's prefix),
+        and `s3:GetObject` on the run's own `<artifacts prefix>manifest.json` (uploader read-back verification), plus an
+        explicit **Deny** of `s3:PutObject*` on `<artifacts prefix>agentrun_record/*` and `<artifacts prefix>inbox/*`, so a
+        sandbox cannot pre-empt the controller's write-once tombstone or the cancel control key (CCR-02-07; packed policy
+        about 1,747 of 2,048 characters). The KMS conditions restrict use to the tenant's key.
+        Expiry is ≤ 1 h (role chaining caps sessions at 1 h; verified, see log). WS-02 decides whether the in-pod
+        uploader uses this endpoint through the SDK's container credential provider or a sidecar-managed
+        credentials file.
+      security:
+        - runToken: []
+      responses:
+        '200':
+          description: Credentials.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwsContainerCredentials'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '409':
+          $ref: '#/components/responses/Problem'
+  /sandbox/v1/messages:
+    get:
+      tags: [sandbox]
+      operationId: pollRunMessages
+      summary: Long-poll the run's steering inbox.
+      security:
+        - runToken: []
+      parameters:
+        - name: after_seq
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: wait_seconds
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 30
+            default: 20
+      responses:
+        '200':
+          description: Messages with seq > after_seq (possibly empty after wait_seconds).
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [messages]
+                properties:
+                  messages:
+                    type: array
+                    maxItems: 50
+                    items:
+                      $ref: '#/components/schemas/InboxMessage'
+        '401':
+          $ref: '#/components/responses/Problem'
+  /sandbox/v1/messages/{message_id}:ack:
+    post:
+      tags: [sandbox]
+      operationId: ackRunMessage
+      summary: Entrypoint confirms it handed the message to the CLI.
+      security:
+        - runToken: []
+      parameters:
+        - name: message_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/MessageId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [state]
+              properties:
+                state:
+                  type: string
+                  enum: [delivered, rejected]
+                detail:
+                  type: string
+                  maxLength: 500
+      responses:
+        '204':
+          description: Acknowledged (idempotent).
+        '401':
+          $ref: '#/components/responses/Problem'
+        '404':
+          $ref: '#/components/responses/Problem'
+  /sandbox/v1/heartbeat:
+    post:
+      tags: [sandbox]
+      operationId: sandboxHeartbeat
+      summary: agentd liveness heartbeat. Tells a sandbox, including a partitioned one, whether to continue (CCR-02-09).
+      description: |
+        Sent by replicant-agentd about every 30 s. `continue: false` means the run is terminal, cancelled, or revoked. agentd
+        then stops the agent and lets the uploader finalize. `cancel_reason` mirrors `inbox/_control.json` (C-ART), so the
+        cancel cause reaches the agent with no exec and no annotations forwarded into Kata (G-12, G-26). WS-02 defines the
+        timeout after which a sandbox that cannot reach this endpoint stops itself (R2-030).
+
+        Optional body (CCR-02-12): the disk watchdog's report. runner-api copies it to the run Lease annotation
+        `replicant.example.com/disk` = `<state>:<used_bytes>/<limit_bytes>`. That is the only per-run disk signal the
+        controller sees, since it no longer reads kubelet volume stats. A body-less heartbeat stays valid.
+      security:
+        - runToken: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SandboxHeartbeatRequest'
+      responses:
+        '200':
+          description: Heartbeat accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeartbeatResponse'
+        '401':
+          $ref: '#/components/responses/Problem'
+  /v1/revocations:
+    get:
+      tags: [runs]
+      operationId: listRevocations
+      summary: Exec revocation feed. Runs whose tokens must be rejected even if unexpired (CCR-02-09).
+      description: |
+        Polled by run-token verifiers: replicant-gateway-shim, memory-service, context-mcp, and repo-mirror. Their
+        ServiceAccount subjects are added to this listener's allowlist for this path only. Cursor-based; entries are
+        kept at least 2 token lifetimes. runner-api persists the feed as
+        `exec_revocation_feed` objects in the `ops` bucket under `exec-revocations/<env>/`, with a prefix-scoped write and
+        90-day expiry (C-ART 1.10.3). It never writes the `audit` bucket.
+      parameters:
+        - name: since
+          in: query
+          required: false
+          description: Opaque cursor returned as `next_cursor`; absent for the full current window.
+          schema:
+            type: string
+            maxLength: 256
+      responses:
+        '200':
+          description: Revocations after the cursor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevocationList'
+        '401':
+          $ref: '#/components/responses/Problem'
+  /internal/v1/runs/{run_id}:revoke:
+    parameters:
+      - $ref: '#/components/parameters/RunIdPath'
+    post:
+      tags: [internal]
+      operationId: revokeRun
+      summary: Add a run to the revocation feed (idempotent). Called by agentrun-controller at every terminal phase (CCR-02-09).
+      security:
+        - controllerToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason]
+              properties:
+                reason:
+                  $ref: '#/components/schemas/FailureReason'
+      responses:
+        '204':
+          description: Revoked (or already revoked).
+        '401':
+          $ref: '#/components/responses/Problem'
+        '404':
+          $ref: '#/components/responses/Problem'
+  /.well-known/jwks.json:
+    get:
+      tags: [meta]
+      operationId: getJwks
+      summary: Public keys for verifying run tokens (used by AI gateway, memory MCP, context MCP, repo-mirror).
+      security: []
+      responses:
+        '200':
+          description: RFC 7517 JWK Set. Cache up to 10 minutes; keys rotate every 30 days, with an overlap of 2 token lifetimes.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [keys]
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      type: object
+                      required: [kty, kid, use, alg]
+                      properties:
+                        kty:
+                          const: EC
+                        crv:
+                          const: P-256
+                        kid:
+                          type: string
+                        use:
+                          const: sig
+                        alg:
+                          const: ES256
+                        x:
+                          type: string
+                        'y':
+                          type: string
+  /healthz:
+    get:
+      tags: [meta]
+      operationId: healthz
+      security: []
+      responses:
+        '200':
+          description: Process alive.
+  /readyz:
+    get:
+      tags: [meta]
+      operationId: readyz
+      security: []
+      responses:
+        '200':
+          description: Kubernetes API reachable, KMS signing key loaded, policy cache warm.
+        '503':
+          description: Not ready.
+webhooks:
+  runStatusChanged:
+    post:
+      summary: Controller → run-notifier notification; the same payload is forwarded as Temporal Signal run.status_changed.
+      description: |
+        Sent by agentrun-controller to `http://run-notifier.replicant-runner.svc:8080/internal/v1/notifications` for every
+        phase transition, at least once, in phase order per run. The controller sets condition `CallbackDelivered=True`
+        when the notifier returns 2xx after the Temporal frontend accepted the Signal. It retries with exponential
+        backoff (1 s → 5 min, unbounded until the AgentRun is garbage-collected). A Temporal `NotFound` (workflow
+        closed) is reported as 2xx with `{"outcome":"workflow_closed"}` and not retried. The notifier authenticates
+        the controller by in-cluster ServiceAccount token (audience `run-notifier`). It validates that
+        `callback.workflow_id` starts with the run's `job_id` and that the namespace is the configured
+        `replicant-<env>`, and signals nothing else. Its Temporal identity (mTLS client certificate from cert-manager,
+        24 h lifetime) is authorized by the Temporal server Authorizer for `SignalWorkflowExecution` on namespace
+        `replicant-<env>` only (ADR-002).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunStatusNotification'
+      responses:
+        '200':
+          description: Signal delivered (or workflow closed).
+        '503':
+          description: Temporal unavailable; retry.
+components:
+  securitySchemes:
+    workerToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Projected Kubernetes ServiceAccount token (audience replicant-runner) from the core cluster.
+    controllerToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Projected ServiceAccount token of agentrun-controller (audience runner-internal), internal listener only.
+    runToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Per-run token minted by the Runner (claims RunTokenClaims), projected into the pod by the controller.
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: RFC 9651 sf-string containing the idempotency key, e.g. "ik1:job_01m5p7x7r0bt69j0h0fbxepw90:implementer.c0.n1.run".
+      schema:
+        type: string
+        maxLength: 257
+        pattern: '^"ik1:[A-Za-z0-9_:.-]{1,251}"$'
+    IdempotencyKeyOptional:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+        maxLength: 257
+        pattern: '^"ik1:[A-Za-z0-9_:.-]{1,251}"$'
+    Traceparent:
+      name: traceparent
+      in: header
+      required: false
+      schema:
+        $ref: '#/components/schemas/Traceparent'
+    Tracestate:
+      name: tracestate
+      in: header
+      required: false
+      schema:
+        type: string
+        maxLength: 512
+    RunIdPath:
+      name: run_id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/RunId'
+  responses:
+    Problem:
+      description: Error (RFC 9457).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    ProblemRetryAfter:
+      description: Retryable error (RFC 9457) with Retry-After.
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying.
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    TenantId:
+      type: string
+      minLength: 3
+      maxLength: 32
+      pattern: '^[a-z][a-z0-9]*(-[a-z0-9]+)*$'
+    JobId:
+      type: string
+      pattern: '^job_[0-9a-hjkmnp-tv-z]{26}$'
+    RunId:
+      type: string
+      pattern: '^run_[0-9a-hjkmnp-tv-z]{26}$'
+    MessageId:
+      type: string
+      pattern: '^msg_[0-9a-hjkmnp-tv-z]{26}$'
+    PrincipalId:
+      type: string
+      pattern: '^(usr_[0-9a-hjkmnp-tv-z]{26}|svc_[a-z][a-z0-9-]{2,40})$'
+    ReleaseBundleId:
+      type: string
+      pattern: '^rb_[0-9a-hjkmnp-tv-z]{26}$'
+    Digest:
+      type: string
+      pattern: '^sha256:[0-9a-f]{64}$'
+    S3Uri:
+      type: string
+      maxLength: 1100
+      pattern: '^s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/.+'
+    S3Prefix:
+      type: string
+      maxLength: 1000
+      pattern: '^s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/tenants/[a-z][a-z0-9-]{1,30}[a-z0-9]/jobs/job_[0-9a-hjkmnp-tv-z]{26}/runs/run_[0-9a-hjkmnp-tv-z]{26}/$'
+    Traceparent:
+      type: string
+      pattern: '^00-(?!0{32})[0-9a-f]{32}-(?!0{16})[0-9a-f]{16}-[0-9a-f]{2}$'
+    Timestamp:
+      type: string
+      format: date-time
+    DefinitionRef:
+      description: Pinned registry reference (definitions-contracts.md section 3). Unpinned selectors are rejected.
+      type: object
+      additionalProperties: false
+      required: [kind, name, version, digest]
+      properties:
+        kind:
+          type: string
+          enum: [agent, environment]
+        name:
+          type: string
+          maxLength: 63
+          pattern: '^[a-z][a-z0-9]*(-[a-z0-9]+)*$'
+        version:
+          type: integer
+          minimum: 1
+        digest:
+          $ref: '#/components/schemas/Digest'
+    Repo:
+      type: object
+      additionalProperties: false
+      required: [provider, host, owner, name, repo_id, base_sha]
+      properties:
+        provider:
+          type: string
+          enum: [github, gitea]
+        host:
+          type: string
+          maxLength: 255
+        owner:
+          type: string
+          maxLength: 100
+        name:
+          type: string
+          maxLength: 100
+        repo_id:
+          type: string
+          maxLength: 64
+        base_ref:
+          type: string
+          maxLength: 255
+        base_sha:
+          description: Exact commit to check out. Runs never resolve refs themselves.
+          type: string
+          pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$'
+        fetch_depth:
+          description: 0 = full history. Default from environment definition.
+          type: integer
+          minimum: 0
+          maximum: 100000
+    RunRole:
+      type: string
+      enum: [planner, implementer, qa, reviewer, repair, takeover, eval]
+    WorkloadClass:
+      type: string
+      enum: [coding, qa_build, review, utility]
+    Isolation:
+      description: Logical isolation runtime. Maps 1:1 to RuntimeClass names replicant-gvisor, replicant-kata-fc, replicant-kata-clh (WS-02 owns the RuntimeClass objects).
+      type: string
+      enum: [gvisor, kata-fc, kata-clh]
+    RunPhase:
+      type: string
+      enum: [Pending, Provisioning, Running, Finalizing, Cancelling, Succeeded, Failed, Cancelled]
+    FailureReason:
+      description: |
+        Closed set of AgentRun failure reasons (agentrun-crd.md). retryable=true means re-running the same node with
+        a new ordinal is reasonable; the Runner never retries on its own.
+      type: string
+      enum:
+        - AdmissionDenied
+        - RuntimeClassUnavailable
+        - CredentialIssueFailed
+        - Unschedulable
+        - ImagePullFailed
+        - SandboxStartTimeout
+        - RepoFetchFailed
+        - InputsFetchFailed
+        - DiffApplyFailed
+        - SessionRestoreFailed
+        - WorkspaceDiskExceeded
+        - OOMKilled
+        - DeadlineExceeded
+        - AgentExitedNonZero
+        - AgentResultMissing
+        - AgentResultInvalid
+        - GatewayBudgetExceeded
+        - GatewayUnavailable
+        - ArtifactUploadFailed
+        - NodeLost
+        - PodEvicted
+        - Preempted
+        - ControllerError
+        - CancelledByRequest
+        - OrchestratorDeadlineExceeded
+        - SecurityViolation
+        - EnvironmentSetupFailed
+        - DefinitionUnavailable
+    RunSpec:
+      type: object
+      additionalProperties: false
+      required:
+        - schema
+        - tenant_id
+        - job_id
+        - workflow_id
+        - logical_activity_id
+        - role
+        - workload_class
+        - release_bundle_id
+        - agent_definition
+        - environment_definition
+        - repo
+        - inputs
+        - artifact_prefixes
+        - network_profile
+        - timeouts
+        - priority
+        - callback
+        - run_grant
+      properties:
+        schema:
+          const: replicant.run-spec/v1
+        tenant_id:
+          $ref: '#/components/schemas/TenantId'
+        job_id:
+          $ref: '#/components/schemas/JobId'
+        workflow_id:
+          description: Workflow that owns the run (root job workflow or internal child). Must start with job_id.
+          type: string
+          maxLength: 120
+          pattern: '^job_[0-9a-hjkmnp-tv-z]{26}(:[a-z][a-z0-9_]{1,30}:[1-9][0-9]*)?$'
+        logical_activity_id:
+          type: string
+          maxLength: 120
+          pattern: '^[a-z][a-z0-9_]{0,40}\.c[0-9]{1,3}\.n[0-9]{1,3}\.[a-z][a-z0-9_]{0,30}$'
+        role:
+          $ref: '#/components/schemas/RunRole'
+        workload_class:
+          $ref: '#/components/schemas/WorkloadClass'
+        workflow_type:
+          description: Optional (CCR-08-03). The job's workflow type (C-IDS §4.1); sandbox telemetry identity comes from it via pod labels. Included in spec_digest.
+          type: string
+          enum: [bugfix, feature, api_change, docs, hotfix, maintenance, pr_repair, qa_only, unrouted]
+        release_bundle_id:
+          $ref: '#/components/schemas/ReleaseBundleId'
+        agent_definition:
+          $ref: '#/components/schemas/DefinitionRef'
+        environment_definition:
+          $ref: '#/components/schemas/DefinitionRef'
+        resource_profile:
+          description: Named profile inside the environment definition. Default "default".
+          type: string
+          maxLength: 63
+          pattern: '^[a-z][a-z0-9-]{0,62}$'
+          default: default
+        repo:
+          $ref: '#/components/schemas/Repo'
+        additional_repos:
+          description: Read-only context checkouts (no diff is collected from them).
+          type: array
+          maxItems: 4
+          items:
+            $ref: '#/components/schemas/Repo'
+        inputs:
+          type: object
+          additionalProperties: false
+          required: [manifest_uri, manifest_sha256]
+          description: |
+            The inputs manifest (artifact type run_inputs) lives under `<artifact_prefixes.artifacts>inputs/`. It lists every
+            input object (task packet, briefing, memory injection, handoff, prior diff bundle to apply, session state to
+            restore, steering backlog) with sha256. The workflow stages it before calling createRun (it can compute
+            run_id in advance). The Runner verifies the manifest exists and its digest matches; the entrypoint verifies
+            each listed object.
+          properties:
+            manifest_uri:
+              $ref: '#/components/schemas/S3Uri'
+            manifest_sha256:
+              type: string
+              pattern: '^[0-9a-f]{64}$'
+        artifact_prefixes:
+          type: object
+          additionalProperties: false
+          required: [artifacts, transcripts, session]
+          description: Exact run prefixes per bucket class (artifact-layout.md). Each must equal the canonical prefix for (tenant, job, run); otherwise admission_denied.
+          properties:
+            artifacts:
+              $ref: '#/components/schemas/S3Prefix'
+            transcripts:
+              $ref: '#/components/schemas/S3Prefix'
+            session:
+              $ref: '#/components/schemas/S3Prefix'
+        isolation_hint:
+          $ref: '#/components/schemas/Isolation'
+        network_profile:
+          description: Name of a network profile defined by policy (WS-02/WS-09), e.g. coding-default, qa-with-mirror. Must be allowed for the tenant and workload class.
+          type: string
+          maxLength: 63
+          pattern: '^[a-z][a-z0-9-]{0,62}$'
+        timeouts:
+          type: object
+          additionalProperties: false
+          required: [startup_seconds, active_deadline_seconds, finalize_seconds]
+          properties:
+            startup_seconds:
+              description: Max time from AgentRun creation to agent start (scheduling, image pull, repo fetch, inputs). Exceeding it gives Failed/SandboxStartTimeout.
+              type: integer
+              minimum: 60
+              maximum: 1800
+            active_deadline_seconds:
+              description: Max agent wall time (from agent start). Exceeding it gives Failed/DeadlineExceeded after finalization.
+              type: integer
+              minimum: 60
+              maximum: 28800
+            finalize_seconds:
+              description: Max time for artifact upload after agent exit or SIGTERM.
+              type: integer
+              minimum: 30
+              maximum: 1800
+        limits:
+          type: object
+          additionalProperties: false
+          properties:
+            max_cost_usd:
+              description: Per-run gateway budget; effective = min(this, agent definition limit, remaining job budget). Enforced by the gateway (WS-03).
+              type: number
+              exclusiveMinimum: 0
+              maximum: 5000
+            max_output_bytes:
+              description: Cap on total artifact bytes uploaded by the run. Default from environment definition.
+              type: integer
+              minimum: 1048576
+        steering:
+          type: object
+          additionalProperties: false
+          properties:
+            enabled:
+              description: Requested; effective only if the agent definition declares steering.live=true.
+              type: boolean
+              default: false
+        priority:
+          type: string
+          enum: [low, normal, high, urgent]
+        trace_context:
+          type: object
+          additionalProperties: false
+          required: [traceparent]
+          properties:
+            traceparent:
+              $ref: '#/components/schemas/Traceparent'
+            tracestate:
+              type: string
+              maxLength: 512
+        run_grant:
+          description: Compact JWS (ES256) signed by the core `run-grant` KMS key; payload `RunGrantClaims` (CCR-09-02). Excluded from `spec_digest`.
+          type: string
+          maxLength: 8192
+          pattern: '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+        callback:
+          type: object
+          additionalProperties: false
+          required: [kind, namespace, workflow_id, signal_name]
+          properties:
+            kind:
+              const: temporal_signal
+            namespace:
+              type: string
+              pattern: '^replicant-(local|dev|staging|prod)$'
+            workflow_id:
+              description: Must equal RunSpec.workflow_id.
+              type: string
+              maxLength: 120
+            signal_name:
+              const: run.status_changed
+    RunStatus:
+      type: object
+      additionalProperties: false
+      required: [run_id, tenant_id, job_id, idempotency_key, spec_digest, agentrun, phase, terminal, conditions, timestamps, observed_generation]
+      properties:
+        run_id:
+          $ref: '#/components/schemas/RunId'
+        tenant_id:
+          $ref: '#/components/schemas/TenantId'
+        job_id:
+          $ref: '#/components/schemas/JobId'
+        idempotency_key:
+          type: string
+          maxLength: 255
+        spec_digest:
+          description: sha256(JCS(RunSpec without its per-attempt fields run_grant and trace_context)); the idempotency comparison value.
+          $ref: '#/components/schemas/Digest'
+        agentrun:
+          type: object
+          additionalProperties: false
+          required: [namespace, name]
+          properties:
+            namespace:
+              type: string
+              maxLength: 63
+            name:
+              type: string
+              pattern: '^ar-[0-9a-hjkmnp-tv-z]{26}$'
+        isolation:
+          $ref: '#/components/schemas/Isolation'
+        phase:
+          $ref: '#/components/schemas/RunPhase'
+        terminal:
+          type: boolean
+        failure:
+          type: object
+          additionalProperties: false
+          required: [reason, retryable]
+          properties:
+            reason:
+              $ref: '#/components/schemas/FailureReason'
+            message:
+              type: string
+              maxLength: 32768
+            retryable:
+              type: boolean
+        conditions:
+          type: array
+          maxItems: 16
+          items:
+            $ref: '#/components/schemas/Condition'
+        timestamps:
+          type: object
+          additionalProperties: false
+          required: [created_at]
+          properties:
+            created_at:
+              $ref: '#/components/schemas/Timestamp'
+            scheduled_at:
+              $ref: '#/components/schemas/Timestamp'
+            workspace_ready_at:
+              $ref: '#/components/schemas/Timestamp'
+            agent_started_at:
+              $ref: '#/components/schemas/Timestamp'
+            agent_exited_at:
+              $ref: '#/components/schemas/Timestamp'
+            finished_at:
+              $ref: '#/components/schemas/Timestamp'
+        artifact_manifest_uri:
+          description: Present once the manifest is committed (condition ArtifactsUploaded=True).
+          $ref: '#/components/schemas/S3Uri'
+        result_uri:
+          $ref: '#/components/schemas/S3Uri'
+        observed_generation:
+          type: integer
+          minimum: 0
+    Condition:
+      description: Mirrors metav1.Condition.
+      type: object
+      additionalProperties: false
+      required: [type, status, reason, last_transition_time]
+      properties:
+        type:
+          type: string
+          enum: [Accepted, CredentialsIssued, Scheduled, WorkspaceReady, AgentRunning, ArtifactsUploaded, Succeeded, CallbackDelivered, DiskPressure]
+        status:
+          type: string
+          enum: ['True', 'False', 'Unknown']
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 1024
+          pattern: '^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$'
+        message:
+          type: string
+          maxLength: 32768
+        last_transition_time:
+          $ref: '#/components/schemas/Timestamp'
+        observed_generation:
+          type: integer
+          minimum: 0
+    RunList:
+      type: object
+      additionalProperties: false
+      required: [runs]
+      properties:
+        runs:
+          type: array
+          items:
+            $ref: '#/components/schemas/RunStatus'
+        next_page_token:
+          type: string
+          maxLength: 2048
+    CancelRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          description: '`security` (CCR-09-04) is used by security automation; the run ends Failed/SecurityViolation, not Cancelled.'
+          enum: [job_cancelled, superseded, orchestrator_deadline, operator, takeover, budget_exhausted, security]
+        detail:
+          type: string
+          maxLength: 2000
+        requested_by:
+          $ref: '#/components/schemas/PrincipalId'
+    RunMessage:
+      type: object
+      additionalProperties: false
+      required: [message_id, text, author, sent_at]
+      properties:
+        message_id:
+          $ref: '#/components/schemas/MessageId'
+        text:
+          type: string
+          minLength: 1
+          maxLength: 16000
+        author:
+          $ref: '#/components/schemas/PrincipalId'
+        sent_at:
+          $ref: '#/components/schemas/Timestamp'
+    RunMessageStatus:
+      type: object
+      additionalProperties: false
+      required: [message_id, run_id, state]
+      properties:
+        message_id:
+          $ref: '#/components/schemas/MessageId'
+        run_id:
+          $ref: '#/components/schemas/RunId'
+        seq:
+          type: integer
+          minimum: 1
+        state:
+          type: string
+          enum: [queued, delivered, rejected, expired]
+        updated_at:
+          $ref: '#/components/schemas/Timestamp'
+    InboxMessage:
+      type: object
+      additionalProperties: false
+      required: [seq, message_id, text, author, sent_at]
+      properties:
+        seq:
+          type: integer
+          minimum: 1
+        message_id:
+          $ref: '#/components/schemas/MessageId'
+        text:
+          type: string
+          maxLength: 16000
+        author:
+          $ref: '#/components/schemas/PrincipalId'
+        sent_at:
+          $ref: '#/components/schemas/Timestamp'
+    RunTokenClaims:
+      description: JWT claims of the per-run token (ES256). Consumers verify iss, aud, exp, and that run_id/tenant_id match the resource requested.
+      type: object
+      additionalProperties: false
+      required: [iss, sub, aud, exp, iat, jti, tenant_id, job_id, run_id, role, scopes, acting_for, grant, grant_jti]
+      properties:
+        iss:
+          type: string
+          examples: ['https://runner.prod.replicant.internal']
+        sub:
+          description: run:<run_id>
+          type: string
+          pattern: '^run:run_[0-9a-hjkmnp-tv-z]{26}$'
+        aud:
+          description: Exactly one audience per token (CCR-09-01). Verifiers require equality with their own name.
+          type: string
+          enum: [ai-gateway, memory-mcp, context-mcp, repo-mirror, runner-sandbox]
+        exp:
+          type: integer
+        iat:
+          type: integer
+        jti:
+          type: string
+          pattern: '^rtk_[0-9a-hjkmnp-tv-z]{26}$'
+        tenant_id:
+          $ref: '#/components/schemas/TenantId'
+        job_id:
+          $ref: '#/components/schemas/JobId'
+        run_id:
+          $ref: '#/components/schemas/RunId'
+        role:
+          $ref: '#/components/schemas/RunRole'
+        release_bundle_id:
+          $ref: '#/components/schemas/ReleaseBundleId'
+        repo_ids:
+          description: Repos the run may fetch from repo-mirror (primary plus additional_repos).
+          type: array
+          maxItems: 5
+          items:
+            type: string
+            maxLength: 64
+        scopes:
+          description: Coarse capabilities, derived from the agent definition and role (WS-09 capability model refines).
+          type: array
+          items:
+            type: string
+            enum: [gateway:invoke, memory:read, memory:search, context:read, code_search:read, repo:fetch, inbox:read, credentials:aws]
+        budget_usd:
+          type: number
+          minimum: 0
+        acting_for:
+          description: Requester principal, or `on_behalf_of` for service-triggered jobs (CCR-09-03). Equal to the grant's `acting_for`. memory-mcp and context-mcp filter content by what this principal may read (D-18).
+          $ref: '#/components/schemas/PrincipalId'
+        grant:
+          description: The run grant (compact JWS) this token was minted under (CCR-09-02).
+          type: string
+          maxLength: 8192
+        grant_jti:
+          type: string
+          pattern: '^rgr_[0-9a-hjkmnp-tv-z]{26}$'
+    RunGrantClaims:
+      description: Payload of the core-signed run grant (CCR-09-02; WS-09 ADR-09-005). JOSE header `alg` ES256, `typ` replicant-run-grant+jwt, `kid` from the core run-grant JWKS.
+      type: object
+      additionalProperties: false
+      required: [iss, typ, jti, iat, exp, tenant_id, job_id, run_id, role, repo_ids, audiences, scopes, budget_usd, acting_for, spec_digest]
+      properties:
+        iss:
+          type: string
+          pattern: '^replicant-(local|dev|staging|prod)-core$'
+        typ:
+          const: replicant-run-grant+jwt
+        jti:
+          type: string
+          pattern: '^rgr_[0-9a-hjkmnp-tv-z]{26}$'
+        iat:
+          type: integer
+        exp:
+          description: iat + startup_seconds + active_deadline_seconds + finalize_seconds + 300 (the workflow's overall run timer). Not refreshable.
+          type: integer
+        tenant_id:
+          $ref: '#/components/schemas/TenantId'
+        job_id:
+          $ref: '#/components/schemas/JobId'
+        run_id:
+          description: derived("run", tenant_id, idempotency_key), computed by the activity (C-IDS).
+          $ref: '#/components/schemas/RunId'
+        role:
+          $ref: '#/components/schemas/RunRole'
+        repo_ids:
+          description: The job's authorized targets and additional repos, from the intake record.
+          type: array
+          maxItems: 5
+          items:
+            type: string
+            maxLength: 64
+        audiences:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            enum: [ai-gateway, memory-mcp, context-mcp, repo-mirror, runner-sandbox]
+        scopes:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            enum: [gateway:invoke, memory:read, memory:search, context:read, code_search:read, repo:fetch, inbox:read, credentials:aws]
+        budget_usd:
+          type: number
+          minimum: 0
+        acting_for:
+          $ref: '#/components/schemas/PrincipalId'
+        spec_digest:
+          description: sha256(JCS(RunSpec without run_grant and trace_context)), equal to RunStatus.spec_digest.
+          $ref: '#/components/schemas/Digest'
+    SandboxHeartbeatRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        disk:
+          type: object
+          additionalProperties: false
+          required: [state, used_bytes, limit_bytes, peak_bytes]
+          properties:
+            state:
+              type: string
+              enum: [ok, warn, exceeded]
+            used_bytes:
+              type: integer
+              minimum: 0
+            limit_bytes:
+              type: integer
+              minimum: 1
+            peak_bytes:
+              type: integer
+              minimum: 0
+    HeartbeatResponse:
+      type: object
+      additionalProperties: false
+      required: [continue, cancel_reason]
+      properties:
+        continue:
+          type: boolean
+        cancel_reason:
+          type: ['string', 'null']
+          description: C-CRD cancelReason or `deadline`; null while the run should continue.
+          maxLength: 64
+    RevocationList:
+      type: object
+      additionalProperties: false
+      required: [revoked, next_cursor]
+      properties:
+        revoked:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [run_id, job_id, at, reason]
+            properties:
+              run_id:
+                $ref: '#/components/schemas/RunId'
+              job_id:
+                $ref: '#/components/schemas/JobId'
+              at:
+                $ref: '#/components/schemas/Timestamp'
+              reason:
+                type: string
+                maxLength: 64
+        next_cursor:
+          type: string
+          maxLength: 256
+    RunTokenResponse:
+      description: One token per audience in the grant (CCR-09-01). `token`/`expires_at` are deprecated legacy fields (the `runner-sandbox` token), present only during the N/N+1 window.
+      type: object
+      additionalProperties: false
+      required: [tokens]
+      properties:
+        tokens:
+          type: object
+          minProperties: 1
+          propertyNames:
+            enum: [ai-gateway, memory-mcp, context-mcp, repo-mirror, runner-sandbox]
+          additionalProperties:
+            type: object
+            additionalProperties: false
+            required: [token, expires_at]
+            properties:
+              token:
+                type: string
+                maxLength: 16384
+              expires_at:
+                $ref: '#/components/schemas/Timestamp'
+        token:
+          deprecated: true
+          type: string
+          maxLength: 16384
+        expires_at:
+          deprecated: true
+          $ref: '#/components/schemas/Timestamp'
+    AwsContainerCredentials:
+      description: Shape consumed by AWS SDK container credential providers.
+      type: object
+      additionalProperties: false
+      required: [AccessKeyId, SecretAccessKey, Token, Expiration]
+      properties:
+        AccessKeyId:
+          type: string
+        SecretAccessKey:
+          type: string
+        Token:
+          type: string
+        Expiration:
+          $ref: '#/components/schemas/Timestamp'
+    RunStatusNotification:
+      description: Identical to workflow-messages.schema.json#/$defs/RunStatusChangedSignal.
+      type: object
+      additionalProperties: false
+      required: [schema, notification_id, run_id, job_id, tenant_id, idempotency_key, phase, terminal, observed_generation, observed_at]
+      properties:
+        schema:
+          const: replicant.msg.run-status-changed/v1
+        notification_id:
+          type: string
+          pattern: '^run_[0-9a-hjkmnp-tv-z]{26}:[A-Za-z]+:[0-9]+$'
+        run_id:
+          $ref: '#/components/schemas/RunId'
+        job_id:
+          $ref: '#/components/schemas/JobId'
+        tenant_id:
+          $ref: '#/components/schemas/TenantId'
+        idempotency_key:
+          type: string
+          maxLength: 255
+        phase:
+          $ref: '#/components/schemas/RunPhase'
+        terminal:
+          type: boolean
+        reason:
+          type: string
+          maxLength: 1024
+          pattern: '^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$'
+        observed_generation:
+          type: integer
+          minimum: 0
+        observed_at:
+          $ref: '#/components/schemas/Timestamp'
+        artifact_manifest_uri:
+          $ref: '#/components/schemas/S3Uri'
+        traceparent:
+          $ref: '#/components/schemas/Traceparent'
+    Problem:
+      type: object
+      required: [type, title, status, code, retryable]
+      properties:
+        type:
+          type: string
+          format: uri
+          examples: ['https://errors.replicant.example.com/runner/tenant_quota_exceeded']
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          enum:
+            - invalid_request
+            - missing_idempotency_key
+            - unauthenticated
+            - forbidden
+            - run_not_found
+            - steering_not_supported
+            - run_not_active
+            - run_expired
+            - idempotency_key_reuse
+            - admission_denied
+            - run_grant_invalid
+            - definition_not_resolvable
+            - tenant_quota_exceeded
+            - rate_limited
+            - internal
+            - kubernetes_unavailable
+            - runner_unavailable
+        retryable:
+          type: boolean
+        retry_after_seconds:
+          type: integer
+          minimum: 1
+        quota_used:
+          description: Set only with code tenant_quota_exceeded (CCR-02-12). Feeds JobSnapshot.waiting.quota_used.
+          type: integer
+          minimum: 0
+        quota_limit:
+          description: Set only with code tenant_quota_exceeded (CCR-02-12). Feeds JobSnapshot.waiting.quota_limit.
+          type: integer
+          minimum: 0
+        run_id:
+          $ref: '#/components/schemas/RunId'
+        violations:
+          description: For invalid_request / admission_denied.
+          type: array
+          items:
+            type: object
+            required: [field, rule]
+            properties:
+              field:
+                type: string
+              rule:
+                type: string
+              message:
+                type: string
+  examples:
+    ImplementerRunSpec:
+      summary: Implementer run for a bugfix job
+      value:
+        schema: replicant.run-spec/v1
+        tenant_id: payments
+        job_id: job_01m5p7x7r0bt69j0h0fbxepw90
+        workflow_id: job_01m5p7x7r0bt69j0h0fbxepw90
+        logical_activity_id: implementer.c0.n1.run
+        role: implementer
+        workload_class: coding
+        workflow_type: bugfix
+        release_bundle_id: rb_ds5p3wmcj4dag2e9a8ncp4py6k
+        agent_definition:
+          kind: agent
+          name: implementer-claude
+          version: 7
+          digest: sha256:9f2c4e1a7b3d5f60812a4c6e8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4b6d
+        environment_definition:
+          kind: environment
+          name: go-service
+          version: 12
+          digest: sha256:1b3d5f7a9c0e2b4d6f8a0c2e4b6d8f0a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b0d
+        resource_profile: default
+        repo:
+          provider: github
+          host: github.com
+          owner: acme-payments
+          name: ledger-api
+          repo_id: R_kgDOK2a9Xw
+          base_ref: main
+          base_sha: 8c1e4f2a9b7d3c6e5f0a1b2c3d4e5f6a7b8c9d0e
+        inputs:
+          manifest_uri: s3://acme-replicant-prod-artifacts/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/inputs/manifest.json
+          manifest_sha256: 3a7bd3e2360a3d29eea436fcfb7e44c735d117c42d1c1835420b6b9942dd4f1b
+        artifact_prefixes:
+          artifacts: s3://acme-replicant-prod-artifacts/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/
+          transcripts: s3://acme-replicant-prod-transcripts/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/
+          session: s3://acme-replicant-prod-session/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/
+        isolation_hint: kata-clh
+        network_profile: coding-default
+        timeouts:
+          startup_seconds: 300
+          active_deadline_seconds: 3600
+          finalize_seconds: 300
+        limits:
+          max_cost_usd: 15
+        steering:
+          enabled: true
+        priority: normal
+        trace_context:
+          traceparent: 00-fc0575170c8597ce9805552723c08d6e-a3c1e5f7092b4d6e-01
+        callback:
+          kind: temporal_signal
+          namespace: replicant-prod
+          workflow_id: job_01m5p7x7r0bt69j0h0fbxepw90
+          signal_name: run.status_changed
+        run_grant: eyJhbGciOiJFUzI1NiIsImtpZCI6InJnLTIwMjYtMTAiLCJ0eXAiOiJmYWN0b3J5LXJ1bi1ncmFudCtqd3QifQ.eyJpc3MiOiJmYWN0b3J5LXByb2QtY29yZSIsInR5cCI6ImZhY3RvcnktcnVuLWdyYW50K2p3dCIsImp0aSI6InJncl8wMW01cDd4N3Mwa2QzbThxMnY2eDl6NGI3YyIsImlhdCI6MTc5MjgyMTY2MCwiZXhwIjoxNzkyODI2MTYwLCJ0ZW5hbnRfaWQiOiJwYXltZW50cyIsImpvYl9pZCI6ImpvYl8wMW01cDd4N3IwYnQ2OWowaDBmYnhlcHc5MCIsInJ1bl9pZCI6InJ1bl9najNoM2VwM3BoamZzOWUyM3Y3Njh6cmNhNSIsInJvbGUiOiJpbXBsZW1lbnRlciIsInJlcG9faWRzIjpbIlJfa2dET0syYTlYdyJdLCJhdWRpZW5jZXMiOlsiYWktZ2F0ZXdheSIsIm1lbW9yeS1tY3AiLCJjb250ZXh0LW1jcCIsInJlcG8tbWlycm9yIiwicnVubmVyLXNhbmRib3giXSwic2NvcGVzIjpbImdhdGV3YXk6aW52b2tlIiwibWVtb3J5OnJlYWQiLCJtZW1vcnk6c2VhcmNoIiwiY29udGV4dDpyZWFkIiwiY29kZV9zZWFyY2g6cmVhZCIsInJlcG86ZmV0Y2giLCJpbmJveDpyZWFkIiwiY3JlZGVudGlhbHM6YXdzIl0sImJ1ZGdldF91c2QiOjE1LCJhY3RpbmdfZm9yIjoidXNyXzAxa25rOGRmcjBmdmpjN3YwYjl2aHZremJwIiwic3BlY19kaWdlc3QiOiJzaGEyNTY6YzBmZmVlOGUxYjJkM2Y0YTViNmM3ZDhlOWYwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZjAwMTEyMiJ9.Ujo9BvRrDazllOKsi0UijvzBa1nE3Zcq0uz6M2HNzeJGLTPlJrHZ8ryuV4YyiQPxy8_vD1ujzwmLgYx5E_-CzA
+    PendingRunStatus:
+      value:
+        run_id: run_gj3h3ep3phjfs9e23v768zrca5
+        tenant_id: payments
+        job_id: job_01m5p7x7r0bt69j0h0fbxepw90
+        idempotency_key: ik1:job_01m5p7x7r0bt69j0h0fbxepw90:implementer.c0.n1.run
+        spec_digest: sha256:a05ea6bc4aea3f59a4b8f7a20dea9badc8e8d1dcbb8f21b696224337bbabde06
+        agentrun:
+          namespace: sbx-payments
+          name: ar-gj3h3ep3phjfs9e23v768zrca5
+        isolation: kata-clh
+        phase: Pending
+        terminal: false
+        conditions:
+          - type: Succeeded
+            status: Unknown
+            reason: InProgress
+            last_transition_time: '2026-10-24T08:01:12Z'
+            observed_generation: 1
+        timestamps:
+          created_at: '2026-10-24T08:01:12Z'
+        observed_generation: 1
+    SucceededRunStatus:
+      value:
+        run_id: run_gj3h3ep3phjfs9e23v768zrca5
+        tenant_id: payments
+        job_id: job_01m5p7x7r0bt69j0h0fbxepw90
+        idempotency_key: ik1:job_01m5p7x7r0bt69j0h0fbxepw90:implementer.c0.n1.run
+        spec_digest: sha256:a05ea6bc4aea3f59a4b8f7a20dea9badc8e8d1dcbb8f21b696224337bbabde06
+        agentrun:
+          namespace: sbx-payments
+          name: ar-gj3h3ep3phjfs9e23v768zrca5
+        isolation: kata-clh
+        phase: Succeeded
+        terminal: true
+        conditions:
+          - type: Succeeded
+            status: 'True'
+            reason: Completed
+            last_transition_time: '2026-10-24T08:24:40Z'
+            observed_generation: 1
+          - type: ArtifactsUploaded
+            status: 'True'
+            reason: Uploaded
+            message: 14 objects, 38.2 MiB
+            last_transition_time: '2026-10-24T08:24:38Z'
+            observed_generation: 1
+        timestamps:
+          created_at: '2026-10-24T08:01:12Z'
+          scheduled_at: '2026-10-24T08:01:15Z'
+          workspace_ready_at: '2026-10-24T08:02:21Z'
+          agent_started_at: '2026-10-24T08:02:23Z'
+          agent_exited_at: '2026-10-24T08:24:05Z'
+          finished_at: '2026-10-24T08:24:40Z'
+        artifact_manifest_uri: s3://acme-replicant-prod-artifacts/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/manifest.json
+        result_uri: s3://acme-replicant-prod-artifacts/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/run_result/result.json
+        observed_generation: 1
+    FailedDiskRunStatus:
+      value:
+        run_id: run_chxtsxqzcpds1fc1c4dvw9e4em
+        tenant_id: payments
+        job_id: job_01m5p7x7r0bt69j0h0fbxepw90
+        idempotency_key: ik1:job_01m5p7x7r0bt69j0h0fbxepw90:qa.c0.n1.run
+        spec_digest: sha256:0d15ea5e0d15ea5e0d15ea5e0d15ea5e0d15ea5e0d15ea5e0d15ea5e0d15ea5e
+        agentrun:
+          namespace: sbx-payments
+          name: ar-chxtsxqzcpds1fc1c4dvw9e4em
+        isolation: kata-clh
+        phase: Failed
+        terminal: true
+        failure:
+          reason: WorkspaceDiskExceeded
+          message: 'watchdog: /workspace used 40.3 GiB of 40 GiB hard limit (node_modules 21.7 GiB, .cache/go-build 9.9 GiB)'
+          retryable: false
+        conditions:
+          - type: Succeeded
+            status: 'False'
+            reason: WorkspaceDiskExceeded
+            last_transition_time: '2026-10-24T08:41:09Z'
+            observed_generation: 1
+          - type: DiskPressure
+            status: 'True'
+            reason: Exceeded
+            last_transition_time: '2026-10-24T08:40:51Z'
+            observed_generation: 1
+        timestamps:
+          created_at: '2026-10-24T08:25:02Z'
+          scheduled_at: '2026-10-24T08:25:04Z'
+          workspace_ready_at: '2026-10-24T08:26:30Z'
+          agent_started_at: '2026-10-24T08:26:31Z'
+          agent_exited_at: '2026-10-24T08:40:52Z'
+          finished_at: '2026-10-24T08:41:09Z'
+        artifact_manifest_uri: s3://acme-replicant-prod-artifacts/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_chxtsxqzcpds1fc1c4dvw9e4em/manifest.json
+        observed_generation: 1

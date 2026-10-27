@@ -1,0 +1,638 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/ws04/handoff/v1.json",
+  "title": "Run handoff document",
+  "description": "WS-04. Artifact type `handoff` (C-ART §4, application/json, 2 MiB, r2y, redaction required). Written at the end of every planner, implementer, repair, and takeover run to <artifacts prefix>handoff/handoff.json and referenced from run_result.outputs.handoff. It is the primary carrier of working memory between runs (ADR-04-001). Two parts with different trust: `mechanical` is computed by the entrypoint from git and the CLI event stream (replicant-derived facts); `narrative` is written by the agent in a final structured turn and is UNTRUSTED model output, rendered to the next run only inside a quoted, attributed block. The entrypoint validates the document; if the agent's narrative is missing or invalid, the entrypoint still writes the mechanical part with narrative_status=missing.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "producer",
+    "goal",
+    "mechanical",
+    "narrative_status"
+  ],
+  "properties": {
+    "schema": {
+      "const": "replicant.handoff/v1"
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "job_id",
+        "run_id",
+        "role",
+        "node_key",
+        "cycle",
+        "ordinal",
+        "release_bundle_id",
+        "cli",
+        "cli_version",
+        "produced_at"
+      ],
+      "properties": {
+        "job_id": {
+          "type": "string",
+          "pattern": "^job_[0-9a-hjkmnp-tv-z]{26}$"
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^run_[0-9a-hjkmnp-tv-z]{26}$"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "planner",
+            "implementer",
+            "reviewer",
+            "repair",
+            "takeover"
+          ]
+        },
+        "node_key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,40}$"
+        },
+        "cycle": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "release_bundle_id": {
+          "type": "string",
+          "pattern": "^rb_[0-9a-hjkmnp-tv-z]{26}$"
+        },
+        "cli": {
+          "type": "string",
+          "enum": [
+            "claude-code",
+            "claude-agent-sdk",
+            "codex"
+          ]
+        },
+        "cli_version": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "model": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "memory_snapshot_id": {
+          "type": "string",
+          "pattern": "^msnap_[0-9a-hjkmnp-tv-z]{26}$"
+        },
+        "previous_handoff_run_id": {
+          "type": "string",
+          "pattern": "^run_[0-9a-hjkmnp-tv-z]{26}$"
+        },
+        "produced_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "run_outcome": {
+          "type": "string",
+          "enum": [
+            "completed",
+            "no_changes",
+            "blocked",
+            "failed",
+            "cancelled",
+            "deadline"
+          ]
+        }
+      }
+    },
+    "goal": {
+      "description": "Restated by the context assembler from the task packet (replicant-written, not model-written): what this job must achieve and the acceptance criteria.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "summary"
+      ],
+      "properties": {
+        "summary": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "acceptance_criteria": {
+          "type": "array",
+          "maxItems": 30,
+          "items": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "task_packet_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "mechanical": {
+      "description": "Facts computed by the entrypoint. Never model-written.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "base_sha",
+        "files_touched",
+        "commands"
+      ],
+      "properties": {
+        "base_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        },
+        "head_tree_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        },
+        "diff_bundle_key": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "diff_stats": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "files_changed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "insertions": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "deletions": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "files_touched": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "change"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "change": {
+                "type": "string",
+                "enum": [
+                  "added",
+                  "modified",
+                  "deleted",
+                  "renamed"
+                ]
+              },
+              "renamed_from": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "insertions": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "deletions": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "commands": {
+          "description": "Shell commands the CLI executed (from stream-json tool_use / Codex command_execution events), deduplicated, last 200. Output is not included.",
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "command",
+              "exit_code",
+              "count"
+            ],
+            "properties": {
+              "command": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "cwd": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "exit_code": {
+                "type": "integer"
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "last_duration_ms": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "classified_as": {
+                "type": "string",
+                "enum": [
+                  "build",
+                  "test",
+                  "lint",
+                  "codegen",
+                  "install",
+                  "vcs",
+                  "search",
+                  "other"
+                ]
+              }
+            }
+          }
+        },
+        "tests": {
+          "description": "Last observed result per test command (parsed by the entrypoint from JUnit or exit codes when available).",
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "command",
+              "status"
+            ],
+            "properties": {
+              "command": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "passed",
+                  "failed",
+                  "error",
+                  "not_run"
+                ]
+              },
+              "failed_tests": {
+                "type": "array",
+                "maxItems": 50,
+                "items": {
+                  "type": "string",
+                  "maxLength": 300
+                }
+              },
+              "junit_key": {
+                "type": "string",
+                "maxLength": 1024
+              }
+            }
+          }
+        },
+        "memory_injected": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "type": "string",
+            "pattern": "^mem_[0-9a-hjkmnp-tv-z]{26}@[1-9][0-9]*$"
+          }
+        },
+        "steering_consumed": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "string",
+            "pattern": "^msg_[0-9a-hjkmnp-tv-z]{26}$"
+          }
+        },
+        "context": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "compactions": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "peak_context_tokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "turns": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "session": {
+          "description": "Pointer to the captured CLI session state (ADR-04-001). Present only when the role's continuity mode captured it.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cli_session_id",
+            "state_key",
+            "state_sha256",
+            "cli_image_digest"
+          ],
+          "properties": {
+            "cli_session_id": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "state_key": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "state_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "cli_image_digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "workspace_path": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "size_bytes": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "narrative_status": {
+      "type": "string",
+      "enum": [
+        "present",
+        "markdown_only",
+        "missing",
+        "invalid",
+        "truncated"
+      ]
+    },
+    "narrative": {
+      "description": "UNTRUSTED. Written by the agent in its final structured turn (Claude: --json-schema output or a final tool call; Codex: --output-schema). Each string is plain text; markdown is rendered inert.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "plan_status": {
+          "type": "array",
+          "maxItems": 40,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "step",
+              "status"
+            ],
+            "properties": {
+              "step_id": {
+                "type": "string",
+                "maxLength": 32
+              },
+              "step": {
+                "type": "string",
+                "maxLength": 300
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "done",
+                  "in_progress",
+                  "not_started",
+                  "dropped",
+                  "blocked"
+                ]
+              },
+              "note": {
+                "type": "string",
+                "maxLength": 500
+              }
+            }
+          }
+        },
+        "decisions": {
+          "type": "array",
+          "maxItems": 30,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "decision",
+              "rationale"
+            ],
+            "properties": {
+              "decision": {
+                "type": "string",
+                "maxLength": 400
+              },
+              "rationale": {
+                "type": "string",
+                "maxLength": 800
+              },
+              "alternatives_rejected": {
+                "type": "array",
+                "maxItems": 5,
+                "items": {
+                  "type": "string",
+                  "maxLength": 300
+                }
+              },
+              "evidence_paths": {
+                "type": "array",
+                "maxItems": 10,
+                "items": {
+                  "type": "string",
+                  "maxLength": 1024
+                }
+              }
+            }
+          }
+        },
+        "constraints_discovered": {
+          "description": "Facts about the codebase learned during the run (for example 'integration tests need TEST_DB_URL'), candidates for working memory only. Never promoted to long-term memory without the write path.",
+          "type": "array",
+          "maxItems": 30,
+          "items": {
+            "type": "string",
+            "maxLength": 400
+          }
+        },
+        "open_issues": {
+          "type": "array",
+          "maxItems": 30,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "issue",
+              "severity"
+            ],
+            "properties": {
+              "issue": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "blocker",
+                  "major",
+                  "minor"
+                ]
+              },
+              "needs_human": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "commands_that_worked": {
+          "type": "array",
+          "maxItems": 30,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "command",
+              "purpose"
+            ],
+            "properties": {
+              "command": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "purpose": {
+                "type": "string",
+                "maxLength": 300
+              }
+            }
+          }
+        },
+        "failures_to_avoid": {
+          "type": "array",
+          "maxItems": 30,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "approach",
+              "why_failed"
+            ],
+            "properties": {
+              "approach": {
+                "type": "string",
+                "maxLength": 400
+              },
+              "why_failed": {
+                "type": "string",
+                "maxLength": 600
+              },
+              "evidence": {
+                "type": "string",
+                "maxLength": 600
+              }
+            }
+          }
+        },
+        "next_steps": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "maxLength": 400
+          }
+        },
+        "memory_feedback": {
+          "description": "Agent's report on injected entries (input to usage telemetry, never a state change).",
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "ref",
+              "verdict"
+            ],
+            "properties": {
+              "ref": {
+                "type": "string",
+                "pattern": "^mem_[0-9a-hjkmnp-tv-z]{26}@[1-9][0-9]*$"
+              },
+              "verdict": {
+                "type": "string",
+                "enum": [
+                  "applied",
+                  "not_applicable",
+                  "conflicted_with_task",
+                  "appears_wrong",
+                  "unsafe"
+                ]
+              },
+              "note": {
+                "type": "string",
+                "maxLength": 500
+              }
+            }
+          }
+        },
+        "summary_for_reviewer": {
+          "type": "string",
+          "maxLength": 3000
+        }
+      }
+    },
+    "narrative_markdown": {
+      "description": "Alternative narrative form produced by WS-03's entrypoint from the agent-written /replicant/out/handoff.md (≤ 64 KiB, UNTRUSTED). Present when the CLI run did not produce the structured `narrative`. The context assembler renders it inside the same quoted block.",
+      "type": "string",
+      "maxLength": 65536
+    },
+    "synthesized": {
+      "description": "true when the entrypoint synthesized the narrative from agent_report.summary because the agent wrote no handoff (WS-03 cli-invocation §4.8).",
+      "type": "boolean"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "narrative_status": {
+            "const": "present"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "narrative"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "narrative_status": {
+            "const": "markdown_only"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "narrative_markdown"
+        ]
+      }
+    }
+  ]
+}

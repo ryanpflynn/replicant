@@ -1,0 +1,128 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "WriteMemoryExportsAndSnapshotExports",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging",
+        "s3:GetObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-memory/tenants/*/exports/*",
+        "arn:aws:s3:::acme-replicant-prod-memory/org/exports/*",
+        "arn:aws:s3:::acme-replicant-prod-memory/tenants/*/snapshots/*"
+      ]
+    },
+    {
+      "Sid": "PurgeDeletesSnapshotAndMemoryExportVersions",
+      "Effect": "Allow",
+      "Action": [
+        "s3:DeleteObjectVersion",
+        "s3:ListBucketVersions"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-memory/tenants/*/snapshots/*",
+        "arn:aws:s3:::acme-replicant-prod-memory/tenants/*/exports/*",
+        "arn:aws:s3:::acme-replicant-prod-memory/org/exports/*",
+        "arn:aws:s3:::acme-replicant-prod-memory",
+        "arn:aws:s3:::acme-replicant-prod-memory-us-west-2/tenants/*/snapshots/*",
+        "arn:aws:s3:::acme-replicant-prod-memory-us-west-2/tenants/*/exports/*",
+        "arn:aws:s3:::acme-replicant-prod-memory-us-west-2/org/exports/*",
+        "arn:aws:s3:::acme-replicant-prod-memory-us-west-2"
+      ]
+    },
+    {
+      "Sid": "PurgeDeletesMemoryInjectionVersions",
+      "Effect": "Allow",
+      "Action": [
+        "s3:DeleteObjectVersion"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/inputs/memory-injection.json",
+        "arn:aws:s3:::acme-replicant-prod-artifacts-us-west-2/tenants/*/jobs/*/runs/*/inputs/memory-injection.json"
+      ]
+    },
+    {
+      "Sid": "ListInjectionVersions",
+      "Effect": "Allow",
+      "Action": "s3:ListBucketVersions",
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts",
+        "arn:aws:s3:::acme-replicant-prod-artifacts-us-west-2"
+      ],
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": [
+            "tenants/*/jobs/*/runs/*/inputs/memory-injection.json"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "PurgedReplacementsWriteOnce",
+      "Effect": "Deny",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-memory/tenants/*/snapshots/*.purged-*",
+      "Condition": {
+        "Null": {
+          "s3:if-none-match": "true"
+        },
+        "Bool": {
+          "s3:ObjectCreationOperation": "true"
+        }
+      }
+    },
+    {
+      "Sid": "TenantAndPlatformMemoryKeysViaS3",
+      "Effect": "Allow",
+      "Action": [
+        "kms:GenerateDataKey",
+        "kms:Decrypt"
+      ],
+      "Resource": "arn:aws:kms:us-east-1:111111111111:key/*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "s3.us-east-1.amazonaws.com"
+        },
+        "ForAnyValue:StringEquals": {
+          "aws:ResourceTag/replicant-key-class": [
+            "tenant",
+            "memory-org",
+            "audit"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "WriteDeletionLedgerEntryFirst",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-audit/org/deletion-ledger/*"
+    },
+    {
+      "Sid": "LedgerEntriesWriteOnce",
+      "Effect": "Deny",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-audit/org/deletion-ledger/*",
+      "Condition": {
+        "Null": {
+          "s3:if-none-match": "true"
+        },
+        "Bool": {
+          "s3:ObjectCreationOperation": "true"
+        }
+      }
+    },
+    {
+      "Sid": "NeverPlainDeletes",
+      "Effect": "Deny",
+      "Action": "s3:DeleteObject",
+      "Resource": "*"
+    }
+  ]
+}

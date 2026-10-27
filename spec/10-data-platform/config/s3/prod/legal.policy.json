@@ -1,0 +1,138 @@
+{
+  "Version": "2012-10-17",
+  "Id": "acme-replicant-prod-legal-policy",
+  "Statement": [
+    {
+      "Sid": "DenyNonTls",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-legal",
+        "arn:aws:s3:::acme-replicant-prod-legal/*"
+      ],
+      "Condition": {
+        "Bool": {
+          "aws:SecureTransport": "false"
+        }
+      }
+    },
+    {
+      "Sid": "DenyOutsideOrganization",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-legal",
+        "arn:aws:s3:::acme-replicant-prod-legal/*"
+      ],
+      "Condition": {
+        "StringNotEquals": {
+          "aws:PrincipalOrgID": "o-acmereplicant1"
+        },
+        "Bool": {
+          "aws:PrincipalIsAWSService": "false"
+        }
+      }
+    },
+    {
+      "Sid": "OnlyLegalRoleAndLeakPurgeTouchObjects",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:GetObjectVersion",
+        "s3:PutObjectLegalHold",
+        "s3:ListBucket",
+        "s3:ListBucketVersions"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-legal",
+        "arn:aws:s3:::acme-replicant-prod-legal/*"
+      ],
+      "Condition": {
+        "ArnNotLike": {
+          "aws:PrincipalArn": [
+            "arn:aws:iam::111111111111:role/replicant-prod-legal-hold",
+            "arn:aws:iam::111111111111:role/replicant-prod-leak-purge"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "LeakPurgeNeverHoldsNorPlainDeletes",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:PutObjectLegalHold",
+        "s3:DeleteObject"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-legal/*",
+      "Condition": {
+        "ArnLike": {
+          "aws:PrincipalArn": "arn:aws:iam::111111111111:role/replicant-prod-leak-purge"
+        }
+      }
+    },
+    {
+      "Sid": "LegalBucketWritesAreWriteOnce",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-legal/*",
+      "Condition": {
+        "Null": {
+          "s3:if-none-match": "true"
+        },
+        "Bool": {
+          "s3:ObjectCreationOperation": "true"
+        }
+      }
+    },
+    {
+      "Sid": "DeletesOnlyByLeakPurge",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-legal/*",
+      "Condition": {
+        "ArnNotLike": {
+          "aws:PrincipalArn": "arn:aws:iam::111111111111:role/replicant-prod-leak-purge"
+        }
+      }
+    },
+    {
+      "Sid": "NobodyBypassesRetention",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:BypassGovernanceRetention",
+        "s3:PutObjectRetention"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-legal/*"
+    },
+    {
+      "Sid": "NoBucketConfigChangesExceptPlatformPipeline",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:PutBucketPolicy",
+        "s3:DeleteBucketPolicy",
+        "s3:PutBucketVersioning",
+        "s3:PutLifecycleConfiguration",
+        "s3:PutEncryptionConfiguration",
+        "s3:PutBucketObjectLockConfiguration"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-legal",
+      "Condition": {
+        "ArnNotLike": {
+          "aws:PrincipalArn": "arn:aws:iam::111111111111:role/replicant-prod-platform-deployer"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,641 @@
+// node-logs.alloy - Grafana Alloy v1.21.x DaemonSet "alloy-node" in BOTH clusters (core and exec). Owner WS-08.
+//
+// Tails container logs from /var/log/pods on its own node and ships them to Loki with the closed label set and
+// the fixed structured-metadata keys of C-IDS section 9. Two pipelines:
+//   sandbox  - pods in namespaces sbx-<tenant> (exec cluster). Identity (tenant, job, run, role, bundle) comes ONLY
+//              from Kubernetes pod labels set by agentrun-controller, never from log content (ADR-004).
+//   platform - every other pod. Identity comes from the service's JSON log fields, validated against C-IDS regexes.
+// Every pipeline in this file (sandbox, platform, hubble) passes through loki.secretfilter (gitleaks-replicant.toml)
+// before loki.write (session-capture.md s.5). Both secretfilters use origin_label = "service", so second-pass hits
+// on sandbox lines are those with origin=~"replicant-sandbox.*" (alert ReplicantSecondPassRedactions).
+//
+// Required environment (set in the DaemonSet spec):
+//   NODE_NAME       downward API spec.nodeName
+//   REPLICANT_ENV     local | dev | staging | prod
+//   REPLICANT_CLUSTER core | exec | local
+//   LOKI_PUSH_URL   core: http://loki-gateway.observability.svc.cluster.local/loki/api/v1/push
+//                   exec: https://loki-push.obs.<env>.replicant.internal/loki/api/v1/push (internal NLB, mTLS)
+//   LOKI_TLS_DIR    directory with tls.crt, tls.key, ca.crt (cert-manager Certificate, CN alloy-node.<cluster>.<env>)
+
+logging {
+  level  = "info"
+  format = "json"
+}
+
+discovery.kubernetes "pods" {
+  role = "pod"
+
+  selectors {
+    role  = "pod"
+    field = "spec.nodeName=" + sys.env("NODE_NAME")
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Common relabeling: file path and identity labels (temporary labels are removed by stage.label_keep).
+// ---------------------------------------------------------------------------------------------------------------
+discovery.relabel "pods" {
+  targets = discovery.kubernetes.pods.targets
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_uid", "__meta_kubernetes_pod_container_name"]
+    separator     = "/"
+    target_label  = "__path__"
+    replacement   = "/var/log/pods/*$1/*.log"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_namespace"]
+    target_label  = "namespace"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_name"]
+    target_label  = "pod"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_container_name"]
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+    target_label  = "k8s_app"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_label_replicant_example_com_tenant"]
+    target_label  = "sbx_tenant"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_label_replicant_example_com_job_id"]
+    target_label  = "sbx_job_id"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_label_replicant_example_com_run_id"]
+    target_label  = "sbx_run_id"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_label_replicant_example_com_role"]
+    target_label  = "sbx_role"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_label_replicant_example_com_bundle"]
+    target_label  = "sbx_bundle"
+  }
+
+  // C-IDS 1.10.0 section 8 (CCR-08-03): workflow type and the verified acting-for principal of the run.
+  rule {
+    source_labels = ["__meta_kubernetes_pod_label_replicant_example_com_workflow_type"]
+    target_label  = "sbx_workflow_type"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_label_replicant_example_com_acting_for"]
+    target_label  = "sbx_acting_for"
+  }
+}
+
+discovery.relabel "sandbox_pods" {
+  targets = discovery.relabel.pods.output
+
+  rule {
+    source_labels = ["namespace"]
+    regex         = "sbx-[a-z][a-z0-9-]{1,31}"
+    action        = "keep"
+  }
+
+  // Only pods created by the controller carry trustworthy identity labels.
+  rule {
+    source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_managed_by"]
+    regex         = "agentrun-controller"
+    action        = "keep"
+  }
+}
+
+discovery.relabel "platform_pods" {
+  targets = discovery.relabel.pods.output
+
+  rule {
+    source_labels = ["namespace"]
+    regex         = "sbx-.*"
+    action        = "drop"
+  }
+}
+
+local.file_match "sandbox" {
+  path_targets = discovery.relabel.sandbox_pods.output
+}
+
+local.file_match "platform" {
+  path_targets = discovery.relabel.platform_pods.output
+}
+
+loki.source.file "sandbox" {
+  targets    = local.file_match.sandbox.targets
+  forward_to = [loki.process.sandbox.receiver]
+}
+
+loki.source.file "platform" {
+  targets    = local.file_match.platform.targets
+  forward_to = [loki.process.platform.receiver]
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Sandbox pipeline (Loki tenant "sandbox").
+// The uploader writes one JSON object per selected, redacted transcript event on stdout (session-capture.md s.4):
+//   {"ts":..,"level":..,"stream":"transcript"|"app","event":..,"run_id":..,"span_id":..,"node_key":..,"cycle":..,
+//    "phase":..,"msg":..}
+// Fields that would assert identity (job_id, tenant, run_id) are ignored here: identity comes from pod labels.
+// ---------------------------------------------------------------------------------------------------------------
+loki.process "sandbox" {
+  forward_to = [loki.secretfilter.sandbox.receiver]
+
+  stage.cri { }
+
+  // Flood protection: untrusted code can print without bound. 300 lines/s per pod sustained, burst 3000.
+  stage.limit {
+    rate          = 300
+    burst         = 3000
+    by_label_name = "pod"
+    drop          = true
+  }
+
+  stage.json {
+    expressions = {
+      level    = "level",
+      stream   = "stream",
+      span_id  = "span_id",
+      node_key = "node_key",
+      cycle    = "cycle",
+      phase    = "phase",
+    }
+  }
+
+  // Trace ID is recomputed from the trusted job_id label (C-IDS Rule T-1); a span_id from the line is kept only if
+  // well-formed. Verified locally: job_01m5p7x7r0bt69j0h0fbxepw90 -> fc0575170c8597ce9805552723c08d6e.
+  stage.template {
+    source   = "trace_id"
+    template = `{{ if .sbx_job_id }}{{ printf "replicant.job.trace.v1:%s" .sbx_job_id | sha256sum | trunc 32 }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "span_id"
+    template = `{{ if regexMatch "^[0-9a-f]{16}$" (default "" .span_id) }}{{ .span_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "node_key"
+    template = `{{ if regexMatch "^[a-z][a-z0-9_]{0,40}$" (default "" .node_key) }}{{ .node_key }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "cycle"
+    template = `{{ if regexMatch "^[0-9]{1,3}$" (default "" .cycle) }}{{ .cycle }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "phase"
+    template = `{{ if regexMatch "^[a-z_]{2,32}$" (default "" .phase) }}{{ .phase }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "agentrun"
+    template = `{{ if .sbx_run_id }}{{ printf "ar-%s" (trimPrefix "run_" .sbx_run_id) }}{{ end }}`
+  }
+
+  // principal_id = the run's acting-for principal (C-IDS section 8 maps this pod label to principal_id)
+  stage.template {
+    source   = "principal_id"
+    template = `{{ if regexMatch "^(usr_[0-9a-hjkmnp-tv-z]{26}|svc_[a-z][a-z0-9-]{2,40})$" (default "" .sbx_acting_for) }}{{ .sbx_acting_for }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "level"
+    template = `{{ $l := lower (default "info" .level) }}{{ if has $l (list "debug" "info" "warn" "error") }}{{ $l }}{{ else if eq $l "warning" }}warn{{ else if has $l (list "fatal" "critical" "panic" "err") }}error{{ else }}info{{ end }}`
+  }
+
+  // A sandbox can only ever produce source=app or source=transcript (never audit, never k8s-events), and only
+  // the uploader container (UID 10003, which redacts before shipping, WS-02 controller.md s.4.2) may produce
+  // transcript lines; the agent container (UID 10001, runs untrusted code) is always source=app.
+  stage.template {
+    source   = "source_value"
+    template = `{{ if and (eq (default "" .stream) "transcript") (eq .container "uploader") }}transcript{{ else }}app{{ end }}`
+  }
+
+  // Containers of the AgentRun pod (WS-02 controller.md s.4.2, 18:40Z): init workspace-guard and prepare; sidecars
+  // replicant-agentd, watchdog, builder (qa_build only) and QA services; main agent and uploader.
+  stage.template {
+    source   = "service"
+    template = `{{ if eq .container "agent" }}replicant-sandbox{{ else if eq .container "uploader" }}replicant-sandbox-uploader{{ else if eq .container "watchdog" }}replicant-sandbox-watchdog{{ else if eq .container "replicant-agentd" }}replicant-sandbox-agentd{{ else if eq .container "builder" }}replicant-sandbox-builder{{ else if or (eq .container "workspace-guard") (eq .container "prepare") }}replicant-sandbox-init{{ else }}replicant-sandbox-svc{{ end }}`
+  }
+
+  stage.template {
+    source   = "workflow_type_value"
+    template = `{{ $w := default "none" .sbx_workflow_type }}{{ if has $w (list "bugfix" "feature" "api_change" "docs" "hotfix" "maintenance" "pr_repair" "qa_only" "unrouted") }}{{ $w }}{{ else }}none{{ end }}`
+  }
+
+  stage.template {
+    source   = "role_value"
+    template = `{{ default "none" .sbx_role }}`
+  }
+
+  stage.structured_metadata {
+    values = {
+      job_id            = "sbx_job_id",
+      run_id            = "sbx_run_id",
+      agentrun          = "agentrun",
+      release_bundle_id = "sbx_bundle",
+      trace_id          = "trace_id",
+      span_id           = "span_id",
+      node_key          = "node_key",
+      cycle             = "cycle",
+      phase             = "phase",
+      principal_id      = "principal_id",
+      pod               = "pod",
+    }
+  }
+
+  stage.labels {
+    values = {
+      tenant        = "sbx_tenant",
+      service       = "service",
+      level         = "level",
+      source        = "source_value",
+      workflow_type = "workflow_type_value",
+      role          = "role_value",
+    }
+  }
+
+  stage.static_labels {
+    values = {
+      env     = sys.env("REPLICANT_ENV"),
+      cluster = sys.env("REPLICANT_CLUSTER"),
+    }
+  }
+
+  stage.label_keep {
+    values = ["env", "cluster", "namespace", "service", "tenant", "workflow_type", "role", "level", "source"]
+  }
+
+  stage.tenant {
+    value = "sandbox"
+  }
+
+  // Restricted tenants (WS-09 tenancy.md section 8, R1V-052): their sandbox streams go to their own Loki tenant
+  // "sandbox-<tenant>". LOKI_RESTRICTED_TENANTS_REGEX comes from ConfigMap observability-tenant-classes (key
+  // loki_restricted_tenants_regex, an alternation of tenant slugs rendered from the isolation classes, the same
+  // source as LANGFUSE_EXCLUDED_TENANTS_REGEX); the default matches no tenant.
+  stage.template {
+    source   = "restricted_loki_tenant"
+    template = "sandbox-{{ .sbx_tenant }}"
+  }
+
+  stage.match {
+    selector = "{tenant=~\"" + coalesce(sys.env("LOKI_RESTRICTED_TENANTS_REGEX"), "^$") + "\"}"
+
+    stage.tenant {
+      source = "restricted_loki_tenant"
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Platform pipeline (Loki tenants "platform" and "audit").
+// Replicant services log JSON via the replicant-telemetry logging adapter (telemetry-model.md s.7).
+// ---------------------------------------------------------------------------------------------------------------
+loki.process "platform" {
+  forward_to = [loki.secretfilter.platform.receiver]
+
+  stage.cri { }
+
+  stage.json {
+    expressions = {
+      level              = "level",
+      log_type           = "log_type",
+      tenant_id          = "tenant_id",
+      workflow_type      = "workflow_type",
+      role               = "role",
+      job_id             = "job_id",
+      workflow_id        = "workflow_id",
+      workflow_run_id    = "workflow_run_id",
+      run_id             = "run_id",
+      agentrun           = "agentrun",
+      trace_id           = "trace_id",
+      span_id            = "span_id",
+      node_key           = "node_key",
+      cycle              = "cycle",
+      activity_id        = "activity_id",
+      gate_id            = "gate_id",
+      decision_id        = "decision_id",
+      release_bundle_id  = "release_bundle_id",
+      phase              = "phase",
+      principal_id       = "principal_id",
+      memory_snapshot_id = "memory_snapshot_id",
+    }
+  }
+
+  // Validate every metadata value against its C-IDS 2.0.0 section 12 regex; invalid values are dropped (empty).
+  // workflow_id covers ReplicantJob and children, sys:* system workflows, EvalSuite/EvalCase, ReleasePipeline (rpl_)
+  // and EvalComparisonRun (<rpl_id>:cmp:<n>).
+  stage.template {
+    source   = "job_id"
+    template = `{{ if regexMatch "^job_[0-9a-hjkmnp-tv-z]{26}$" (default "" .job_id) }}{{ .job_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "workflow_id"
+    template = `{{ if regexMatch "^(job_[0-9a-hjkmnp-tv-z]{26}(:[a-z][a-z0-9_]{1,30}:[1-9][0-9]*)?|sys:[a-z][a-z0-9:-]{1,80}|eval_[0-9a-hjkmnp-tv-z]{26}(:case:gtask_[0-9a-hjkmnp-tv-z]{26})?|rpl_[0-9a-hjkmnp-tv-z]{26}(:cmp:[1-9][0-9]*)?)$" (default "" .workflow_id) }}{{ .workflow_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "workflow_run_id"
+    template = `{{ if regexMatch "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" (default "" .workflow_run_id) }}{{ .workflow_run_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "run_id"
+    template = `{{ if regexMatch "^run_[0-9a-hjkmnp-tv-z]{26}$" (default "" .run_id) }}{{ .run_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "agentrun"
+    template = `{{ if regexMatch "^ar-[0-9a-hjkmnp-tv-z]{26}$" (default "" .agentrun) }}{{ .agentrun }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "trace_id"
+    template = `{{ if regexMatch "^[0-9a-f]{32}$" (default "" .trace_id) }}{{ .trace_id }}{{ else if .job_id }}{{ printf "replicant.job.trace.v1:%s" .job_id | sha256sum | trunc 32 }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "span_id"
+    template = `{{ if regexMatch "^[0-9a-f]{16}$" (default "" .span_id) }}{{ .span_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "node_key"
+    template = `{{ if regexMatch "^[a-z][a-z0-9_]{0,40}$" (default "" .node_key) }}{{ .node_key }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "cycle"
+    template = `{{ if regexMatch "^[0-9]{1,3}$" (default "" .cycle) }}{{ .cycle }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "activity_id"
+    template = `{{ if regexMatch "^[a-z][a-z0-9_]{0,40}\\.c[0-9]{1,3}\\.n[0-9]{1,3}\\.[a-z][a-z0-9_]{0,30}$" (default "" .activity_id) }}{{ .activity_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "gate_id"
+    template = `{{ if regexMatch "^gate_[0-9a-hjkmnp-tv-z]{26}$" (default "" .gate_id) }}{{ .gate_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "decision_id"
+    template = `{{ if regexMatch "^dec_[0-9a-hjkmnp-tv-z]{26}$" (default "" .decision_id) }}{{ .decision_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "release_bundle_id"
+    template = `{{ if regexMatch "^rb_[0-9a-hjkmnp-tv-z]{26}$" (default "" .release_bundle_id) }}{{ .release_bundle_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "phase"
+    template = `{{ if regexMatch "^[a-z_]{2,32}$" (default "" .phase) }}{{ .phase }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "principal_id"
+    template = `{{ if regexMatch "^(usr_[0-9a-hjkmnp-tv-z]{26}|svc_[a-z][a-z0-9-]{2,40})$" (default "" .principal_id) }}{{ .principal_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "memory_snapshot_id"
+    template = `{{ if regexMatch "^msnap_[0-9a-hjkmnp-tv-z]{26}$" (default "" .memory_snapshot_id) }}{{ .memory_snapshot_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "tenant_value"
+    template = `{{ $t := default "" .tenant_id }}{{ if and (regexMatch "^[a-z][a-z0-9]*(-[a-z0-9]+)*$" $t) (le (len $t) 32) (ge (len $t) 3) }}{{ $t }}{{ else }}replicant-system{{ end }}`
+  }
+
+  stage.template {
+    source   = "workflow_type_value"
+    template = `{{ $w := default "none" .workflow_type }}{{ if has $w (list "bugfix" "feature" "api_change" "docs" "hotfix" "maintenance" "pr_repair" "qa_only" "unrouted") }}{{ $w }}{{ else }}none{{ end }}`
+  }
+
+  stage.template {
+    source   = "role_value"
+    template = `{{ $r := default "none" .role }}{{ if has $r (list "planner" "implementer" "qa" "reviewer" "repair" "takeover" "eval") }}{{ $r }}{{ else }}none{{ end }}`
+  }
+
+  stage.template {
+    source   = "level"
+    template = `{{ $l := lower (default "info" .level) }}{{ if has $l (list "debug" "info" "warn" "error") }}{{ $l }}{{ else if eq $l "warning" }}warn{{ else if has $l (list "fatal" "critical" "panic" "err") }}error{{ else }}info{{ end }}`
+  }
+
+  stage.template {
+    source   = "source_value"
+    template = `{{ if eq (default "" .log_type) "audit" }}audit{{ else }}app{{ end }}`
+  }
+
+  stage.template {
+    source   = "service"
+    template = `{{ default .container .k8s_app }}`
+  }
+
+  stage.structured_metadata {
+    values = {
+      job_id             = "",
+      workflow_id        = "",
+      workflow_run_id    = "",
+      run_id             = "",
+      agentrun           = "",
+      trace_id           = "",
+      span_id            = "",
+      node_key           = "",
+      cycle              = "",
+      activity_id        = "",
+      gate_id            = "",
+      decision_id        = "",
+      release_bundle_id  = "",
+      phase              = "",
+      principal_id       = "",
+      memory_snapshot_id = "",
+      pod                = "",
+    }
+  }
+
+  stage.labels {
+    values = {
+      tenant        = "tenant_value",
+      service       = "service",
+      level         = "level",
+      source        = "source_value",
+      workflow_type = "workflow_type_value",
+      role          = "role_value",
+    }
+  }
+
+  stage.static_labels {
+    values = {
+      env     = sys.env("REPLICANT_ENV"),
+      cluster = sys.env("REPLICANT_CLUSTER"),
+    }
+  }
+
+  stage.label_keep {
+    values = ["env", "cluster", "namespace", "service", "tenant", "workflow_type", "role", "level", "source"]
+  }
+
+  stage.tenant {
+    value = "platform"
+  }
+
+  stage.match {
+    selector = "{source=\"audit\"}"
+
+    stage.tenant {
+      value = "audit"
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Cilium Hubble denied flows (exec cluster; WS-02 XD-02-08). Cilium's static flow exporter writes JSON flows to a
+// node-local file (Cilium Helm hubble.export.static, filePath ${HUBBLE_EXPORT_FILE}, filtered to verdict DROPPED
+// and DENIED) [unverified: exact Helm keys for the pinned Cilium version; WS-02 owns the Cilium config]. Only
+// sandbox-namespace denials are shipped, to Loki tenant "platform", service "hubble".
+// ---------------------------------------------------------------------------------------------------------------
+local.file_match "hubble" {
+  path_targets = [{
+    "__path__" = coalesce(sys.env("HUBBLE_EXPORT_FILE"), "/var/run/cilium/hubble/events.log"),
+  }]
+}
+
+loki.source.file "hubble" {
+  targets    = local.file_match.hubble.targets
+  forward_to = [loki.process.hubble.receiver]
+}
+
+loki.process "hubble" {
+  forward_to = [loki.secretfilter.platform.receiver]
+
+  stage.json {
+    expressions = {
+      verdict   = "flow.verdict",
+      src_ns    = "flow.source.namespace",
+      src_pod   = "flow.source.pod_name",
+      dest_name = "flow.destination_names[0]",
+    }
+  }
+
+  stage.template {
+    source   = "keep"
+    template = `{{ if and (hasPrefix "sbx-" (default "" .src_ns)) (has (default "" .verdict) (list "DROPPED" "DENIED")) }}yes{{ else }}no{{ end }}`
+  }
+
+  stage.drop {
+    source = "keep"
+    value  = "no"
+  }
+
+  stage.template {
+    source   = "tenant_value"
+    template = `{{ trimPrefix "sbx-" .src_ns }}`
+  }
+
+  stage.template {
+    source   = "agentrun"
+    template = `{{ $p := default "" .src_pod }}{{ if regexMatch "^ar-[0-9a-hjkmnp-tv-z]{26}" $p }}{{ substr 0 29 $p }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "run_id"
+    template = `{{ if .agentrun }}{{ printf "run_%s" (trimPrefix "ar-" .agentrun) }}{{ end }}`
+  }
+
+  stage.structured_metadata {
+    values = {
+      agentrun = "",
+      run_id   = "",
+      pod      = "src_pod",
+    }
+  }
+
+  stage.labels {
+    values = {
+      tenant    = "tenant_value",
+      namespace = "src_ns",
+    }
+  }
+
+  stage.static_labels {
+    values = {
+      env           = sys.env("REPLICANT_ENV"),
+      cluster       = sys.env("REPLICANT_CLUSTER"),
+      service       = "hubble",
+      level         = "warn",
+      source        = "app",
+      workflow_type = "none",
+      role          = "none",
+    }
+  }
+
+  stage.label_keep {
+    values = ["env", "cluster", "namespace", "service", "tenant", "workflow_type", "role", "level", "source"]
+  }
+
+  stage.tenant {
+    value = "platform"
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Second-pass secret redaction (defense in depth; the first pass runs at the source).
+// ---------------------------------------------------------------------------------------------------------------
+loki.secretfilter "sandbox" {
+  forward_to         = [loki.write.default.receiver]
+  gitleaks_config    = "/etc/replicant/redaction/gitleaks-replicant.toml"
+  redact_with        = "[REDACTED:$SECRET_NAME:$SECRET_HASH]"
+  origin_label       = "service"
+  processing_timeout = "250ms"
+  label_timed_out    = false
+}
+
+loki.secretfilter "platform" {
+  forward_to         = [loki.write.default.receiver]
+  gitleaks_config    = "/etc/replicant/redaction/gitleaks-replicant.toml"
+  redact_with        = "[REDACTED:$SECRET_NAME:$SECRET_HASH]"
+  origin_label       = "service"
+  processing_timeout = "250ms"
+}
+
+loki.write "default" {
+  endpoint {
+    url                 = sys.env("LOKI_PUSH_URL")
+    batch_size          = "1MiB"
+    batch_wait          = "1s"
+    remote_timeout      = "10s"
+    min_backoff_period  = "500ms"
+    max_backoff_period  = "5m"
+    max_backoff_retries = 20
+
+    tls_config {
+      ca_file   = sys.env("LOKI_TLS_DIR") + "/ca.crt"
+      cert_file = sys.env("LOKI_TLS_DIR") + "/tls.crt"
+      key_file  = sys.env("LOKI_TLS_DIR") + "/tls.key"
+    }
+  }
+
+  external_labels = {}
+}

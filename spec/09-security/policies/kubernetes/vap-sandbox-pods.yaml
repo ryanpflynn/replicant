@@ -1,0 +1,163 @@
+# ValidatingAdmissionPolicy (admissionregistration.k8s.io/v1, GA since Kubernetes 1.30
+# [verified: https://kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/, 2026-10-24]).
+# Applies to every Pod in a namespace labelled replicant.example.com/zone=sandbox (sbx-<tenant>; label
+# schema in tenant-namespace.yaml, XD-FIX-R1-031).
+# This is the backstop if agentrun-controller is buggy or compromised: the controller can only create
+# pods that already satisfy the capability model. Sandbox children are bare Pods (ADR-02-002).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: replicant-sandbox-pod-shape
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        replicant.example.com/zone: sandbox
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  variables:
+    - name: spec
+      expression: "object.spec"
+    - name: allContainers
+      expression: "object.spec.containers + (has(object.spec.initContainers) ? object.spec.initContainers : [])"
+    - name: annotations
+      expression: "has(object.metadata.annotations) ? object.metadata.annotations : {}"
+    - name: podNonRoot
+      expression: "has(object.spec.securityContext) && has(object.spec.securityContext.runAsNonRoot) && object.spec.securityContext.runAsNonRoot == true"
+    - name: podSeccompType
+      expression: "has(object.spec.securityContext) && has(object.spec.securityContext.seccompProfile) ? object.spec.securityContext.seccompProfile.type : ''"
+    # The builder exception exists only on Kata Cloud Hypervisor (replicant-kata-fc is disabled by
+    # policy, and runner-api A-9 allows the builder only on kata-clh), for qa_build pods, and only for
+    # the container named `builder` (R1-222, builder narrowing).
+    - name: isKataClh
+      expression: "has(object.spec.runtimeClassName) && object.spec.runtimeClassName == 'replicant-kata-clh'"
+    - name: isQaBuild
+      expression: "has(object.metadata.labels) && 'replicant.example.com/workload-class' in object.metadata.labels && object.metadata.labels['replicant.example.com/workload-class'] == 'qa_build'"
+    - name: builderAllowed
+      expression: "variables.isKataClh && variables.isQaBuild"
+    - name: nsIsolationGroup
+      expression: "has(namespaceObject.metadata.labels) && 'replicant.example.com/isolation-group' in namespaceObject.metadata.labels ? namespaceObject.metadata.labels['replicant.example.com/isolation-group'] : 'shared-standard'"
+    - name: podIsolationSelector
+      expression: "has(object.spec.nodeSelector) && 'replicant.example.com/isolation-group' in object.spec.nodeSelector ? object.spec.nodeSelector['replicant.example.com/isolation-group'] : ''"
+    - name: podIsolationTolerations
+      expression: "has(object.spec.tolerations) ? object.spec.tolerations.filter(t, has(t.key) && t.key == 'replicant.example.com/isolation-group') : []"
+  validations:
+    - expression: "request.operation != 'CREATE' || request.userInfo.username == 'system:serviceaccount:replicant-runner:agentrun-controller'"
+      message: "Only agentrun-controller may create sandbox pods (bare Pods, ADR-02-002)."
+      reason: Forbidden
+    - expression: "has(variables.spec.runtimeClassName) && variables.spec.runtimeClassName in ['replicant-gvisor', 'replicant-kata-clh', 'replicant-kata-fc']"
+      message: "Sandbox pods must use a replicant isolation RuntimeClass (never runc)."
+    - expression: "!(has(variables.spec.hostNetwork) && variables.spec.hostNetwork) && !(has(variables.spec.hostPID) && variables.spec.hostPID) && !(has(variables.spec.hostIPC) && variables.spec.hostIPC)"
+      message: "Host namespaces are forbidden."
+    - expression: "!has(variables.spec.volumes) || variables.spec.volumes.all(v, !has(v.hostPath))"
+      message: "hostPath volumes are forbidden."
+    - expression: "variables.spec.serviceAccountName == 'sbx-runner' && has(variables.spec.automountServiceAccountToken) && variables.spec.automountServiceAccountToken == false"
+      message: "Sandbox pods run as sbx-runner with no Kubernetes API token."
+    # R1-212: QA service images live under mirror/<upstream path>, replicant images under replicant/<name>;
+    # both are digest-pinned ECR repositories in the image account (XD-FIX-R1-212).
+    - expression: "variables.allContainers.all(c, c.image.matches('^[0-9]{12}[.]dkr[.]ecr[.]us-east-1[.]amazonaws[.]com/(replicant|mirror)/[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*){0,3}@sha256:[0-9a-f]{64}$'))"
+      message: "Images must come from the replicant ECR repositories (replicant/* or mirror/*) and be pinned by digest. The deploy pipeline replaces [0-9]{12} with the image account ID."
+    - expression: "variables.allContainers.all(c, !has(c.securityContext) || !has(c.securityContext.privileged) || c.securityContext.privileged == false)"
+      message: "Privileged containers are forbidden."
+    - expression: "variables.allContainers.all(c, has(c.securityContext) && has(c.securityContext.allowPrivilegeEscalation) && (c.securityContext.allowPrivilegeEscalation == false || (variables.builderAllowed && c.name == 'builder')))"
+      message: "allowPrivilegeEscalation must be false, except for the `builder` container of a kata-clh qa_build pod (rootless BuildKit needs setuid newuidmap/newgidmap inside the guest, XD-02-15)."
+    - expression: "variables.allContainers.all(c, has(c.securityContext) && has(c.securityContext.capabilities) && has(c.securityContext.capabilities.drop) && 'ALL' in c.securityContext.capabilities.drop && (!has(c.securityContext.capabilities.add) || c.securityContext.capabilities.add.all(a, variables.builderAllowed && c.name == 'builder' && a in ['SETUID', 'SETGID'])))"
+      message: "Drop ALL capabilities. Only the `builder` container of a kata-clh qa_build pod may add SETUID/SETGID (rootless builder user namespaces inside the guest)."
+    - expression: "variables.allContainers.all(c, (has(c.securityContext) && has(c.securityContext.runAsNonRoot)) ? c.securityContext.runAsNonRoot == true : variables.podNonRoot)"
+      message: "Containers must run as non-root (pod-level or container-level runAsNonRoot: true; a container may not override it to false)."
+    - expression: "variables.allContainers.all(c, ((has(c.securityContext) && has(c.securityContext.seccompProfile)) ? c.securityContext.seccompProfile.type : variables.podSeccompType) in (variables.builderAllowed && c.name == 'builder' ? ['RuntimeDefault', 'Unconfined'] : ['RuntimeDefault']))"
+      message: "seccomp must be RuntimeDefault, except Unconfined for the `builder` container of a kata-clh qa_build pod (the guest kernel is the boundary)."
+    # R1-222: no runtime-control annotation of any kind; containerd forwards none (containerd-kata-runtime.toml).
+    - expression: "variables.annotations.all(k, !k.startsWith('io.katacontainers.') && !k.startsWith('io.kubernetes.cri.') && !k.startsWith('io.containerd.') && !k.startsWith('dev.gvisor.'))"
+      message: "Runtime-control annotations are forbidden on sandbox pods (Kata annotation escapes CVE-2026-44210, CVE-2026-50540, CVE-2026-86072, GHSA-37rf-pj8c-g5g3; gVisor mount hints are not used)."
+    - expression: "has(object.metadata.labels) && 'replicant.example.com/run-id' in object.metadata.labels && 'replicant.example.com/tenant' in object.metadata.labels && object.metadata.labels['replicant.example.com/tenant'] == namespaceObject.metadata.name.substring(4)"
+      message: "Pod tenant label must match its sbx-<tenant> namespace."
+    - expression: "variables.allContainers.all(c, has(c.resources) && has(c.resources.limits) && 'memory' in c.resources.limits && 'ephemeral-storage' in c.resources.limits)"
+      message: "Every container declares memory and ephemeral-storage limits."
+    - expression: "!has(variables.spec.shareProcessNamespace) || variables.spec.shareProcessNamespace == false"
+      message: "Process namespace sharing is forbidden (sidecars must not see the agent's process tree)."
+    # R1-220: tenant isolation groups. Isolated namespaces must pin their pods to their group's
+    # NodePool; shared namespaces may not select or tolerate any isolation group.
+    - expression: "variables.nsIsolationGroup == 'shared-standard' ? (variables.podIsolationSelector == '' && size(variables.podIsolationTolerations) == 0) : (variables.podIsolationSelector == variables.nsIsolationGroup && variables.podIsolationTolerations.all(t, has(t.value) && t.value == variables.nsIsolationGroup))"
+      message: "Isolation group mismatch: pods in an isolated tenant namespace must select and tolerate exactly that namespace's isolation group; shared tenants may not select any."
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: replicant-sandbox-pod-shape
+spec:
+  policyName: replicant-sandbox-pod-shape
+  validationActions: ["Deny", "Audit"]
+---
+# The per-run child objects (C-CRD §6: Secret ar-<body>-creds, ConfigMap ar-<body>-config, CiliumNetworkPolicy
+# ar-<body>-egress) may be written only by agentrun-controller. Deletion is also allowed to the garbage
+# collector and to the namespace controller, so offboarding's namespace delete completes (R1-219).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: replicant-sandbox-children-writer
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        replicant.example.com/zone: sandbox
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["secrets", "configmaps", "serviceaccounts"]
+      - apiGroups: ["cilium.io"]
+        apiVersions: ["v2"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["ciliumnetworkpolicies"]
+  validations:
+    - expression: "request.userInfo.username == 'system:serviceaccount:replicant-runner:agentrun-controller' || request.userInfo.groups.exists(g, g == 'replicant:platform-deployers') || (request.operation == 'DELETE' && request.userInfo.username in ['system:serviceaccount:kube-system:generic-garbage-collector', 'system:serviceaccount:kube-system:namespace-controller']) || (request.operation != 'DELETE' && request.userInfo.username == 'system:serviceaccount:kube-system:service-account-controller' && request.resource.resource == 'serviceaccounts' && request.name == 'default') || (request.operation != 'DELETE' && request.userInfo.username == 'system:serviceaccount:kube-system:root-ca-cert-publisher' && request.resource.resource == 'configmaps' && request.name == 'kube-root-ca.crt')"
+      # kube-controller-manager's service-account-controller (the namespace's `default` SA) and
+      # root-ca-cert-publisher (`kube-root-ca.crt`) keep working in every sbx-* namespace (R1V-172).
+      message: "Only agentrun-controller writes sandbox child objects; garbage collection and namespace deletion may delete them; kube-controller-manager may maintain the default ServiceAccount and kube-root-ca.crt."
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: replicant-sandbox-children-writer
+spec:
+  policyName: replicant-sandbox-children-writer
+  validationActions: ["Deny", "Audit"]
+---
+# The security response automation may only quarantine nodes: set unschedulable and add taints,
+# never clear either (R1V-059; RBAC grants nodes patch in tenant-namespace.yaml).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: replicant-security-automation-quarantine-only
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["UPDATE"]
+        resources: ["nodes"]
+  matchConditions:
+    - name: is-security-automation
+      expression: "request.userInfo.username == 'system:serviceaccount:replicant-security:security-automation'"
+  validations:
+    - expression: "has(object.spec.unschedulable) && object.spec.unschedulable == true"
+      message: "security-automation may only cordon nodes."
+    - expression: "!has(oldObject.spec.taints) || oldObject.spec.taints.all(t, has(object.spec.taints) && object.spec.taints.exists(n, n.key == t.key && n.effect == t.effect))"
+      message: "security-automation may add taints but never remove them."
+    - expression: "(has(object.metadata.labels) ? object.metadata.labels : {}) == (has(oldObject.metadata.labels) ? oldObject.metadata.labels : {})"
+      message: "security-automation may not change node labels."
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: replicant-security-automation-quarantine-only
+spec:
+  policyName: replicant-security-automation-quarantine-only
+  validationActions: ["Deny"]

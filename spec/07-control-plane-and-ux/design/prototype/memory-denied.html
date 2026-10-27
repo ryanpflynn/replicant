@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Not available · replicant</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body data-page="none" data-admin="false">
+<div class="shell">
+  <aside class="rail" data-auto></aside>
+  <header class="topbar">
+    <div class="crumbs"><span class="mono t2">/admin/memory/candidates/mem_01m5pf4c3h</span></div>
+    <div class="search" role="button"><span>Jump to job, PR, run, bundle…</span><kbd>⌘K</kbd></div>
+    <button class="iconbtn" aria-label="Toggle theme"><svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.25"><circle cx="7" cy="7" r="5"/><path d="M7 2v10a5 5 0 0 0 0-10z" fill="currentColor"/></svg></button>
+  </header>
+  <main class="main">
+    <div class="denied">
+      <div class="caps">403 · memory administration</div>
+      <h1>Memory management is limited to replicant admins</h1>
+      <p class="t2">This page manages Replicant's long-term memory. Only members of the Okta group <span class="mono">replicant-admins</span> can open it, and that is checked on every request. Your account, Priya Raman, is not in that group. This attempt was recorded in the audit log.</p>
+      <p class="t2" style="margin-top:10px">You can still see the memory entries that influenced any job you can open, on the job and its approval page, under <b>Memory used</b>.</p>
+      <div class="row" style="margin-top:16px">
+        <a class="btn" href="approvals.html">Back to approvals</a>
+        <a class="btn ghost" href="#">How memory is curated</a>
+      </div>
+      <div class="codeblock">request   GET /v1/admin/memory/candidates/mem_01m5pf4c3h
+decision  deny · permission memory:admin · reason not_in_admin_group
+audit     aud_01m5pq3x0v7c2h9k4n8b6t1e5r
+time      2026-10-24 10:02:17 UTC</div>
+      <p class="t3 small" style="margin-top:10px">If you think you need access, ask in <span class="mono">#replicant-platform</span>. Group membership is managed in Okta, not here.</p>
+    </div>
+  </main>
+</div>
+<div class="scrim"></div><div class="palette"></div>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,554 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/ws04/memory-governance/v1.json",
+  "title": "Memory governance policy",
+  "description": "WS-04. Admin-configured (D-25) policy that governs the WRITE path and lifecycle automation. Stored versioned in memory.governance_policies (org default under tenant 'replicant-system'; tenant rows may only tighten). It is operational configuration in the sense of ADR-013: it changes which entries are in service (whether), never how an agent uses an entry. Every automatic state transition records the policy version it ran under. Edited only through the admin API; never by tenant admins who are not in the Replicant admin group.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "extraction",
+    "dedupe",
+    "auto_activation",
+    "evidence",
+    "limits",
+    "safety",
+    "anomaly",
+    "lifecycle",
+    "outcomes",
+    "flags",
+    "corrections",
+    "outcome_reports",
+    "queue"
+  ],
+  "properties": {
+    "schema": {
+      "const": "replicant.memory-governance/v1"
+    },
+    "extraction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "min_author_permission",
+        "generalization_threshold",
+        "max_candidates_per_job"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "min_author_permission": {
+          "type": "string",
+          "enum": [
+            "triage",
+            "write",
+            "maintain",
+            "admin"
+          ]
+        },
+        "require_codeowner_for_path_scope": {
+          "type": "boolean",
+          "default": false
+        },
+        "generalization_threshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "max_candidates_per_job": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 50
+        },
+        "accept_agent_proposals": {
+          "type": "boolean",
+          "default": true
+        },
+        "min_identity_link_age_days": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 365
+        },
+        "max_agent_proposals_per_job": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10,
+          "default": 2
+        }
+      }
+    },
+    "dedupe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "judge_prompt"
+      ],
+      "properties": {
+        "judge_prompt": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._/-]{0,199}@[1-9][0-9]*$"
+        },
+        "judge_model": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "contradiction_prompt": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._/-]{0,199}@[1-9][0-9]*$"
+        },
+        "neighbors": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 10
+        }
+      }
+    },
+    "auto_activation": {
+      "description": "Which candidate -> active transitions the system may perform without an admin.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repo_rule",
+        "path_rule",
+        "episode",
+        "procedure",
+        "negative",
+        "preference",
+        "agent_proposal"
+      ],
+      "properties": {
+        "repo_rule": {
+          "$ref": "#/$defs/auto_rule"
+        },
+        "path_rule": {
+          "$ref": "#/$defs/auto_rule"
+        },
+        "episode": {
+          "$ref": "#/$defs/auto_rule"
+        },
+        "procedure": {
+          "$ref": "#/$defs/auto_rule"
+        },
+        "negative": {
+          "$ref": "#/$defs/auto_rule"
+        },
+        "preference": {
+          "$ref": "#/$defs/auto_rule"
+        },
+        "agent_proposal": {
+          "$ref": "#/$defs/auto_rule"
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "service_group",
+        "tenant",
+        "org"
+      ],
+      "properties": {
+        "service_group": {
+          "$ref": "#/$defs/evidence_rule"
+        },
+        "tenant": {
+          "$ref": "#/$defs/evidence_rule"
+        },
+        "org": {
+          "$ref": "#/$defs/evidence_rule"
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active_per_repo_soft",
+        "active_per_repo_hard",
+        "active_per_scope"
+      ],
+      "properties": {
+        "active_per_repo_soft": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "active_per_repo_hard": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "active_per_scope": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "org": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "tenant": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "service_group": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "repo": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "path": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "candidate_ttl_days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 180
+        }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ruleset_version",
+        "url_allowlist",
+        "classifier_prompt"
+      ],
+      "properties": {
+        "ruleset_version": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "url_allowlist": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9.*-]+(/[A-Za-z0-9._*/-]*)?$"
+          }
+        },
+        "classifier_prompt": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._/-]{0,199}@[1-9][0-9]*$"
+        },
+        "block_on_classifier": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.5
+        }
+      }
+    },
+    "anomaly": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "author_candidates_per_day",
+        "tenant_candidates_per_hour",
+        "on_breach"
+      ],
+      "properties": {
+        "author_candidates_per_day": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "author_zscore": {
+          "type": "number",
+          "minimum": 1,
+          "default": 3
+        },
+        "tenant_candidates_per_hour": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "cross_repo_burst_repos": {
+          "type": "integer",
+          "minimum": 2,
+          "default": 4
+        },
+        "on_breach": {
+          "type": "string",
+          "enum": [
+            "alert_only",
+            "restrict_author",
+            "pause_auto_activation",
+            "quarantine_window"
+          ]
+        }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "probation_days",
+        "staleness_review_days",
+        "episode_retention_days"
+      ],
+      "properties": {
+        "probation_days": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 90
+        },
+        "probation_min_exposures": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 10
+        },
+        "staleness_review_days": {
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 730
+        },
+        "episode_retention_days": {
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 730
+        },
+        "suspend_on_reviewer_contradiction": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "outcomes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "auto_disable_enabled",
+        "min_exposures",
+        "harm_probability"
+      ],
+      "properties": {
+        "auto_disable_enabled": {
+          "type": "boolean"
+        },
+        "min_exposures": {
+          "type": "integer",
+          "minimum": 5
+        },
+        "min_holdout": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 5
+        },
+        "harm_probability": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 0.999
+        },
+        "ineffective_repeat_rate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.3
+        }
+      }
+    },
+    "flags": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sla_hours",
+        "probation_disable_distinct_flaggers",
+        "per_principal_per_day"
+      ],
+      "properties": {
+        "sla_hours": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 720
+        },
+        "probation_disable_distinct_flaggers": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "per_principal_per_day": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "agent_flags_to_disable": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 2
+        }
+      }
+    },
+    "corrections": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "suspend_on_request",
+        "sla_hours"
+      ],
+      "properties": {
+        "suspend_on_request": {
+          "type": "boolean"
+        },
+        "sla_hours": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 720
+        },
+        "allow_codeowner": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "outcome_reports": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revert_window_days",
+        "apply_on"
+      ],
+      "properties": {
+        "revert_window_days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 180
+        },
+        "apply_on": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "reverted",
+              "wrong_fix",
+              "regression"
+            ]
+          }
+        },
+        "confidence_beta_increment": {
+          "type": "number",
+          "minimum": 0,
+          "default": 2
+        }
+      }
+    },
+    "queue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cluster_similarity",
+        "age_slo_days_p90",
+        "expiry_notice_days"
+      ],
+      "properties": {
+        "cluster_similarity": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 1
+        },
+        "age_slo_days_p90": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 90
+        },
+        "expiry_notice_days": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 30
+        },
+        "max_open_candidates_per_tenant": {
+          "type": "integer",
+          "minimum": 10
+        }
+      }
+    }
+  },
+  "$defs": {
+    "auto_rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "require_pr_merged": {
+          "type": "boolean",
+          "default": true
+        },
+        "require_fix_in_merged_diff": {
+          "type": "boolean",
+          "default": true
+        },
+        "min_generalization": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "min_author_permission": {
+          "type": "string",
+          "enum": [
+            "triage",
+            "write",
+            "maintain",
+            "admin"
+          ]
+        },
+        "require_codeowner": {
+          "type": "boolean",
+          "default": false
+        },
+        "quiet_period_hours": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 720,
+          "default": 24
+        }
+      }
+    },
+    "evidence_rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "min_independent_occurrences",
+        "min_distinct_authors",
+        "min_distinct_repos",
+        "curator_approvals"
+      ],
+      "properties": {
+        "min_independent_occurrences": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "min_distinct_authors": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "min_distinct_repos": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "min_distinct_tenants": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "curator_approvals": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2
+        },
+        "require_eval_pass": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "method": "listed",
+  "base_count": 476,
+  "head_count": 476,
+  "tests_removed": [],
+  "tests_removed_total": 0,
+  "tests_skipped_added": ["go:github.com/acme-payments/ledger-api/internal/ledger.TestApplyRefund/partial_eur_fx_fee"],
+  "tests_skipped_added_total": 1,
+  "deleted_test_files": [],
+  "skip_markers_added": [{"file": "internal/ledger/ledger_test.go", "line": 171, "marker": "t.Skip"}],
+  "deleted_or_skipped": true
+}

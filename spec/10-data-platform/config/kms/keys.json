@@ -1,0 +1,116 @@
+{
+  "comment": "Keys WS-10 creates (IaC input). create = kms:CreateKey parameters (validated against botocore); policy_file = key policy passed as Policy.",
+  "keys": [
+    {
+      "alias": "alias/replicant/prod/legal",
+      "policy_file": "../../../09-security/policies/iam/kms-key-policy.legal.json",
+      "create": {
+        "Description": "replicant prod legal bucket (CCR-10-10)",
+        "KeyUsage": "ENCRYPT_DECRYPT",
+        "KeySpec": "SYMMETRIC_DEFAULT",
+        "MultiRegion": false,
+        "Tags": [
+          {
+            "TagKey": "replicant-key-class",
+            "TagValue": "legal"
+          },
+          {
+            "TagKey": "replicant-env",
+            "TagValue": "prod"
+          }
+        ]
+      },
+      "rotation": true
+    },
+    {
+      "alias": "alias/replicant/prod/ops",
+      "policy_file": "../../../09-security/policies/iam/kms-key-policy.ops.json",
+      "create": {
+        "Description": "replicant prod ops bucket (CCR-09-10)",
+        "KeyUsage": "ENCRYPT_DECRYPT",
+        "KeySpec": "SYMMETRIC_DEFAULT",
+        "MultiRegion": false,
+        "Tags": [
+          {
+            "TagKey": "replicant-key-class",
+            "TagValue": "ops"
+          },
+          {
+            "TagKey": "replicant-env",
+            "TagValue": "prod"
+          }
+        ]
+      },
+      "rotation": true
+    },
+    {
+      "alias": "alias/replicant/prod/tenant/replicant-system",
+      "policy_file": "../../../09-security/policies/iam/kms-key-policy.tenant.json",
+      "create": {
+        "Description": "replicant prod platform tenant replicant-system (XD-FIX-R1-214)",
+        "KeyUsage": "ENCRYPT_DECRYPT",
+        "KeySpec": "SYMMETRIC_DEFAULT",
+        "MultiRegion": true,
+        "Tags": [
+          {
+            "TagKey": "replicant-key-class",
+            "TagValue": "tenant"
+          },
+          {
+            "TagKey": "replicant-tenant",
+            "TagValue": "replicant-system"
+          },
+          {
+            "TagKey": "replicant-env",
+            "TagValue": "prod"
+          }
+        ]
+      },
+      "rotation": true,
+      "replica_region": "us-west-2"
+    },
+    {
+      "alias": "alias/replicant/prod/image-signing",
+      "policy_file": null,
+      "create": {
+        "Description": "replicant prod cosign image signing (XD-FIX-R1-224)",
+        "KeyUsage": "SIGN_VERIFY",
+        "KeySpec": "ECC_NIST_P256",
+        "MultiRegion": false,
+        "Tags": [
+          {
+            "TagKey": "replicant-key-class",
+            "TagValue": "image-signing"
+          },
+          {
+            "TagKey": "replicant-env",
+            "TagValue": "prod"
+          }
+        ]
+      },
+      "rotation": false,
+      "note": "WS-09 writes the key policy (sign: image CI role only; GetPublicKey: IaC). Asymmetric keys cannot rotate automatically."
+    },
+    {
+      "alias": "alias/replicant/prod/quarantine",
+      "policy_file": "quarantine-key-policy.json",
+      "create": {
+        "Description": "replicant prod S3 default-encryption quarantine key",
+        "KeyUsage": "ENCRYPT_DECRYPT",
+        "KeySpec": "SYMMETRIC_DEFAULT",
+        "MultiRegion": false,
+        "Tags": [
+          {
+            "TagKey": "replicant-key-class",
+            "TagValue": "quarantine"
+          },
+          {
+            "TagKey": "replicant-env",
+            "TagValue": "prod"
+          }
+        ]
+      },
+      "rotation": true
+    }
+  ]
+}

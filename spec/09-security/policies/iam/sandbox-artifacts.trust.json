@@ -1,0 +1,54 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "OnlyRunnerApiMayVendRunCredentials",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::222222222222:role/replicant-prod-runner-api"
+      },
+      "Action": "sts:AssumeRole",
+      "Condition": {
+        "StringLike": {
+          "sts:RoleSessionName": "run_*",
+          "aws:RequestTag/replicant-tenant": "?*",
+          "aws:RequestTag/replicant-job": "job_*",
+          "aws:RequestTag/replicant-run": "run_*"
+        },
+        "NumericLessThanEquals": {
+          "sts:DurationSeconds": "3600"
+        }
+      }
+    },
+    {
+      "Sid": "RunnerApiMustTagSessions",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::222222222222:role/replicant-prod-runner-api"
+      },
+      "Action": "sts:TagSession",
+      "Condition": {
+        "ForAllValues:StringEquals": {
+          "aws:TagKeys": [
+            "replicant-tenant",
+            "replicant-job",
+            "replicant-run"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "RunnerApiSetsRunIdAsSourceIdentity",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::222222222222:role/replicant-prod-runner-api"
+      },
+      "Action": "sts:SetSourceIdentity",
+      "Condition": {
+        "StringLike": {
+          "sts:SourceIdentity": "run_*"
+        }
+      }
+    }
+  ]
+}

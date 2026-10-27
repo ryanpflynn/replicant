@@ -1,0 +1,80 @@
+# PII rules (WS-08), ruleset redact-2026.10.1. Applied by the sandbox entrypoint and shipper after the
+# gitleaks pass, and by the core OTLP gateway's OTTL redaction (patterns marked otlp: true).
+# Detection-only rules never replace a value; they increment replicant_redaction_findings_total.
+# Replacement format: "[REDACTED:<id>]". PII is never hashed (low-entropy values are brute-forceable).
+schema: replicant.pii-rules/v1
+ruleset_version: redact-2026.10.1
+rules:
+  - id: email
+    regex: '(?i)\b[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,253}\.[A-Z]{2,24}\b'
+    allow:
+      - '(?i)^(noreply|no-reply|donotreply)@'
+      - '(?i)@users\.noreply\.github\.com$'
+      - '(?i)@example\.(com|org|net)$'
+      - '(?i)@replicant\.example\.com$'
+    action: replace
+    otlp: true
+  - id: payment-card
+    # 13-19 digits with optional single separators, confirmed by a Luhn check in code
+    regex: '\b(?:\d[ -]?){12,18}\d\b'
+    validator: luhn
+    action: replace
+    otlp: true
+  - id: us-ssn
+    # RE2 has no lookahead: the area/group/serial exclusions (000, 666, 9xx; 00; 0000) are in the validator
+    regex: '\b\d{3}-\d{2}-\d{4}\b'
+    validator: us_ssn
+    action: replace
+    otlp: true
+  - id: phone-e164
+    regex: '\+[1-9]\d{7,14}\b'
+    action: replace
+    otlp: false
+  - id: phone-nanp
+    regex: '\(?\b[2-9]\d{2}\)?[ .-]\d{3}[ .-]\d{4}\b'
+    context_keywords: [phone, tel, mobile, cell, call, sms]
+    context_window: 32
+    action: replace
+    otlp: false
+  - id: iban
+    regex: '\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{4}){3,7}(?:[ ]?[A-Z0-9]{1,3})?\b'
+    validator: iban_mod97
+    action: replace
+    otlp: false
+  - id: ipv4-public
+    regex: '\b(?:\d{1,3}\.){3}\d{1,3}\b'
+    validator: public_ipv4   # RFC 1918, loopback, link-local, CGNAT and documentation ranges are left as-is
+    action: detect_only
+    otlp: false
+# Out of scope (documented limitation): personal names, postal addresses, free-form health or HR data.
+# These cannot be detected reliably by pattern; containment relies on retention and access control.
+entropy:
+  # Generic high-entropy token detector for strings the gitleaks rules do not name.
+  token_regex: '[A-Za-z0-9+/_=-]{24,512}'
+  min_shannon_bits_per_char:
+    base64ish: 4.3
+    hex: 3.5
+  require_context_keywords: [key, secret, token, password, passwd, pwd, credential, auth, bearer, apikey, api_key, private]
+  context_window: 40
+  allow_regexes:
+    - '^(?:job|run|gate|dec|msg|act|ntc|rb|mem|msnap|usr|jrq|aud|eval|gtask|rtk|tko|leak)_[0-9a-hjkmnp-tv-z]{26}$'
+    - '^[0-9a-f]{40}$'
+    - '^[0-9a-f]{64}$'
+    - '^sha(256|512)[-:]'
+  action: replace
+  replacement: '[REDACTED:high-entropy:{fp12}]'
+known_values:
+  # Exact-match redaction of credentials the entrypoint itself holds; strongest rule, never misses.
+  sources:
+    - run_token            # file at $REPLICANT_RUN_TOKEN_FILE, re-read on every refresh
+    - aws_session          # AccessKeyId, SecretAccessKey, Token from the sandbox credentials endpoint
+    - gateway_credential   # whatever the agent definition's gateway block injects (WS-03)
+    - secret_env           # environment variables the environment definition marks secret: true
+  encodings: [raw, base64_std, base64_url, url_percent, json_escaped]
+  min_length: 8
+  replacement: '[REDACTED:known-credential:{fp12}]'
+fingerprint:
+  # {fp12} = first 12 hex chars of sha256(secret value). Lets responders locate every occurrence of a
+  # known leaked secret by computing its fingerprint, without writing the secret into any query or ticket.
+  algorithm: sha256
+  hex_chars: 12

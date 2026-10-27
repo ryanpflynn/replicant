@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/orchestration/gate-routing/v1.json",
+  "title": "GateRouting (WS-01 normalized view of WS-07 gate_rules)",
+  "description": "Result of activity gates.resolve_routing (WS-07 logic; XD-07-01). WS-07 evaluates its policy-gate-rules schema (pinned in the job's bundle) and approval_channels against deterministic job facts and returns this normalized, workflow-ready shape. Durations are integer seconds so workflow timers need no ISO 8601 parsing. Deterministic: same bundle and facts give the same result; the result is recorded in history.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "gate_kind", "required", "rule_id", "channels", "eligible", "timing"],
+  "properties": {
+    "schema": {"const": "replicant.gate-routing/v1"},
+    "gate_kind": {"enum": ["plan_approval", "publish_approval", "clarification", "budget_extension", "bundle_migration"]},
+    "required": {"type": "boolean"},
+    "rule_id": {"description": "The gate_rules rule that matched (or `none`).", "type": "string", "maxLength": 128},
+    "reasons": {"type": "array", "maxItems": 20, "items": {"type": "string", "maxLength": 128}},
+    "channels": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["ui", "slack", "github", "cli"]}},
+    "eligible": {
+      "description": "Copied into GateView.eligible. requester_may_decide for budget_extension is true only when amount_usd <= budgets.extension.requesterSelfApproveMaxUsd (default 0; WS-09 G-07).",
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "okta_groups": {"type": "array", "maxItems": 20, "items": {"type": "string", "maxLength": 200}},
+        "principals": {"type": "array", "maxItems": 50, "items": {"type": "string", "pattern": "^(usr_[0-9a-hjkmnp-tv-z]{26}|svc_[a-z][a-z0-9-]{2,40})$"}},
+        "min_repo_permission": {"enum": ["admin", "maintain", "write", "triage", "read"]},
+        "requester_may_decide": {"type": "boolean"}
+      }
+    },
+    "timing": {
+      "type": "object", "additionalProperties": false, "required": ["reminder_seconds", "escalation_seconds", "expiry_seconds", "on_expiry"],
+      "properties": {
+        "reminder_seconds": {"description": "Offsets from opened_at.", "type": "array", "maxItems": 10, "items": {"type": "integer", "minimum": 60}},
+        "reminder_repeat_seconds": {"type": "integer", "minimum": 3600},
+        "escalation_seconds": {"type": "array", "maxItems": 5, "items": {"type": "integer", "minimum": 300}},
+        "expiry_seconds": {"type": "integer", "minimum": 60, "maximum": 2592000},
+        "on_expiry": {"enum": ["expire", "decline", "keep_open_and_alert"]}
+      }
+    },
+    "reapprove_after_rebase": {"enum": ["on_conflict_or_risk_change", "always"]},
+    "amount_usd": {"description": "budget_extension only: the extension being requested.", "type": "number", "minimum": 0}
+  }
+}

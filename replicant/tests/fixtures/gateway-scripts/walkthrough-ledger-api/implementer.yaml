@@ -1,0 +1,35 @@
+# replicant.gateway-script/v1 (WS-03 gateway.md §8.2): the canned ledger-api implementer for the M1 walkthrough.
+# Selected by the run policy stub {root: scripts|tests, set: walkthrough-ledger-api, key: implementer.c<cycle>.n<ordinal>}
+# (the shim falls back from the full key to "implementer"), or by REPLICANT_GATEWAY_SCRIPT_DEFAULT_SET + the run role.
+# Bug and fix: docs/v0/INTERFACES-LOG.md PLATFORM-01. ${cwd} is the CLI's working directory (the repo checkout),
+# read from the "Primary working directory" line of Claude Code's system prompt.
+schema: replicant.gateway-script/v1
+name: walkthrough-ledger-api-implementer
+protocol: anthropic_messages
+finish: "Done. The FX fee reversal is now prorated; go test ./... passes."
+turns:
+  # 1. Read the file (Claude Code's Edit tool refuses files that were not Read first).
+  - expect: {tools: [Read, Edit, Bash]}
+    respond:
+      text: "I'll look at ApplyRefund in the ledger package."
+      tool_use: {name: Read, input: {file_path: "${cwd}/internal/ledger/ledger.go"}}
+      usage: {input_tokens: 9000, output_tokens: 60}
+  # 2. Apply the one-line fix.
+  - respond:
+      text: "ApplyRefund reverses the whole FX fee. I'll prorate it with the existing Prorate helper."
+      tool_use:
+        name: Edit
+        input:
+          file_path: "${cwd}/internal/ledger/ledger.go"
+          old_string: "\t\tfxReversal := c.FXFeeMinor\n"
+          new_string: "\t\tfxReversal := Prorate(c.FXFeeMinor, refundMinor, c.AmountMinor)\n"
+      usage: {input_tokens: 11000, output_tokens: 120}
+  # 3. Run the tests.
+  - respond:
+      tool_use: {name: Bash, input: {command: "cd ${cwd} && go vet ./... && go test -count=1 ./...", description: "Run vet and the unit tests"}}
+      usage: {input_tokens: 11500, output_tokens: 50}
+  # 4. Report (the CLI's --json-schema StructuredOutput tool); the shim then answers the tool_result with `finish`.
+  - respond:
+      text: "The partial-refund FX fee reversal is now prorated with Prorate (half-even, integer arithmetic)."
+      structured_output_from: implementer.agent_report.json
+      usage: {input_tokens: 12000, output_tokens: 200}

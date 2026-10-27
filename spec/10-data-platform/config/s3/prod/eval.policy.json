@@ -1,0 +1,132 @@
+{
+  "Version": "2012-10-17",
+  "Id": "acme-replicant-prod-eval-policy",
+  "Statement": [
+    {
+      "Sid": "DenyNonTls",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-eval",
+        "arn:aws:s3:::acme-replicant-prod-eval/*"
+      ],
+      "Condition": {
+        "Bool": {
+          "aws:SecureTransport": "false"
+        }
+      }
+    },
+    {
+      "Sid": "DenyOutsideOrganization",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-eval",
+        "arn:aws:s3:::acme-replicant-prod-eval/*"
+      ],
+      "Condition": {
+        "StringNotEquals": {
+          "aws:PrincipalOrgID": "o-acmereplicant1"
+        },
+        "Bool": {
+          "aws:PrincipalIsAWSService": "false"
+        }
+      }
+    },
+    {
+      "Sid": "DenyNonKmsEncryption",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-eval/*",
+      "Condition": {
+        "StringNotEqualsIfExists": {
+          "s3:x-amz-server-side-encryption": "aws:kms"
+        }
+      }
+    },
+    {
+      "Sid": "DenyKeysOutsideEnvironmentKeySet",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-eval/*",
+      "Condition": {
+        "ArnNotLikeIfExists": {
+          "s3:x-amz-server-side-encryption-aws-kms-key-id": "arn:aws:kms:us-east-1:111111111111:key/*"
+        }
+      }
+    },
+    {
+      "Sid": "DenyUnknownRetentionClass",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-eval/*",
+      "Condition": {
+        "StringNotEqualsIfExists": {
+          "s3:RequestObjectTag/replicant-retention": [
+            "r1y",
+            "perm"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "NoBucketConfigChangesExceptPlatformPipeline",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:PutBucketPolicy",
+        "s3:DeleteBucketPolicy",
+        "s3:PutBucketAcl",
+        "s3:PutObjectAcl",
+        "s3:PutBucketOwnershipControls",
+        "s3:PutLifecycleConfiguration",
+        "s3:PutBucketVersioning",
+        "s3:PutEncryptionConfiguration",
+        "s3:PutReplicationConfiguration",
+        "s3:PutBucketObjectLockConfiguration",
+        "s3:PutBucketNotification"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-eval",
+        "arn:aws:s3:::acme-replicant-prod-eval/*"
+      ],
+      "Condition": {
+        "ArnNotLike": {
+          "aws:PrincipalArn": "arn:aws:iam::111111111111:role/replicant-prod-platform-deployer"
+        }
+      }
+    },
+    {
+      "Sid": "NobodyBypassesRetention",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:BypassGovernanceRetention",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-eval/*"
+    },
+    {
+      "Sid": "DeletesOnlyByNamedRoles",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-eval/*",
+      "Condition": {
+        "ArnNotLike": {
+          "aws:PrincipalArn": [
+            "arn:aws:iam::111111111111:role/replicant-prod-tenant-offboarding"
+          ]
+        }
+      }
+    }
+  ]
+}

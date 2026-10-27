@@ -1,0 +1,98 @@
+# Tempo 3.1.x configuration, production, MONOLITHIC mode (-target=all, no Kafka). Owner WS-08.
+# StatefulSet tempo (1 replica, 100 GiB gp3 PVC for WAL/live-store) in core namespace observability.
+# Why monolithic and when to change: ADR-005 and platform.md section 3.3. Validated by starting Tempo 3.1.1 with
+# this file (local filesystem backend substituted) on 2026-10-24.
+target: all
+multitenancy_enabled: true          # tenant "replicant" (Alloy sets X-Scope-OrgID); room for a future split
+
+server:
+  http_listen_port: 3200
+  grpc_listen_port: 9095
+  log_level: warn
+  grpc_server_max_recv_msg_size: 16777216
+
+memory:
+  automemlimit_enabled: true
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+
+metrics_generator:
+  registry:
+    external_labels:
+      source: tempo
+  storage:
+    path: /var/tempo/generator/wal
+    remote_write:
+      - url: http://mimir-distributor.observability.svc.cluster.local:8080/api/v1/push
+        headers:
+          X-Scope-OrgID: replicant
+        send_exemplars: true
+  processor:
+    service_graphs:
+      # Service graph edges feed ecosystem-indexer (WS-04 call graph, D-13) and the Replicant overview dashboard.
+      dimensions:
+        - replicant.tenant_id
+    span_metrics:
+      dimensions:
+        - replicant.role
+        - replicant.node_key
+
+storage:
+  trace:
+    backend: s3
+    s3:
+      bucket: ${TEMPO_BUCKET}
+      endpoint: s3.${AWS_REGION}.amazonaws.com
+      region: ${AWS_REGION}
+    wal:
+      path: /var/tempo/wal
+    block:
+      version: vParquet5
+    pool:
+      max_workers: 200
+      queue_depth: 20000
+
+backend_scheduler:
+  provider:
+    retention:
+      interval: 1h
+    compaction:
+      compaction:
+        block_retention: 720h       # 30 d (platform.md section 4)
+        compaction_window: 1h
+
+overrides:
+  defaults:
+    ingestion:
+      rate_limit_bytes: 30000000
+      burst_size_bytes: 60000000
+      max_traces_per_user: 200000
+    global:
+      # One trace per job (C-IDS T-1) accumulates for up to 30 days; a typical job is about 3.4 MB of spans
+      # (platform.md section 4). The 5 MB default would reject or partially drop long jobs.
+      max_bytes_per_trace: 50000000
+    storage:
+      parquet_dedicated_columns:
+        - {name: replicant.job_id, type: string, scope: span}
+        - {name: replicant.tenant_id, type: string, scope: span}
+        - {name: replicant.run_id, type: string, scope: span}
+        - {name: replicant.node_key, type: string, scope: span}
+        - {name: replicant.role, type: string, scope: span}
+        - {name: replicant.gate_id, type: string, scope: span}
+        - {name: replicant.release_bundle_id, type: string, scope: span}
+        - {name: replicant.workflow_id, type: string, scope: span}
+        - {name: replicant.env, type: string, scope: resource}
+        - {name: replicant.tenant_id, type: string, scope: resource}
+        - {name: replicant.run_id, type: string, scope: resource}
+        - {name: k8s.namespace.name, type: string, scope: resource}
+    metrics_generator:
+      processors: [service-graphs, span-metrics]
+      max_active_series: 60000
+
+usage_report:
+  reporting_enabled: false

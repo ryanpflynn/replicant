@@ -1,0 +1,689 @@
+# Contract C-CRD v3.0.0 (WS-00). 3.0.0 (breaking, CCR-ORCH-02): product rename to Replicant. API group `replicant.example.com`, CRD `agentruns.replicant.example.com`, labels and annotations `replicant.example.com/*`, priority classes `replicant-run-*`.
+# 2.4.0: 2.4.0 (additive, wave 1): priorityClassName replicant-eval (CCR-02-06); security-cancel terminal reason rule (CCR-09-09, semantics in agentrun-crd.md).
+# 2.3.1: 2.3.1 (fix, R2-002): spec-digest also excludes trace_context; spec.traceContext keeps the first create's value.
+# 2.3.0: 2.3.0 (additive): optional immutable spec.workflowType (CCR-08-03).
+# 2.2.0: 2.2.0 (additive): failure reason DefinitionUnavailable (CCR-02-05).
+# 2.1.0: 2.1.0 (additive): failure reason EnvironmentSetupFailed (CCR-03-01).
+# 2.0.0: 2.0.0 (breaking): required immutable spec.runGrant (CCR-09-02); cancelReason 'security' and failure reason SecurityViolation (CCR-09-04).
+# AgentRun CustomResourceDefinition (D-05).
+# Semantics, phase state machine, condition types/reasons, and the failure-reason table: agentrun-crd.md.
+# Implemented by agentrun-controller (WS-02, kubebuilder/controller-runtime). Created only by the Runner API.
+# Requires Kubernetes >= 1.32 (CEL validation GA 1.29; selectableFields GA 1.32).
+#   [verified: https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definitions/, 2026-10-24]
+# Field naming: camelCase; Runner API RunSpec snake_case fields map 1:1 (agentrun-crd.md section 2).
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agentruns.replicant.example.com
+  annotations:
+    replicant.example.com/contract: C-CRD
+    replicant.example.com/contract-version: 3.0.0
+spec:
+  group: replicant.example.com
+  scope: Namespaced
+  names:
+    plural: agentruns
+    singular: agentrun
+    kind: AgentRun
+    listKind: AgentRunList
+    shortNames:
+      - ar
+    categories:
+      - replicant
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      selectableFields:
+        - jsonPath: .spec.tenantId
+        - jsonPath: .spec.jobId
+        - jsonPath: .spec.role
+        - jsonPath: .status.phase
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Role
+          type: string
+          jsonPath: .spec.role
+        - name: Runtime
+          type: string
+          jsonPath: .spec.runtimeClassName
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Succeeded")].reason
+        - name: Job
+          type: string
+          jsonPath: .spec.jobId
+          priority: 1
+        - name: Tenant
+          type: string
+          jsonPath: .spec.tenantId
+          priority: 1
+        - name: Started
+          type: date
+          jsonPath: .status.agentStartedAt
+          priority: 1
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          x-kubernetes-validations:
+            - rule: "self.metadata.name == 'ar-' + self.spec.runId.substring(4)"
+              message: "metadata.name must be 'ar-' followed by the 26-character body of spec.runId"
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              description: Desired run. Immutable after creation except cancelRequested (false -> true only) and cancelReason.
+              required:
+                - tenantId
+                - jobId
+                - runId
+                - workflowId
+                - logicalActivityId
+                - idempotencyKey
+                - role
+                - workloadClass
+                - releaseBundleId
+                - agentDefinition
+                - environmentDefinition
+                - resourceProfile
+                - repo
+                - inputs
+                - artifacts
+                - runtimeClassName
+                - resources
+                - workspace
+                - networkProfile
+                - priorityClassName
+                - timeouts
+                - callback
+                - runGrant
+              x-kubernetes-validations:
+                - rule: "!oldSelf.cancelRequested || self.cancelRequested"
+                  message: cancelRequested cannot be reverted to false
+                - rule: "has(self.additionalRepos) == has(oldSelf.additionalRepos) && has(self.limits) == has(oldSelf.limits) && has(self.steering) == has(oldSelf.steering) && has(self.traceContext) == has(oldSelf.traceContext) && has(self.workflowType) == has(oldSelf.workflowType)"
+                  message: optional spec fields cannot be added or removed after creation
+                - rule: "self.workflowId.startsWith(self.jobId)"
+                  message: workflowId must start with jobId
+                - rule: "self.callback.workflowId == self.workflowId"
+                  message: callback.workflowId must equal workflowId
+                - rule: "self.idempotencyKey == 'ik1:' + self.workflowId + ':' + self.logicalActivityId"
+                  message: idempotencyKey must be ik1:<workflowId>:<logicalActivityId>
+                - rule: "self.artifacts.artifactsPrefix.endsWith('/tenants/' + self.tenantId + '/jobs/' + self.jobId + '/runs/' + self.runId + '/') && self.artifacts.transcriptsPrefix.endsWith('/tenants/' + self.tenantId + '/jobs/' + self.jobId + '/runs/' + self.runId + '/') && self.artifacts.sessionPrefix.endsWith('/tenants/' + self.tenantId + '/jobs/' + self.jobId + '/runs/' + self.runId + '/')"
+                  message: artifact prefixes must be the canonical run prefixes for (tenantId, jobId, runId)
+                - rule: "self.inputs.manifestUri.startsWith(self.artifacts.artifactsPrefix + 'inputs/')"
+                  message: inputs.manifestUri must be under <artifactsPrefix>inputs/
+                - rule: "self.workspace.backing != 'genericEphemeralVolume' || has(self.workspace.storageClassName)"
+                  message: workspace.storageClassName is required when backing is genericEphemeralVolume
+              properties:
+                tenantId:
+                  type: string
+                  minLength: 3
+                  maxLength: 32
+                  pattern: '^[a-z][a-z0-9]*(-[a-z0-9]+)*$'
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                jobId:
+                  type: string
+                  maxLength: 30
+                  pattern: '^job_[0-9a-hjkmnp-tv-z]{26}$'
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                runId:
+                  type: string
+                  maxLength: 30
+                  pattern: '^run_[0-9a-hjkmnp-tv-z]{26}$'
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                workflowId:
+                  type: string
+                  maxLength: 120
+                  pattern: '^job_[0-9a-hjkmnp-tv-z]{26}(:[a-z][a-z0-9_]{1,30}:[1-9][0-9]*)?$'
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                logicalActivityId:
+                  type: string
+                  maxLength: 120
+                  pattern: '^[a-z][a-z0-9_]{0,40}\.c[0-9]{1,3}\.n[0-9]{1,3}\.[a-z][a-z0-9_]{0,30}$'
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                idempotencyKey:
+                  type: string
+                  maxLength: 255
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                role:
+                  type: string
+                  enum: [planner, implementer, qa, reviewer, repair, takeover, eval]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                workloadClass:
+                  type: string
+                  enum: [coding, qa_build, review, utility]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                workflowType:
+                  type: string
+                  description: Optional (CCR-08-03). Job workflow type; the controller copies it to pod label replicant.example.com/workflow-type and env REPLICANT_WORKFLOW_TYPE.
+                  enum: [bugfix, feature, api_change, docs, hotfix, maintenance, pr_repair, qa_only, unrouted]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                releaseBundleId:
+                  type: string
+                  maxLength: 29
+                  pattern: '^rb_[0-9a-hjkmnp-tv-z]{26}$'
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                agentDefinition:
+                  type: object
+                  description: Pinned agent definition. The controller fetches the definition blob by digest from the registry blob store and verifies it.
+                  required: [name, version, digest]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                  properties:
+                    name:
+                      type: string
+                      maxLength: 63
+                      pattern: '^[a-z][a-z0-9]*(-[a-z0-9]+)*$'
+                    version:
+                      type: integer
+                      format: int64
+                      minimum: 1
+                    digest:
+                      type: string
+                      maxLength: 71
+                      pattern: '^sha256:[0-9a-f]{64}$'
+                environmentDefinition:
+                  type: object
+                  required: [name, version, digest]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                  properties:
+                    name:
+                      type: string
+                      maxLength: 63
+                      pattern: '^[a-z][a-z0-9]*(-[a-z0-9]+)*$'
+                    version:
+                      type: integer
+                      format: int64
+                      minimum: 1
+                    digest:
+                      type: string
+                      maxLength: 71
+                      pattern: '^sha256:[0-9a-f]{64}$'
+                resourceProfile:
+                  type: string
+                  description: Name of the profile inside the environment definition that resources/workspace were resolved from (informational).
+                  maxLength: 63
+                  pattern: '^[a-z][a-z0-9-]{0,62}$'
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                repo:
+                  type: object
+                  required: [provider, host, owner, name, repoId, baseSha]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                  properties:
+                    provider:
+                      type: string
+                      enum: [github, gitea]
+                    host:
+                      type: string
+                      maxLength: 255
+                    owner:
+                      type: string
+                      maxLength: 100
+                    name:
+                      type: string
+                      maxLength: 100
+                    repoId:
+                      type: string
+                      maxLength: 64
+                    baseRef:
+                      type: string
+                      maxLength: 255
+                    baseSha:
+                      type: string
+                      pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$'
+                    fetchDepth:
+                      type: integer
+                      format: int32
+                      minimum: 0
+                      maximum: 100000
+                additionalRepos:
+                  type: array
+                  maxItems: 4
+                  description: Read-only context checkouts.
+                  x-kubernetes-list-type: atomic
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                  items:
+                    type: object
+                    required: [provider, host, owner, name, repoId, baseSha]
+                    properties:
+                      provider:
+                        type: string
+                        enum: [github, gitea]
+                      host:
+                        type: string
+                        maxLength: 255
+                      owner:
+                        type: string
+                        maxLength: 100
+                      name:
+                        type: string
+                        maxLength: 100
+                      repoId:
+                        type: string
+                        maxLength: 64
+                      baseRef:
+                        type: string
+                        maxLength: 255
+                      baseSha:
+                        type: string
+                        pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$'
+                      fetchDepth:
+                        type: integer
+                        format: int32
+                        minimum: 0
+                        maximum: 100000
+                inputs:
+                  type: object
+                  required: [manifestUri, manifestSha256]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                  properties:
+                    manifestUri:
+                      type: string
+                      maxLength: 1100
+                      pattern: '^s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/.+'
+                    manifestSha256:
+                      type: string
+                      pattern: '^[0-9a-f]{64}$'
+                artifacts:
+                  type: object
+                  description: Canonical write prefixes (artifact-layout.md). Run credentials are scoped to exactly these.
+                  required: [artifactsPrefix, transcriptsPrefix, sessionPrefix, maxOutputBytes]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                  properties:
+                    artifactsPrefix:
+                      type: string
+                      maxLength: 1000
+                      pattern: '^s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/tenants/[a-z][a-z0-9-]{1,30}[a-z0-9]/jobs/job_[0-9a-hjkmnp-tv-z]{26}/runs/run_[0-9a-hjkmnp-tv-z]{26}/$'
+                    transcriptsPrefix:
+                      type: string
+                      maxLength: 1000
+                      pattern: '^s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/tenants/[a-z][a-z0-9-]{1,30}[a-z0-9]/jobs/job_[0-9a-hjkmnp-tv-z]{26}/runs/run_[0-9a-hjkmnp-tv-z]{26}/$'
+                    sessionPrefix:
+                      type: string
+                      maxLength: 1000
+                      pattern: '^s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/tenants/[a-z][a-z0-9-]{1,30}[a-z0-9]/jobs/job_[0-9a-hjkmnp-tv-z]{26}/runs/run_[0-9a-hjkmnp-tv-z]{26}/$'
+                    maxOutputBytes:
+                      type: integer
+                      format: int64
+                      minimum: 1048576
+                runtimeClassName:
+                  type: string
+                  description: Resolved by Runner admission from policy (tenant + workload class). WS-02 owns the RuntimeClass objects.
+                  enum: [replicant-gvisor, replicant-kata-fc, replicant-kata-clh]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                resources:
+                  type: object
+                  description: Resolved from the environment definition's resource profile (D-12). Runtime overhead is declared on the RuntimeClass (overhead.podFixed), not added here.
+                  required: [requests, limits]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                  properties:
+                    requests:
+                      type: object
+                      required: [cpu, memory, ephemeralStorage]
+                      properties:
+                        cpu:
+                          type: string
+                          maxLength: 16
+                          pattern: '^[0-9]+(\.[0-9]+)?m?$'
+                        memory:
+                          type: string
+                          maxLength: 16
+                          pattern: '^[0-9]+(Ki|Mi|Gi|Ti)?$'
+                        ephemeralStorage:
+                          type: string
+                          maxLength: 16
+                          pattern: '^[0-9]+(Ki|Mi|Gi|Ti)?$'
+                    limits:
+                      type: object
+                      required: [cpu, memory, ephemeralStorage]
+                      properties:
+                        cpu:
+                          type: string
+                          maxLength: 16
+                          pattern: '^[0-9]+(\.[0-9]+)?m?$'
+                        memory:
+                          type: string
+                          maxLength: 16
+                          pattern: '^[0-9]+(Ki|Mi|Gi|Ti)?$'
+                        ephemeralStorage:
+                          type: string
+                          maxLength: 16
+                          pattern: '^[0-9]+(Ki|Mi|Gi|Ti)?$'
+                workspace:
+                  type: object
+                  description: Workspace volume (D-07). WS-02 decides the hard-limit mechanism (see ADR-014 Challenge D-07).
+                  required: [sizeLimit, backing, enforcement]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                  properties:
+                    sizeLimit:
+                      type: string
+                      maxLength: 16
+                      pattern: '^[0-9]+(Mi|Gi|Ti)$'
+                    backing:
+                      type: string
+                      enum: [emptyDir, genericEphemeralVolume]
+                    storageClassName:
+                      type: string
+                      maxLength: 63
+                    enforcement:
+                      type: string
+                      description: |
+                        watchdog: in-sandbox watchdog plus kubelet sizeLimit eviction (always present).
+                        xfsProjectQuota: additionally a node-agent-applied enforcing XFS project quota (bhard) on the volume directory.
+                        guestBlockDevice: workspace is a fixed-size block device inside the VM guest (Kata), so overrun gives ENOSPC.
+                        fixedSizeVolume: generic ephemeral EBS volume (size is the hard limit).
+                      enum: [watchdog, xfsProjectQuota, guestBlockDevice, fixedSizeVolume]
+                networkProfile:
+                  type: string
+                  maxLength: 63
+                  pattern: '^[a-z][a-z0-9-]{0,62}$'
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                priorityClassName:
+                  type: string
+                  enum: [replicant-run-low, replicant-run-normal, replicant-run-high, replicant-run-urgent, replicant-eval]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                timeouts:
+                  type: object
+                  required: [startupSeconds, activeDeadlineSeconds, finalizeSeconds]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                  properties:
+                    startupSeconds:
+                      type: integer
+                      format: int32
+                      minimum: 60
+                      maximum: 1800
+                    activeDeadlineSeconds:
+                      type: integer
+                      format: int32
+                      minimum: 60
+                      maximum: 28800
+                    finalizeSeconds:
+                      type: integer
+                      format: int32
+                      minimum: 30
+                      maximum: 1800
+                limits:
+                  type: object
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                  properties:
+                    maxCostMicrosUsd:
+                      type: integer
+                      format: int64
+                      minimum: 1
+                      maximum: 5000000000
+                steering:
+                  type: object
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                  properties:
+                    enabled:
+                      type: boolean
+                traceContext:
+                  type: object
+                  required: [traceparent]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                  properties:
+                    traceparent:
+                      type: string
+                      pattern: '^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$'
+                    tracestate:
+                      type: string
+                      maxLength: 512
+                callback:
+                  type: object
+                  required: [namespace, workflowId, signalName]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                  properties:
+                    namespace:
+                      type: string
+                      pattern: '^replicant-(local|dev|staging|prod)$'
+                    workflowId:
+                      type: string
+                      maxLength: 120
+                    signalName:
+                      type: string
+                      enum: [run.status_changed]
+                runGrant:
+                  type: string
+                  description: Core-signed run grant (compact JWS, CCR-09-02), verified by the Runner at admission. Every run token the Runner mints for this run embeds it and must stay within it.
+                  maxLength: 8192
+                  pattern: '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: immutable
+                cancelRequested:
+                  type: boolean
+                  default: false
+                  description: Set to true by the Runner on POST /v1/runs/{run_id}:cancel. One-way.
+                cancelReason:
+                  type: string
+                  description: security (CCR-09-04) ends the run as Failed/SecurityViolation instead of Cancelled.
+                  enum: [job_cancelled, superseded, orchestrator_deadline, operator, takeover, budget_exhausted, security]
+            status:
+              type: object
+              description: Written only by agentrun-controller. Holds phase, conditions, timestamps, and object-storage URIs only (D-05).
+              properties:
+                phase:
+                  type: string
+                  enum: [Pending, Provisioning, Running, Finalizing, Cancelling, Succeeded, Failed, Cancelled]
+                  x-kubernetes-validations:
+                    - rule: "!(oldSelf in ['Succeeded', 'Failed', 'Cancelled']) || self == oldSelf"
+                      message: terminal phases are final
+                observedGeneration:
+                  type: integer
+                  format: int64
+                  minimum: 0
+                conditions:
+                  type: array
+                  maxItems: 16
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys:
+                    - type
+                  items:
+                    type: object
+                    description: metav1.Condition
+                    required: [type, status, reason, lastTransitionTime]
+                    properties:
+                      type:
+                        type: string
+                        maxLength: 316
+                        pattern: '^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$'
+                        enum: [Accepted, CredentialsIssued, Scheduled, WorkspaceReady, AgentRunning, ArtifactsUploaded, Succeeded, CallbackDelivered, DiskPressure]
+                      status:
+                        type: string
+                        enum: ['True', 'False', 'Unknown']
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                        minimum: 0
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                        minLength: 1
+                        maxLength: 1024
+                        pattern: '^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$'
+                      message:
+                        type: string
+                        maxLength: 32768
+                acceptedAt:
+                  type: string
+                  format: date-time
+                scheduledAt:
+                  type: string
+                  format: date-time
+                workspaceReadyAt:
+                  type: string
+                  format: date-time
+                agentStartedAt:
+                  type: string
+                  format: date-time
+                agentExitedAt:
+                  type: string
+                  format: date-time
+                finishedAt:
+                  type: string
+                  format: date-time
+                artifactManifestUri:
+                  type: string
+                  maxLength: 1100
+                  pattern: '^s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/.+'
+                resultUri:
+                  type: string
+                  maxLength: 1100
+                  pattern: '^s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/.+'
+---
+# Example object (validates against the schema above).
+apiVersion: replicant.example.com/v1alpha1
+kind: AgentRun
+metadata:
+  name: ar-gj3h3ep3phjfs9e23v768zrca5
+  namespace: sbx-payments
+  labels:
+    replicant.example.com/tenant: payments
+    replicant.example.com/job-id: job_01m5p7x7r0bt69j0h0fbxepw90
+    replicant.example.com/run-id: run_gj3h3ep3phjfs9e23v768zrca5
+    replicant.example.com/role: implementer
+    replicant.example.com/workload-class: coding
+    replicant.example.com/bundle: rb_ds5p3wmcj4dag2e9a8ncp4py6k
+  annotations:
+    replicant.example.com/spec-digest: sha256:a05ea6bc4aea3f59a4b8f7a20dea9badc8e8d1dcbb8f21b696224337bbabde06
+    replicant.example.com/idempotency-key: ik1:job_01m5p7x7r0bt69j0h0fbxepw90:implementer.c0.n1.run
+  finalizers:
+    - replicant.example.com/agentrun-cleanup
+spec:
+  tenantId: payments
+  jobId: job_01m5p7x7r0bt69j0h0fbxepw90
+  runId: run_gj3h3ep3phjfs9e23v768zrca5
+  workflowId: job_01m5p7x7r0bt69j0h0fbxepw90
+  logicalActivityId: implementer.c0.n1.run
+  idempotencyKey: ik1:job_01m5p7x7r0bt69j0h0fbxepw90:implementer.c0.n1.run
+  role: implementer
+  workloadClass: coding
+  workflowType: bugfix
+  releaseBundleId: rb_ds5p3wmcj4dag2e9a8ncp4py6k
+  agentDefinition:
+    name: implementer-claude
+    version: 7
+    digest: sha256:9f2c4e1a7b3d5f60812a4c6e8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4b6d
+  environmentDefinition:
+    name: go-service
+    version: 12
+    digest: sha256:1b3d5f7a9c0e2b4d6f8a0c2e4b6d8f0a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b0d
+  resourceProfile: default
+  repo:
+    provider: github
+    host: github.com
+    owner: acme-payments
+    name: ledger-api
+    repoId: R_kgDOK2a9Xw
+    baseRef: main
+    baseSha: 8c1e4f2a9b7d3c6e5f0a1b2c3d4e5f6a7b8c9d0e
+    fetchDepth: 0
+  inputs:
+    manifestUri: s3://acme-replicant-prod-artifacts/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/inputs/manifest.json
+    manifestSha256: 3a7bd3e2360a3d29eea436fcfb7e44c735d117c42d1c1835420b6b9942dd4f1b
+  artifacts:
+    artifactsPrefix: s3://acme-replicant-prod-artifacts/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/
+    transcriptsPrefix: s3://acme-replicant-prod-transcripts/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/
+    sessionPrefix: s3://acme-replicant-prod-session/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/
+    maxOutputBytes: 4294967296
+  runtimeClassName: replicant-kata-clh
+  resources:
+    requests:
+      cpu: '4'
+      memory: 12Gi
+      ephemeralStorage: 30Gi
+    limits:
+      cpu: '6'
+      memory: 16Gi
+      ephemeralStorage: 40Gi
+  workspace:
+    sizeLimit: 40Gi
+    backing: emptyDir
+    enforcement: guestBlockDevice
+  networkProfile: coding-default
+  priorityClassName: replicant-run-normal
+  timeouts:
+    startupSeconds: 300
+    activeDeadlineSeconds: 3600
+    finalizeSeconds: 300
+  limits:
+    maxCostMicrosUsd: 15000000
+  steering:
+    enabled: true
+  traceContext:
+    traceparent: 00-fc0575170c8597ce9805552723c08d6e-a3c1e5f7092b4d6e-01
+  callback:
+    namespace: replicant-prod
+    workflowId: job_01m5p7x7r0bt69j0h0fbxepw90
+    signalName: run.status_changed
+  runGrant: eyJhbGciOiJFUzI1NiIsImtpZCI6InJnLTIwMjYtMTAiLCJ0eXAiOiJmYWN0b3J5LXJ1bi1ncmFudCtqd3QifQ.eyJpc3MiOiJmYWN0b3J5LXByb2QtY29yZSIsInR5cCI6ImZhY3RvcnktcnVuLWdyYW50K2p3dCIsImp0aSI6InJncl8wMW01cDd4N3Mwa2QzbThxMnY2eDl6NGI3YyIsImlhdCI6MTc5MjgyMTY2MCwiZXhwIjoxNzkyODI2MTYwLCJ0ZW5hbnRfaWQiOiJwYXltZW50cyIsImpvYl9pZCI6ImpvYl8wMW01cDd4N3IwYnQ2OWowaDBmYnhlcHc5MCIsInJ1bl9pZCI6InJ1bl9najNoM2VwM3BoamZzOWUyM3Y3Njh6cmNhNSIsInJvbGUiOiJpbXBsZW1lbnRlciIsInJlcG9faWRzIjpbIlJfa2dET0syYTlYdyJdLCJhdWRpZW5jZXMiOlsiYWktZ2F0ZXdheSIsIm1lbW9yeS1tY3AiLCJjb250ZXh0LW1jcCIsInJlcG8tbWlycm9yIiwicnVubmVyLXNhbmRib3giXSwic2NvcGVzIjpbImdhdGV3YXk6aW52b2tlIiwibWVtb3J5OnJlYWQiLCJtZW1vcnk6c2VhcmNoIiwiY29udGV4dDpyZWFkIiwiY29kZV9zZWFyY2g6cmVhZCIsInJlcG86ZmV0Y2giLCJpbmJveDpyZWFkIiwiY3JlZGVudGlhbHM6YXdzIl0sImJ1ZGdldF91c2QiOjE1LCJhY3RpbmdfZm9yIjoidXNyXzAxa25rOGRmcjBmdmpjN3YwYjl2aHZremJwIiwic3BlY19kaWdlc3QiOiJzaGEyNTY6YzBmZmVlOGUxYjJkM2Y0YTViNmM3ZDhlOWYwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZjAwMTEyMiJ9.Ujo9BvRrDazllOKsi0UijvzBa1nE3Zcq0uz6M2HNzeJGLTPlJrHZ8ryuV4YyiQPxy8_vD1ujzwmLgYx5E_-CzA
+  cancelRequested: false

@@ -1,0 +1,8 @@
+# The WS-08 dashboards reference datasource uid `mimir` (production metrics store, ADR-08-001). Locally the
+# metrics store is Prometheus (remote-write receiver), so `mimir` is the same Prometheus under the expected uid.
+apiVersion: 1
+datasources:
+  - name: Mimir (local Prometheus)
+    uid: mimir
+    type: prometheus
+    url: http://prometheus:9090

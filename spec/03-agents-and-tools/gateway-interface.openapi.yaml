@@ -1,0 +1,940 @@
+openapi: 3.1.1
+jsonSchemaDialect: https://spec.openapis.org/oas/3.1/dialect/base
+info:
+  title: Replicant AI Gateway Interface (minimum interface + replicant-gateway-shim)
+  version: 1.0.0
+  summary: The HTTP interface every sandbox model call and every usage record goes through (D-11).
+  description: |
+    Owner: WS-03. This document fixes the MINIMUM interface Replicant requires from "the gateway" (gateway.md
+    section 3, requirements GW-1 to GW-12). It is implemented by `replicant-gateway-shim`, a thin replicant-owned Go
+    service that sits in front of the enterprise AI/ML gateway (OQ-00-09). If the enterprise gateway is later shown
+    to implement GW-1 to GW-12 natively, it can be pointed at directly by changing one environment-level setting in
+    replicant-agentd; agent definitions do not change.
+
+    Callers:
+    * **Sandboxes**, always through `replicant-agentd` on loopback, which strips any client `Authorization`, injects
+      `Authorization: Bearer <ai-gateway run token>` (C-RUNNER RunTokenClaims as amended by CCR-09-01: one token per audience;
+      CCR-09-02: embedded core-signed run grant; CCR-09-03: `acting_for`; scope `gateway:invoke`),
+      the C-IDS section 7 attribution headers, and `traceparent`.
+    * **Service callers** with a projected ServiceAccount token (audience `ai-gateway`), each bound to the purposes
+      it may use (`X-Replicant-Purpose`, checked against this table):
+      | ServiceAccount subject | principal | purposes | routes |
+      |---|---|---|---|
+      | `system:serviceaccount:replicant-workers:replicant-worker` | `svc_replicant-worker` | `worker_llm` | messages, responses, count_tokens |
+      | `system:serviceaccount:replicant-context:memory-service` | `svc_memory-service` | `embedding` | `/embeddings/v1/embeddings`, count_tokens |
+      | `system:serviceaccount:replicant-eval:eval-worker` | `svc_eval-worker` | `eval_judge` | messages, responses (R1-150) |
+      Service callers send `X-Replicant-Job-Id` (or `X-Replicant-Pipeline-Id` for backfills) and `X-Replicant-Tenant-Id`,
+      trusted for attribution only for these callers. A `worker_llm` or `eval_judge` request whose body carries
+      `tools`, `tool_choice`, or server-tool definitions is rejected with 400 `tools_not_allowed` (WS-09 G-24:
+      in-worker calls are tool-less).
+
+    Data-plane request and response bodies are the upstream provider protocols, passed through byte for byte
+    except for the `model` field, which must be a gateway model id allowed for the caller. Bodies are therefore
+    described as opaque objects here; the authoritative references are the Anthropic Messages API and the OpenAI
+    Responses API.
+
+    Error contract (all replicant-generated errors; upstream errors are passed through unchanged):
+    | HTTP | replicant_code | meaning | retry |
+    |---|---|---|---|
+    | 401 | unauthenticated | token missing, invalid, expired, or wrong audience | refresh token once |
+    | 401 | run_closed | the run closed itself, or its job_id/run_id is on the grant revocation list | no |
+    | 400 | tools_not_allowed | service caller with purpose `worker_llm`/`eval_judge` sent tools (G-24) | no |
+    | 403 | model_not_allowed | model not in the run policy's `models` (registered by the worker) or not in the tenant allowlist, or not priced | no |
+    | 403 | scope_missing | token lacks `gateway:invoke`, or service caller used a purpose it is not bound to | no |
+    | 403 | run_policy_mismatch | token `budget_usd` differs from the registered run policy | no |
+    | 503 | run_policy_missing | no policy registered for the token's run_id (for example after state-store loss); `retry-after: 5`. replicant-worker re-registers it on its next run poll (R1-286) | yes |
+    | 402 | budget_exceeded | run, job, tenant period, budget account, or platform ceiling exhausted (`X-Replicant-Budget-Exceeded`) | no |
+    | 402 | tenant_quota_unset | control-plane-api has no gateway quota for the tenant (404); a quota is required (XD-FIX-R2-055) | no |
+    | 402 | account_unset | eval judge call for a job with no registered budget account (XD-FIX-R2-061) | no |
+    | 503 | account_pending | run of an evaluation job whose account registration has not arrived yet | yes |
+    | 409 | account_cap_conflict | a job registration names an existing account with a different cap | no |
+    | 400 | stub_not_allowed | run policy carries `stub` on a production (enterprise-backend) shim (XD-FIX-R1-264) | no |
+    | 403 | model_not_allowed (detail model_retired) | model past its catalog `retires_at` (GW-16) | no |
+    | 599 | cassette_miss | local record/replay/script backends only: no cassette entry matches (XD-FIX-R1-264) | no |
+    | 429 | rate_limited | tenant RPM/TPM/concurrency quota (`X-Replicant-Limit`) or upstream 429 passthrough | after `retry-after` |
+    | 503 | gateway_state_unavailable | budget state store unreachable (fail closed) | yes |
+    | 502/504 | upstream_unavailable / upstream_timeout | enterprise gateway unreachable | yes |
+  contact:
+    name: WS-03 Agents, tools, and AI gateway
+servers:
+  - url: https://ai-gateway.prod.replicant.internal
+    description: replicant-gateway-shim (core cluster, internal NLB reachable from sandbox node pools and core workers)
+  - url: http://localhost:8420
+    description: Local stack (same image, listen 0.0.0.0:8420; upstream = passthrough, record, replay, or script backend; XD-FIX-R1-255)
+tags:
+  - name: data-plane
+  - name: control
+  - name: internal
+  - name: meta
+security:
+  - runToken: []
+  - serviceToken: []
+paths:
+  /anthropic/v1/messages:
+    post:
+      tags: [data-plane]
+      operationId: anthropicMessages
+      summary: Anthropic Messages API pass-through (Claude Code ANTHROPIC_BASE_URL target, via agentd).
+      parameters:
+        - $ref: '#/components/parameters/AnthropicVersion'
+        - $ref: '#/components/parameters/AnthropicBeta'
+        - $ref: '#/components/parameters/Traceparent'
+        - $ref: '#/components/parameters/XReplicantTenantId'
+        - $ref: '#/components/parameters/XReplicantJobId'
+        - $ref: '#/components/parameters/XReplicantRunId'
+        - $ref: '#/components/parameters/XReplicantRole'
+        - $ref: '#/components/parameters/XReplicantRetryAttempt'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderRequest'
+      responses:
+        '200':
+          description: Upstream response (JSON, or text/event-stream when stream=true). Budget headers are added.
+          headers:
+            X-Replicant-Request-Id:
+              $ref: '#/components/headers/XReplicantRequestId'
+            X-Replicant-Budget-Run-Limit-Usd:
+              $ref: '#/components/headers/BudgetRunLimit'
+            X-Replicant-Budget-Run-Spent-Usd:
+              $ref: '#/components/headers/BudgetRunSpent'
+            X-Replicant-Budget-Job-Spent-Usd:
+              $ref: '#/components/headers/BudgetJobSpent'
+            X-Replicant-Served-Model:
+              $ref: '#/components/headers/ServedModel'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderResponse'
+            text/event-stream:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/Passthrough'
+        '401':
+          $ref: '#/components/responses/ReplicantError'
+        '402':
+          $ref: '#/components/responses/BudgetExceeded'
+        '403':
+          $ref: '#/components/responses/ReplicantError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/ReplicantError'
+        '503':
+          $ref: '#/components/responses/ReplicantError'
+        '504':
+          $ref: '#/components/responses/ReplicantError'
+        '529':
+          $ref: '#/components/responses/Passthrough'
+  /anthropic/v1/messages/count_tokens:
+    post:
+      tags: [data-plane]
+      operationId: anthropicCountTokens
+      summary: Token counting pass-through. Not charged to budgets; counted against tenant RPM.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderRequest'
+      responses:
+        '200':
+          description: '{"input_tokens": N}'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [input_tokens]
+                properties:
+                  input_tokens:
+                    type: integer
+                    minimum: 0
+        '401':
+          $ref: '#/components/responses/ReplicantError'
+        '403':
+          $ref: '#/components/responses/ReplicantError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /openai/v1/responses:
+    post:
+      tags: [data-plane]
+      operationId: openaiResponses
+      summary: OpenAI Responses API pass-through (Codex model provider base_url, wire_api=responses, via agentd).
+      parameters:
+        - $ref: '#/components/parameters/Traceparent'
+        - $ref: '#/components/parameters/XReplicantTenantId'
+        - $ref: '#/components/parameters/XReplicantJobId'
+        - $ref: '#/components/parameters/XReplicantRunId'
+        - $ref: '#/components/parameters/XReplicantRole'
+        - $ref: '#/components/parameters/XReplicantRetryAttempt'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderRequest'
+      responses:
+        '200':
+          description: Upstream response (JSON or text/event-stream).
+          headers:
+            X-Replicant-Request-Id:
+              $ref: '#/components/headers/XReplicantRequestId'
+            X-Replicant-Budget-Run-Limit-Usd:
+              $ref: '#/components/headers/BudgetRunLimit'
+            X-Replicant-Budget-Run-Spent-Usd:
+              $ref: '#/components/headers/BudgetRunSpent'
+            X-Replicant-Budget-Job-Spent-Usd:
+              $ref: '#/components/headers/BudgetJobSpent'
+            X-Replicant-Served-Model:
+              $ref: '#/components/headers/ServedModel'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderResponse'
+            text/event-stream:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/Passthrough'
+        '401':
+          $ref: '#/components/responses/ReplicantError'
+        '402':
+          $ref: '#/components/responses/BudgetExceeded'
+        '403':
+          $ref: '#/components/responses/ReplicantError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/ReplicantError'
+        '503':
+          $ref: '#/components/responses/ReplicantError'
+  /bedrock/model/{modelId}/invoke:
+    post:
+      tags: [data-plane]
+      operationId: bedrockInvoke
+      summary: Optional. Bedrock InvokeModel shape for gateways that only front Bedrock (Claude Code CLAUDE_CODE_USE_BEDROCK with ANTHROPIC_BEDROCK_BASE_URL and CLAUDE_CODE_SKIP_BEDROCK_AUTH). The shim signs upstream; sandboxes hold no AWS model credentials.
+      parameters:
+        - name: modelId
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 200
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderRequest'
+      responses:
+        '200':
+          description: Upstream response.
+          headers:
+            X-Replicant-Request-Id:
+              $ref: '#/components/headers/XReplicantRequestId'
+            X-Replicant-Budget-Run-Spent-Usd:
+              $ref: '#/components/headers/BudgetRunSpent'
+            X-Replicant-Budget-Job-Spent-Usd:
+              $ref: '#/components/headers/BudgetJobSpent'
+            X-Replicant-Served-Model:
+              $ref: '#/components/headers/ServedModel'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderResponse'
+        '402':
+          $ref: '#/components/responses/BudgetExceeded'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /bedrock/model/{modelId}/invoke-with-response-stream:
+    post:
+      tags: [data-plane]
+      operationId: bedrockInvokeStream
+      summary: Optional. Streaming variant (AWS event-stream framing passed through).
+      parameters:
+        - name: modelId
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 200
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderRequest'
+      responses:
+        '200':
+          description: application/vnd.amazon.eventstream
+          headers:
+            X-Replicant-Request-Id:
+              $ref: '#/components/headers/XReplicantRequestId'
+            X-Replicant-Budget-Run-Spent-Usd:
+              $ref: '#/components/headers/BudgetRunSpent'
+            X-Replicant-Budget-Job-Spent-Usd:
+              $ref: '#/components/headers/BudgetJobSpent'
+            X-Replicant-Served-Model:
+              $ref: '#/components/headers/ServedModel'
+          content:
+            application/vnd.amazon.eventstream:
+              schema:
+                type: string
+        '402':
+          $ref: '#/components/responses/BudgetExceeded'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /vertex/v1/projects/{project}/locations/{location}/publishers/anthropic/models/{model}:{method}:
+    post:
+      tags: [data-plane]
+      operationId: vertexRawPredict
+      summary: Optional. Vertex AI Anthropic shape (Claude Code CLAUDE_CODE_USE_VERTEX with ANTHROPIC_VERTEX_BASE_URL=http://127.0.0.1:7800/vertex and CLAUDE_CODE_SKIP_VERTEX_AUTH). agentd forwards /vertex/* here; the shim maps `model` to a gateway model id, signs upstream, and ignores `project`/`location` from the sandbox (R1-080).
+      parameters:
+        - {name: project, in: path, required: true, schema: {type: string, maxLength: 100}}
+        - {name: location, in: path, required: true, schema: {type: string, maxLength: 50}}
+        - {name: model, in: path, required: true, schema: {type: string, maxLength: 200}}
+        - {name: method, in: path, required: true, schema: {type: string, enum: [rawPredict, streamRawPredict]}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Upstream response (JSON or SSE).
+          headers:
+            X-Replicant-Request-Id:
+              $ref: '#/components/headers/XReplicantRequestId'
+            X-Replicant-Budget-Run-Spent-Usd:
+              $ref: '#/components/headers/BudgetRunSpent'
+            X-Replicant-Budget-Job-Spent-Usd:
+              $ref: '#/components/headers/BudgetJobSpent'
+            X-Replicant-Served-Model:
+              $ref: '#/components/headers/ServedModel'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderResponse'
+        '402':
+          $ref: '#/components/responses/BudgetExceeded'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /embeddings/v1/embeddings:
+    post:
+      tags: [data-plane]
+      operationId: embeddings
+      summary: >-
+        GW-13 embeddings (R2-057, XD-04-03). OpenAI-compatible embeddings request shape ({model, input[], dimensions?, input_type?}); the shim maps the gateway model id (default voyage/voyage-code-4, 1,024 dims; fallback openai/text-embedding-3-large with dimensions=1024) to the upstream. Callers: memory-service only (purpose embedding). Charged to the tenant's embeddings day counter (budgets.embeddings.perTenantDayUsd) and, with X-Replicant-Pipeline-Id, to a backfill counter capped by reembedBackfillUsdMax.
+      security:
+        - serviceToken: []
+      parameters:
+        - $ref: '#/components/parameters/XReplicantTenantId'
+        - $ref: '#/components/parameters/XReplicantPurpose'
+        - {name: X-Replicant-Pipeline-Id, in: header, required: false, schema: {type: string, maxLength: 64}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [model, input]
+              properties:
+                model:
+                  type: string
+                  maxLength: 200
+                input:
+                  type: array
+                  minItems: 1
+                  maxItems: 128
+                  items:
+                    type: string
+                dimensions:
+                  type: integer
+                  enum: [1024]
+                input_type:
+                  type: string
+                  enum: [document, query]
+      responses:
+        '200':
+          description: '{"data":[{"index","embedding":[…1024 floats]}],"model","usage":{"total_tokens"}}'
+          headers:
+            X-Replicant-Request-Id:
+              $ref: '#/components/headers/XReplicantRequestId'
+            X-Replicant-Served-Model:
+              $ref: '#/components/headers/ServedModel'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, usage]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                  usage:
+                    type: object
+        '402':
+          $ref: '#/components/responses/BudgetExceeded'
+        '403':
+          $ref: '#/components/responses/ReplicantError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/budget:
+    get:
+      tags: [control]
+      operationId: getOwnBudget
+      summary: Budget state for the caller's run, job, and tenant period (used by agentd at start and after 402).
+      security:
+        - runToken: []
+      responses:
+        '200':
+          description: Current state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BudgetState'
+        '401':
+          $ref: '#/components/responses/ReplicantError'
+  /v1/runs/self:close:
+    post:
+      tags: [control]
+      operationId: closeOwnRun
+      summary: Self-revocation at finalize. After this, every token of the run is rejected with 401 (the run token itself stays valid elsewhere until it expires, at most 60 min).
+      security:
+        - runToken: []
+      responses:
+        '204':
+          description: Closed (idempotent).
+        '401':
+          $ref: '#/components/responses/ReplicantError'
+  /internal/v1/revocations:
+    post:
+      tags: [internal]
+      operationId: revokeRuns
+      summary: Revoke runs or whole jobs immediately (job cancel, takeover, budget exhaustion, security incident). Caller control-plane-api (ServiceAccount token, audience ai-gateway-admin).
+      security:
+        - adminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason]
+              properties:
+                run_ids:
+                  type: array
+                  maxItems: 500
+                  items:
+                    $ref: '#/components/schemas/RunId'
+                job_ids:
+                  type: array
+                  maxItems: 500
+                  items:
+                    $ref: '#/components/schemas/JobId'
+                tenant_id:
+                  $ref: '#/components/schemas/TenantId'
+                reason:
+                  type: string
+                  enum: [job_cancelled, takeover, budget_exhausted, security_incident, tenant_suspended]
+                ttl_seconds:
+                  description: How long the revocation entry is kept (>= token lifetime). Default 7200.
+                  type: integer
+                  minimum: 3600
+                  maximum: 3888000
+      responses:
+        '204':
+          description: Recorded.
+        '401':
+          $ref: '#/components/responses/ReplicantError'
+  /internal/v1/runs/{run_id}/policy:
+    put:
+      tags: [internal]
+      operationId: registerRunPolicy
+      summary: Register a run's gateway policy before the run starts (run_id is computable in advance, ADR-008). Caller replicant-worker activity agents.stage_inputs. Idempotent; a different body for the same run_id is 409.
+      security:
+        - serviceToken: []
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/RunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunPolicy'
+      responses:
+        '200':
+          description: Registered (or identical registration already present).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunPolicy'
+        '409':
+          description: A different policy is already registered for this run_id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplicantError'
+  /internal/v1/jobs/{job_id}/budget:
+    put:
+      tags: [internal]
+      operationId: setJobBudget
+      summary: Raise or set a job's gateway backstop cap (after a budget_extension gate is approved). Caller replicant-worker activity budget.apply_extension.
+      security:
+        - serviceToken: []
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/JobId'
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            maxLength: 257
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [tenant_id, job_budget_usd]
+              properties:
+                tenant_id:
+                  $ref: '#/components/schemas/TenantId'
+                job_budget_usd:
+                  type: number
+                  exclusiveMinimum: 0
+                  maximum: 10000
+      responses:
+        '200':
+          description: Applied.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BudgetState'
+  /internal/v1/budgets/jobs/{job_id}:
+    put:
+      tags: [internal]
+      operationId: bindJobBudgetAccount
+      summary: >-
+        Bind an eval, harness, shadow, or proposer job to a budget account (XD-FIX-R2-061). Caller control-plane-api
+        only, from the intake after-commit hook. The first registration of an account sets its cap. Spend of a bound
+        job is charged to the account and never to the tenant quota.
+      security:
+        - serviceToken: []
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/JobId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobBudgetAccount'
+      responses:
+        '200':
+          description: Bound (or the identical binding already exists).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobBudgetAccount'
+        '409':
+          description: The job is bound to another account, or the account exists with a different cap (account_cap_conflict).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplicantError'
+  /internal/v1/models:
+    get:
+      tags: [internal]
+      operationId: listGatewayModels
+      summary: >-
+        Gateway model catalog with retirement dates (GW-16, XD-FIX-XD-ORCH-01). Read daily by svc_release-controller
+        into registry.model_retirements.
+      security:
+        - serviceToken: []
+      responses:
+        '200':
+          description: Catalog.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelCatalog'
+  /healthz:
+    get:
+      tags: [meta]
+      operationId: healthz
+      security: []
+      responses:
+        '200':
+          description: Alive.
+  /readyz:
+    get:
+      tags: [meta]
+      operationId: readyz
+      security: []
+      responses:
+        '200':
+          description: Runner JWKS cached, budget store reachable, price book loaded, upstream reachable.
+        '503':
+          description: Not ready.
+components:
+  securitySchemes:
+    runToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Per-run token for audience ai-gateway (C-RUNNER RunTokenClaims as amended by CCR-09-01/02/03; ES256, Runner JWKS; aud == "ai-gateway"; embeds the core-signed run grant, verified against the core grant JWKS; required acting_for).
+    serviceToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Projected Kubernetes ServiceAccount token from the core cluster, audience ai-gateway.
+    adminToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Projected ServiceAccount token, audience ai-gateway-admin, subject control-plane-api only.
+  parameters:
+    AnthropicVersion:
+      name: anthropic-version
+      in: header
+      required: false
+      schema:
+        type: string
+    AnthropicBeta:
+      name: anthropic-beta
+      in: header
+      required: false
+      schema:
+        type: string
+    Traceparent:
+      name: traceparent
+      in: header
+      required: false
+      schema:
+        type: string
+        pattern: '^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$'
+    XReplicantTenantId:
+      name: X-Replicant-Tenant-Id
+      in: header
+      required: false
+      description: Informational for run tokens (claims are authoritative, mismatch = 401); attribution for service tokens.
+      schema:
+        $ref: '#/components/schemas/TenantId'
+    XReplicantJobId:
+      name: X-Replicant-Job-Id
+      in: header
+      required: false
+      schema:
+        $ref: '#/components/schemas/JobId'
+    XReplicantRunId:
+      name: X-Replicant-Run-Id
+      in: header
+      required: false
+      schema:
+        $ref: '#/components/schemas/RunId'
+    XReplicantRole:
+      name: X-Replicant-Role
+      in: header
+      required: false
+      description: >-
+        Sandboxes send the token's role (must match the claim). Service callers send it only as eval-worker, where it
+        must be eval-judge (XD-FIX-R2-063).
+      schema:
+        type: string
+        enum: [planner, implementer, qa, reviewer, repair, takeover, eval, eval-judge]
+    XReplicantRetryAttempt:
+      name: X-Replicant-Retry-Attempt
+      in: header
+      required: false
+      description: Sent by agentd only on its own retries; the attempt number of the retried request, ≥ 1 (C-IDS section 7). Absent on first attempts; recorded as retry_attempt (0 when absent) in usage events.
+      schema:
+        type: integer
+        minimum: 1
+    XReplicantPurpose:
+      name: X-Replicant-Purpose
+      in: header
+      required: false
+      description: Service callers only; must be a purpose the caller is bound to (worker_llm, embedding, eval_judge). Sandboxes are always purpose agent (qa_agent for role qa).
+      schema:
+        type: string
+        enum: [worker_llm, embedding, eval_judge]
+  headers:
+    ServedModel:
+      description: >-
+        Informational. Model ID the upstream reports it served (response body `model`, or the last SSE
+        `message_start`/`response.created` model); for streams an HTTP trailer. The response body, including `model`,
+        is passed through unchanged and is what consumers compare (XD-FIX-R1-150); the usage event records served_model.
+      schema:
+        type: string
+        maxLength: 200
+    XReplicantRequestId:
+      description: gwu_<ulid>, equal to the usage event id.
+      schema:
+        type: string
+        pattern: '^gwu_[0-9a-hjkmnp-tv-z]{26}$'
+    BudgetRunLimit:
+      schema:
+        type: string
+        pattern: '^[0-9]+\.[0-9]{6}$'
+    BudgetRunSpent:
+      description: Settled spend of the run INCLUDING this response if non-streaming; for streams, spend before this request (the final figure is in the next response or GET /v1/budget).
+      schema:
+        type: string
+        pattern: '^[0-9]+\.[0-9]{6}$'
+    BudgetJobSpent:
+      schema:
+        type: string
+        pattern: '^[0-9]+\.[0-9]{6}$'
+  responses:
+    Passthrough:
+      description: Upstream error passed through unchanged (provider error body).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ProviderResponse'
+    ReplicantError:
+      description: Replicant-generated error. Body shape matches the protocol of the route (Anthropic error envelope on /anthropic, OpenAI error envelope on /openai) and carries replicant_code.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ReplicantError'
+    BudgetExceeded:
+      description: A budget is exhausted. Never retried by agentd; surfaced to the entrypoint, which exits 20 (GatewayBudgetExceeded).
+      headers:
+        X-Replicant-Budget-Exceeded:
+          schema:
+            type: string
+            enum: [run, job, tenant_period, tenant_embeddings_day, pipeline, account, platform]
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ReplicantError'
+    RateLimited:
+      description: Tenant quota (X-Replicant-Limit set) or upstream 429 passthrough (X-Replicant-Limit absent).
+      headers:
+        retry-after:
+          schema:
+            type: integer
+            minimum: 1
+        X-Replicant-Limit:
+          schema:
+            type: string
+            enum: [tenant_rpm, tenant_tpm, tenant_concurrency, run_concurrency]
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ReplicantError'
+  schemas:
+    TenantId:
+      type: string
+      minLength: 3
+      maxLength: 32
+      pattern: '^[a-z][a-z0-9]*(-[a-z0-9]+)*$'
+    JobId:
+      type: string
+      pattern: '^job_[0-9a-hjkmnp-tv-z]{26}$'
+    RunId:
+      type: string
+      pattern: '^run_[0-9a-hjkmnp-tv-z]{26}$'
+    ProviderRequest:
+      description: Upstream protocol request body (Anthropic Messages / OpenAI Responses). The shim reads `model`, `max_tokens` / `max_output_tokens`, and `stream`; everything else is opaque.
+      type: object
+      required: [model]
+      properties:
+        model:
+          type: string
+          maxLength: 200
+        stream:
+          type: boolean
+    ProviderResponse:
+      description: Upstream protocol response body (opaque). The shim reads `usage` (Anthropic input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens; OpenAI input_tokens, input_tokens_details.cached_tokens, output_tokens, output_tokens_details.reasoning_tokens) to price the call.
+      type: object
+    ReplicantError:
+      type: object
+      required: [replicant_code, message]
+      properties:
+        type:
+          description: Anthropic envelope discriminator ("error") on /anthropic routes.
+          type: string
+        error:
+          type: object
+          properties:
+            type:
+              type: string
+            message:
+              type: string
+        replicant_code:
+          type: string
+          enum: [unauthenticated, scope_missing, model_not_allowed, budget_exceeded, rate_limited, gateway_state_unavailable, upstream_unavailable, upstream_timeout, run_closed, run_policy_missing, run_policy_mismatch, tools_not_allowed, usage_unparsed_limit, tenant_quota_unset, account_unset, account_pending, account_cap_conflict, stub_not_allowed, cassette_miss]
+        message:
+          type: string
+          maxLength: 1000
+        budget:
+          $ref: '#/components/schemas/BudgetState'
+    RunPolicy:
+      type: object
+      additionalProperties: false
+      required: [tenant_id, job_id, role, release_bundle_id, models, budget_usd, max_concurrency, expires_at]
+      properties:
+        tenant_id:
+          $ref: '#/components/schemas/TenantId'
+        job_id:
+          $ref: '#/components/schemas/JobId'
+        role:
+          type: string
+          enum: [planner, implementer, qa, reviewer, repair, takeover, eval]
+        release_bundle_id:
+          type: string
+          pattern: '^rb_[0-9a-hjkmnp-tv-z]{26}$'
+        models:
+          description: Gateway model ids this run may call (agent primary, fallbacks, small, subagent), already intersected with the tenant allowlist (budgets.gatewayAccess) by the worker.
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            type: string
+            maxLength: 200
+        budget_usd:
+          description: Must equal the run token's budget_usd claim (else 403 run_policy_mismatch).
+          type: number
+          exclusiveMinimum: 0
+          maximum: 5000
+        max_concurrency:
+          description: Maximum in-flight model requests for the run (bounds budget overshoot).
+          type: integer
+          minimum: 1
+          maximum: 16
+        expires_at:
+          description: Policy entry TTL (>= startup + active deadline + finalize + 1 h).
+          type: string
+          format: date-time
+        budget_account:
+          description: The job's budget account (XD-FIX-R2-061); must equal the account bound to the job, else 409.
+          $ref: '#/components/schemas/BudgetAccount'
+        experiment:
+          description: Langfuse experiment attributes for eval-case runs, copied onto gateway spans (XD-06-05).
+          type: object
+          additionalProperties:
+            type: string
+            maxLength: 200
+          maxProperties: 8
+        stub:
+          description: >-
+            Cassette or script selection (XD-FIX-R1-264). Honored only by the record, replay, and script backends;
+            a production shim rejects a policy carrying it with 400 stub_not_allowed.
+          type: object
+          additionalProperties: false
+          required: [root, set, key]
+          properties:
+            root:
+              type: string
+              enum: [tests, evals, scripts]
+            set:
+              type: string
+              minLength: 1
+              maxLength: 100
+            key:
+              type: string
+              minLength: 1
+              maxLength: 100
+    BudgetAccount:
+      type: string
+      pattern: '^fgw:(eval|pipeline|proposal):[A-Za-z0-9_.:-]{1,120}$'
+    JobBudgetAccount:
+      type: object
+      additionalProperties: false
+      required: [account, cap_usd]
+      properties:
+        account:
+          $ref: '#/components/schemas/BudgetAccount'
+        cap_usd:
+          type: number
+          exclusiveMinimum: 0
+          maximum: 100000
+        evaluation_mode:
+          description: Default by account prefix (eval and proposal → eval, pipeline → shadow).
+          type: string
+          enum: [eval, shadow]
+    ModelCatalog:
+      type: object
+      additionalProperties: false
+      required: [models, as_of]
+      properties:
+        as_of:
+          type: string
+          format: date-time
+        models:
+          type: array
+          maxItems: 500
+          items:
+            type: object
+            additionalProperties: false
+            required: [gateway_model_id, protocol, upstream_model, price_book_version, retires_at, retires_at_source, zdr]
+            properties:
+              gateway_model_id:
+                type: string
+                maxLength: 200
+              protocol:
+                type: string
+                enum: [anthropic_messages, openai_responses, bedrock_invoke, vertex_raw_predict, embeddings]
+              upstream_model:
+                type: string
+                maxLength: 200
+              price_book_version:
+                type: [integer, 'null']
+              retires_at:
+                type: [string, 'null']
+                format: date-time
+              retires_at_source:
+                type: [string, 'null']
+                enum: [enterprise_catalog, provider_notice, null]
+              zdr:
+                type: boolean
+    BudgetState:
+      type: object
+      additionalProperties: false
+      required: [run, job, tenant_period]
+      properties:
+        run:
+          $ref: '#/components/schemas/BudgetCounter'
+        job:
+          $ref: '#/components/schemas/BudgetCounter'
+        tenant_period:
+          allOf:
+            - $ref: '#/components/schemas/BudgetCounter'
+          properties:
+            period:
+              type: string
+              pattern: '^[0-9]{4}-[0-9]{2}$'
+    BudgetCounter:
+      type: object
+      required: [limit_usd, spent_usd, reserved_usd]
+      properties:
+        limit_usd:
+          type: [number, 'null']
+          minimum: 0
+        spent_usd:
+          type: number
+          minimum: 0
+        reserved_usd:
+          type: number
+          minimum: 0

@@ -1,0 +1,10 @@
+{
+  "outcome": "completed",
+  "summary": "ApplyRefund reversed the whole FX fee on every refund. It now reverses Prorate(c.FXFeeMinor, refundMinor, c.AmountMinor), the share attributable to the refunded amount (integer arithmetic, half-even rounding); a full refund still reverses the whole fee. Changed internal/ledger/ledger.go (one line).",
+  "tests_run": [
+    {"command": "go vet ./... && go test -count=1 ./...", "exit_code": 0, "summary": "all packages pass, including TestApplyRefund/partial_eur_fx_fee and TestApplyRefund/partial_half_even"}
+  ],
+  "confidence": "high",
+  "follow_ups": [],
+  "handoff_written": false
+}

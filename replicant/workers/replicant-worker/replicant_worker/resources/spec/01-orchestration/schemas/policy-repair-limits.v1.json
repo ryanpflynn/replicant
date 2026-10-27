@@ -1,0 +1,273 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/kinds/policy-repair_limits/v1.json",
+  "title": "Policy spec, policyType repair_limits (WS-01)",
+  "description": "Bounds on every loop the workflow runs (D-15). Tenant layers may only lower numbers (tightening).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "policyType",
+    "repair_cycles",
+    "run_retries",
+    "pr_wait",
+    "debounce_seconds",
+    "qa",
+    "budget"
+  ],
+  "properties": {
+    "policyType": {
+      "const": "repair_limits"
+    },
+    "repair_cycles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "default"
+      ],
+      "properties": {
+        "default": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "per_workflow_type": {
+          "$ref": "#/$defs/perTypeInt"
+        }
+      }
+    },
+    "run_retries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_per_node",
+        "backoff_seconds"
+      ],
+      "properties": {
+        "max_per_node": {
+          "description": "Re-invocations (new ordinal) after retryable AgentRun failures.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "backoff_seconds": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 600
+        }
+      }
+    },
+    "pr_wait": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expiry_days"
+      ],
+      "properties": {
+        "expiry_days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30
+        },
+        "reminder_days": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 29
+          }
+        },
+        "per_workflow_type": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "expiry_days": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 30
+              }
+            }
+          }
+        }
+      }
+    },
+    "debounce_seconds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1800
+    },
+    "qa": {
+      "description": "XD-05-03 / OQ-05-01.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fix_iterations",
+        "on_fail_after_fixes"
+      ],
+      "properties": {
+        "fix_iterations": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "default"
+          ],
+          "properties": {
+            "default": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5
+            },
+            "per_workflow_type": {
+              "$ref": "#/$defs/perTypeInt"
+            }
+          }
+        },
+        "env_retries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2,
+          "default": 1
+        },
+        "on_fail_after_fixes": {
+          "description": "fail_job (default) or gate_with_failure (publish gate at risk critical; approval publishes a draft PR only).",
+          "enum": [
+            "fail_job",
+            "gate_with_failure"
+          ]
+        },
+        "on_fail_after_fixes_per_workflow_type": {
+          "type": "object",
+          "additionalProperties": {
+            "enum": [
+              "fail_job",
+              "gate_with_failure"
+            ]
+          }
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "extension_gate"
+      ],
+      "properties": {
+        "extension_gate": {
+          "description": "Open a budget_extension gate on GatewayBudgetExceeded (run or job). Amount and self-approval cap come from the WS-03 budgets policy.",
+          "type": "boolean"
+        },
+        "tenant_quota_wait_days": {
+          "description": "How long a job waits (waiting_human, reason tenant_quota_exhausted) for a tenant period quota to reset.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 31,
+          "default": 7
+        },
+        "tenant_quota_check_seconds": {
+          "type": "integer",
+          "minimum": 300,
+          "maximum": 86400,
+          "default": 3600
+        }
+      }
+    },
+    "maintenance": {
+      "description": "MaintenanceBatch fan-out (ADR-01-007).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_concurrency": {
+          "description": "Children in active states (not waiting_external) per batch.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "max_concurrent_batches_per_tenant": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "max_batch_usd": {
+          "description": "R2-062: spend cap for one MaintenanceBatch, summed over its children from the cost ledger (cost.batch_spend). At the cap the batch stops starting children; running children finish under their own job budgets. 0 disables the cap (not allowed in prod tenant layers, which may only lower it).",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000000
+        }
+      }
+    },
+    "job_max_age_days": {
+      "description": "R2-044: hard job lifetime from creation, in days. Must exceed the longest gate wait (30 d) plus one PR wait; default 60. Prompt escrow and worker-image retention are sized to this value + 7 d (XD-FIX-R2-044). At the limit the job ends job_max_age_exceeded (status expired) at its next safe point or wait.",
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 90,
+      "default": 60
+    },
+    "dependency_block": {
+      "description": "R2-010: hold (status paused) when an internal dependency stays down after an activity's retries; re-probe with jittered exponential backoff; give up after max_hours (outcome dependency_unavailable).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "probe_initial_seconds": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 3600,
+          "default": 60
+        },
+        "probe_max_seconds": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 7200,
+          "default": 900
+        },
+        "jitter_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600,
+          "default": 120
+        },
+        "max_hours": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 168,
+          "default": 72
+        }
+      }
+    },
+    "platform_dependency": {
+      "description": "R2-012: run failures caused by a platform dependency (GatewayUnavailable, RepoFetchFailed, NodeLost while the node-pool breaker is open) wait for the breaker and do not consume run_retries; this bounds restarts per node.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_restarts_per_node": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 20
+        }
+      }
+    },
+    "max_pr_repair_jobs_per_pr": {
+      "description": "XD-FIX-R2-059: per-PR cap on pr_repair jobs (intake counts intake.job_requests with the same (pr_repo_id, pr_number) and workflow_type pr_repair; 409 pr_repair_cap_reached). Bounded by tenancy.platform_caps.pr_repair_jobs_per_pr_max.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10,
+      "default": 3
+    }
+  },
+  "$defs": {
+    "perTypeInt": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^(bugfix|feature|api_change|docs|hotfix|maintenance|pr_repair|qa_only)$": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        }
+      }
+    }
+  }
+}

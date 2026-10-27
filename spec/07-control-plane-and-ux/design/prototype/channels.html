@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Channels · replicant</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="app.css">
+<style>
+  .chwrap { padding: var(--sp-6) var(--sp-6) var(--sp-8); }
+  .chwrap h2 { font-size: var(--fs-title-sm); margin: 0 0 4px; }
+  .chwrap .note { margin: 0 0 12px; max-width: 620px; }
+  .chwrap section { margin-bottom: var(--sp-6); min-width: 0; }
+  .avatar { width: 20px; height: 20px; border-radius: var(--r-sm); background: var(--c-text); color: var(--c-bg); display: inline-grid; place-items: center; font-size: 10px; font-weight: 700; }
+  .ghc .chead { font-family: var(--font-mono); }
+  .md-h { font-weight: 600; margin-bottom: 4px; }
+  .md-list { margin: 6px 0 0 18px; }
+  .md-list li { margin: 2px 0; }
+  .hidden-tuple { font-family: var(--font-mono); font-size: 11px; color: var(--c-text-3); border-top: 1px dashed var(--c-line); margin-top: 8px; padding-top: 6px; overflow-wrap: anywhere; }
+</style>
+</head>
+<body data-page="approvals" data-admin="false">
+<div class="shell">
+  <aside class="rail" data-auto></aside>
+  <header class="topbar">
+    <div class="crumbs"><b>Channel renderings</b><span class="t3">· what approvers see outside the UI</span></div>
+    <div class="search" role="button" aria-label="Open command palette"><span>Jump to job, PR, run, bundle…</span><kbd>⌘K</kbd></div>
+    <button class="iconbtn" aria-label="Toggle theme"><svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.25"><circle cx="7" cy="7" r="5"/><path d="M7 2v10a5 5 0 0 0 0-10z" fill="currentColor"/></svg></button>
+  </header>
+  <main class="main">
+    <div class="chwrap grid2">
+      <section>
+        <h2>Slack DM · publish gate</h2>
+        <p class="note t3 small">Block Kit approximation. Buttons carry <span class="mono">{g, j, d, n}</span> (gate, job, packet digest, nonce); the click is validated by a Temporal Update, never by the read model (approvals.md §10).</p>
+        <div class="channel">
+          <div class="chead"><span class="avatar">f</span><b class="t1">replicant</b><span>APP · 10:42</span></div>
+          <div class="cbody">
+            <p><b>Publish approval needed</b> · <span class="mono">job_01m5n2a9qe</span></p>
+            <p>Stale FX rate cache after deploy · <span class="mono">acme-payments/ledger-api</span></p>
+            <div class="fields">
+              <div><span class="t3">Risk</span><br><b>high</b> · ledger/** · tests changed</div>
+              <div><span class="t3">Diff</span><br>+64 −11 in 4 files</div>
+              <div><span class="t3">QA</span><br>12 of 12 checks passed</div>
+              <div><span class="t3">Expires</span><br>in 5 h (16:00 UTC)</div>
+            </div>
+            <div class="cbtns"><span class="btn sm">Open packet</span><span class="btn sm">Request changes</span><span class="btn sm ghost danger">Reject</span></div>
+            <div class="ctx">High-risk publish gates approve in the UI only (gate rule <span class="mono">publish.high</span>). Packet <span class="mono">sha256:9be1…07c2</span>.</div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Slack · leak purge, partially approved</h2>
+        <p class="note t3 small"><span class="mono">leak_purge</span> needs two distinct approvers (<span class="mono">min_approvers: 2</span>); the initiator cannot approve. The first approval records an outcome of <span class="mono">recorded</span>, and the gate stays open.</p>
+        <div class="channel">
+          <div class="chead"><span class="avatar">f</span><b class="t1">replicant</b><span>APP · #replicant-admins · 11:05</span></div>
+          <div class="cbody">
+            <p><b>Leak purge · 1 of 2 approvals</b> · <span class="pill attention"><i class="g" data-g="diamond-hollow"></i>partially approved</span></p>
+            <p>Purge 3 transcript objects for <span class="mono">job_01m5k8t0vy</span> (secret detected: AWS access key, redacted).</p>
+            <div class="fields">
+              <div><span class="t3">Initiated by</span><br>Lena Fischer · cannot approve</div>
+              <div><span class="t3">Approved</span><br>Arjun Mehta · 11:09</div>
+              <div><span class="t3">Still needed</span><br>1 more from replicant-admins</div>
+              <div><span class="t3">Expires</span><br>in 23 h</div>
+            </div>
+            <div class="cbtns"><span class="btn sm primary">Approve purge</span><span class="btn sm ghost danger">Decline</span><span class="btn sm">Open in replicant</span></div>
+            <div class="ctx">Clicking twice as the same person returns “You already approved this purge” (duplicate_approver).</div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Slack · stale click after a decision</h2>
+        <p class="note t3 small">The message is replaced in place when any channel decides; a late click gets an ephemeral reply derived from the Update rejection (V1 gate_closed).</p>
+        <div class="channel">
+          <div class="chead"><span class="avatar">f</span><b class="t1">replicant</b><span>Only visible to you · 10:57</span></div>
+          <div class="cbody">
+            <p>This gate was already decided: <b>approved by Priya Raman in the replicant UI</b> at 10:51. Nothing changed.</p>
+            <div class="cbtns"><span class="btn sm">Open job</span></div>
+          </div>
+        </div>
+        <div class="channel" style="margin-top:10px">
+          <div class="chead"><span class="avatar">f</span><b class="t1">replicant</b><span>Only visible to you · 11:20</span></div>
+          <div class="cbody">
+            <p>Your Slack account is not linked to a replicant identity, so this click cannot count as an approval.</p>
+            <div class="cbtns"><span class="btn sm primary">Link my account</span><span class="btn sm">Open in replicant</span></div>
+            <div class="ctx">After you link, this DM follows: “Your Approve on gate_5fgbq8n2xz (r3) was not recorded.” with [Review r3] and [Approve r3]. It is never applied automatically (R2-049).</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="ghc">
+        <h2>GitHub · gate comment on the PR</h2>
+        <p class="note t3 small">Posted by the GitHub App. Reviews and <span class="mono">/replicant</span> commands are mapped to a decision only after a live permission check (ADR-005). The routing tuple is hidden in an HTML comment.</p>
+        <div class="channel">
+          <div class="chead"><span class="avatar">f</span><b class="t1">replicant-bot[bot]</b><span>commented 4 minutes ago</span></div>
+          <div class="cbody">
+            <div class="md-h">Replicant: publish approval needed (risk high)</div>
+            <p>This PR was opened by Replicant for <span class="mono">job_01m5n2a9qe</span>. A CODEOWNER of <span class="mono">ledger/**</span> must approve before Replicant pushes further changes.</p>
+            <ul class="md-list">
+              <li>Approve: submit an <b>Approve</b> review, or comment <span class="mono">/replicant approve</span></li>
+              <li>Request changes: a <b>Request changes</b> review becomes repair input</li>
+              <li>Packet, QA evidence and the full diff: <a href="approvals.html">open in replicant</a></li>
+            </ul>
+            <div class="hidden-tuple">&lt;!-- replicant:gate job_id=job_01m5n2a9qe… gate_id=gate_5fgbq8n2xz… r=3 digest=sha256:9be1…07c2 --&gt;</div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+<div class="scrim"></div><div class="palette"></div>
+<script src="app.js"></script>
+</body>
+</html>

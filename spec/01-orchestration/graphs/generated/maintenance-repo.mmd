@@ -1,0 +1,135 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	context(context)
+	implement(implement)
+	qa(qa)
+	verify(verify)
+	risk_diff(risk_diff)
+	publish_gate(publish_gate)
+	base_check(base_check)
+	rebase(rebase)
+	publish(publish)
+	pr_wait(pr_wait)
+	triage(triage)
+	reply_ack(reply_ack)
+	repair(repair)
+	qa_repair(qa_repair)
+	verify_repair(verify_repair)
+	risk_repair(risk_repair)
+	push_gate(push_gate)
+	push(push)
+	reply_fix(reply_fix)
+	reply_no_action(reply_no_action)
+	reply_question(reply_question)
+	reply_budget(reply_budget)
+	memory(memory)
+	end__dry_run_completed(end__dry_run_completed)
+	end__gate_expired(end__gate_expired)
+	end__no_change_needed(end__no_change_needed)
+	end__node_failed(end__node_failed)
+	end__policy_violation(end__policy_violation)
+	end__pr_closed_unmerged(end__pr_closed_unmerged)
+	end__pr_merged(end__pr_merged)
+	end__pr_wait_expired(end__pr_wait_expired)
+	end__qa_failed(end__qa_failed)
+	end__ready_to_publish(end__ready_to_publish)
+	end__rejected_at_gate(end__rejected_at_gate)
+	end__repair_budget_exhausted(end__repair_budget_exhausted)
+	__end__([<p>__end__</p>]):::last
+	__start__ -.-> base_check;
+	__start__ -.-> context;
+	__start__ -.-> implement;
+	__start__ -.-> memory;
+	__start__ -.-> pr_wait;
+	__start__ -.-> publish;
+	__start__ -.-> publish_gate;
+	__start__ -.-> push;
+	__start__ -.-> push_gate;
+	__start__ -.-> qa;
+	__start__ -.-> qa_repair;
+	__start__ -.-> rebase;
+	__start__ -.-> repair;
+	__start__ -.-> reply_ack;
+	__start__ -.-> reply_budget;
+	__start__ -.-> reply_fix;
+	__start__ -.-> reply_no_action;
+	__start__ -.-> reply_question;
+	__start__ -.-> risk_diff;
+	__start__ -.-> risk_repair;
+	__start__ -.-> triage;
+	__start__ -.-> verify;
+	__start__ -.-> verify_repair;
+	base_check -.-> publish;
+	base_check -.-> qa;
+	base_check -.-> rebase;
+	context --> implement;
+	implement -.-> end__no_change_needed;
+	implement -.-> end__node_failed;
+	implement -.-> qa;
+	memory --> pr_wait;
+	pr_wait -.-> end__pr_closed_unmerged;
+	pr_wait -.-> end__pr_merged;
+	pr_wait -.-> end__pr_wait_expired;
+	pr_wait -.-> reply_budget;
+	pr_wait -.-> triage;
+	publish -.-> end__dry_run_completed;
+	publish -.-> end__ready_to_publish;
+	publish -.-> pr_wait;
+	publish_gate -.-> base_check;
+	publish_gate -.-> end__gate_expired;
+	publish_gate -.-> end__rejected_at_gate;
+	publish_gate -.-> implement;
+	publish_gate -.-> qa;
+	push --> reply_fix;
+	push_gate -.-> end__gate_expired;
+	push_gate -.-> end__rejected_at_gate;
+	push_gate -.-> push;
+	push_gate -.-> qa_repair;
+	push_gate -.-> repair;
+	qa -.-> end__qa_failed;
+	qa -.-> implement;
+	qa -.-> verify;
+	qa_repair -.-> end__qa_failed;
+	qa_repair -.-> repair;
+	qa_repair -.-> verify_repair;
+	rebase -.-> end__node_failed;
+	rebase -.-> qa;
+	repair -.-> qa_repair;
+	repair -.-> reply_no_action;
+	reply_ack --> repair;
+	reply_budget --> end__repair_budget_exhausted;
+	reply_fix --> memory;
+	reply_no_action --> memory;
+	reply_question --> pr_wait;
+	risk_diff --> publish_gate;
+	risk_repair --> push_gate;
+	triage -.-> reply_ack;
+	triage -.-> reply_no_action;
+	triage -.-> reply_question;
+	verify -.-> end__policy_violation;
+	verify -.-> risk_diff;
+	verify_repair -.-> end__policy_violation;
+	verify_repair -.-> risk_repair;
+	end__dry_run_completed --> __end__;
+	end__gate_expired --> __end__;
+	end__no_change_needed --> __end__;
+	end__node_failed --> __end__;
+	end__policy_violation --> __end__;
+	end__pr_closed_unmerged --> __end__;
+	end__pr_merged --> __end__;
+	end__pr_wait_expired --> __end__;
+	end__qa_failed --> __end__;
+	end__ready_to_publish --> __end__;
+	end__rejected_at_gate --> __end__;
+	end__repair_budget_exhausted --> __end__;
+	pr_wait -.-> pr_wait;
+	qa -.-> qa;
+	qa_repair -.-> qa_repair;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc

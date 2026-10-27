@@ -1,0 +1,185 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyNonTls",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-ops",
+        "arn:aws:s3:::acme-replicant-prod-ops/*"
+      ],
+      "Condition": {
+        "Bool": {
+          "aws:SecureTransport": "false"
+        }
+      }
+    },
+    {
+      "Sid": "KillSwitchWritesUseCompareAndSwap",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-ops/kill-switches/v1/state.json",
+      "Condition": {
+        "Null": {
+          "s3:if-match": "true",
+          "s3:if-none-match": "true"
+        }
+      }
+    },
+    {
+      "Sid": "KillSwitchWritersOnly",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:PutObject",
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-ops/kill-switches/v1/state.json",
+      "Condition": {
+        "ArnNotLike": {
+          "aws:PrincipalArn": [
+            "arn:aws:iam::111111111111:role/replicant-prod-control-plane-api",
+            "arn:aws:iam::111111111111:role/replicant-prod-killswitch-operator"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "RevocationFeedWriterIsRunnerApiOnly",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:PutObject"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-ops/exec-revocations/prod/*",
+      "Condition": {
+        "ArnNotLike": {
+          "aws:PrincipalArn": "arn:aws:iam::222222222222:role/replicant-prod-runner-api"
+        }
+      }
+    },
+    {
+      "Sid": "NothingElseIsWritable",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:PutObject",
+      "NotResource": [
+        "arn:aws:s3:::acme-replicant-prod-ops/kill-switches/v1/state.json",
+        "arn:aws:s3:::acme-replicant-prod-ops/exec-revocations/prod/*"
+      ]
+    },
+    {
+      "Sid": "NoDeletesEver",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-ops/*"
+    },
+    {
+      "Sid": "WriterAllow",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::111111111111:role/replicant-prod-control-plane-api"
+      },
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:GetObjectVersion"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-ops/kill-switches/v1/state.json"
+    },
+    {
+      "Sid": "BreakGlassKillSwitchOperatorAllow",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::111111111111:role/replicant-prod-killswitch-operator"
+      },
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:GetObjectVersion"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-ops/kill-switches/v1/state.json"
+    },
+    {
+      "Sid": "CoreReadersAllow",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": [
+          "arn:aws:iam::111111111111:role/replicant-prod-replicant-worker",
+          "arn:aws:iam::111111111111:role/replicant-prod-publisher-worker",
+          "arn:aws:iam::111111111111:role/replicant-prod-eval-worker",
+          "arn:aws:iam::111111111111:role/replicant-prod-control-plane-api",
+          "arn:aws:iam::111111111111:role/replicant-prod-github-integration",
+          "arn:aws:iam::111111111111:role/replicant-prod-slack-integration",
+          "arn:aws:iam::111111111111:role/replicant-prod-jira-integration"
+        ]
+      },
+      "Action": [
+        "s3:GetObject"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-ops/kill-switches/v1/state.json"
+    },
+    {
+      "Sid": "ExecRunnerReadsThroughExecSystemEndpoint",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::222222222222:role/replicant-prod-runner-api"
+      },
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-ops/kill-switches/v1/state.json"
+    },
+    {
+      "Sid": "NoPolicyChangesExceptPipeline",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:PutBucketPolicy",
+        "s3:DeleteBucketPolicy",
+        "s3:PutBucketVersioning",
+        "s3:PutLifecycleConfiguration",
+        "s3:PutEncryptionConfiguration"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-ops",
+      "Condition": {
+        "ArnNotLike": {
+          "aws:PrincipalArn": "arn:aws:iam::111111111111:role/replicant-prod-platform-deployer"
+        }
+      }
+    },
+    {
+      "Sid": "RunnerApiWritesRevocationFeed",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::222222222222:role/replicant-prod-runner-api"
+      },
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging",
+        "s3:GetObject"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-ops/exec-revocations/prod/*"
+    },
+    {
+      "Sid": "RunnerApiListsRevocationFeed",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::222222222222:role/replicant-prod-runner-api"
+      },
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-ops",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": "exec-revocations/prod/*"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/role-results/implementer/v1.json",
+  "title": "Role result: implementer and repair",
+  "description": "Owner: WS-03. run_result.role_result for roles implementer and repair (C-RUNNER run-result envelope).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "agent_report",
+    "cli",
+    "changes"
+  ],
+  "properties": {
+    "schema": {
+      "const": "replicant.role-result.implementer/v1"
+    },
+    "agent_report": {
+      "$ref": "#/$defs/agent_report"
+    },
+    "cli": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/cli_execution"
+    },
+    "budget": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/budget_observation"
+    },
+    "changes": {
+      "description": "Computed by the entrypoint from the collected diff (never from model text).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "files_changed",
+        "insertions",
+        "deletions",
+        "diff_sha256"
+      ],
+      "properties": {
+        "files_changed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "insertions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deletions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "binary_files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "diff_sha256": {
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/sha256_hex"
+        },
+        "base_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        },
+        "commits_by_agent": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "forbidden_paths_stripped": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        },
+        "paths": {
+          "description": "Changed paths (first 500), for risk rules. Stored here as data; never used in S3 keys.",
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        }
+      }
+    },
+    "bootstrap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ok"
+      ],
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "steps": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "exit_code",
+              "seconds"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 63
+              },
+              "exit_code": {
+                "type": "integer"
+              },
+              "seconds": {
+                "type": "number",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    "session_resumed": {
+      "type": "boolean"
+    },
+    "steering_delivered": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "$defs": {
+    "agent_report": {
+      "description": "The part the AGENT produces (Claude Code --json-schema / Codex --output-schema use exactly this subschema). Untrusted model output.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcome",
+        "summary",
+        "tests_run"
+      ],
+      "properties": {
+        "outcome": {
+          "description": "Agent's own claim of task outcome. The entrypoint copies it to run_result.outcome unless an entrypoint-detected condition overrides it (e.g. diff empty -> no_changes; integrity violation -> failed).",
+          "type": "string",
+          "enum": [
+            "completed",
+            "no_changes",
+            "blocked",
+            "failed"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 8000
+        },
+        "tests_run": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/test_run"
+          }
+        },
+        "blocked": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "detail"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "needs_clarification",
+                "missing_access",
+                "environment_broken",
+                "out_of_scope",
+                "conflicting_instructions"
+              ]
+            },
+            "detail": {
+              "type": "string",
+              "maxLength": 4000
+            },
+            "question": {
+              "description": "Question for the requester (clarification gate). Untrusted model text.",
+              "type": "string",
+              "maxLength": 4000
+            }
+          }
+        },
+        "follow_ups": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "confidence": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "handoff_written": {
+          "description": "Agent claims it wrote /replicant/out/handoff.md (the entrypoint verifies).",
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

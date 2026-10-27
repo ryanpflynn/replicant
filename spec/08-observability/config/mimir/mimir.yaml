@@ -1,0 +1,94 @@
+# Mimir 3.2.x configuration, production. Owner WS-08. ADR-001 (Mimir over Prometheus).
+# Deployment: grafana/mimir-distributed Helm chart in core namespace observability, CLASSIC architecture
+# (ingest storage disabled; no Kafka). Fallback if the chart version no longer supports classic mode: the same
+# file with -target=all on a 3-replica StatefulSet (monolithic mode scales horizontally and is HA per the Mimir
+# deployment-modes documentation). Validated by starting Mimir 3.2.3 -target=all with this file (filesystem
+# backend substituted) on 2026-10-24.
+multitenancy_enabled: true      # tenant "replicant" for everything (ADR-002); limits per tenant in runtime.yaml
+
+server:
+  http_listen_port: 8080
+  grpc_listen_port: 9095
+  log_level: warn
+  grpc_server_max_recv_msg_size: 104857600
+
+ingest_storage:
+  enabled: false
+
+common:
+  storage:
+    backend: s3
+    s3:
+      endpoint: s3.${AWS_REGION}.amazonaws.com
+      region: ${AWS_REGION}
+      sse:
+        type: SSE-KMS
+        kms_key_id: ${OBS_KMS_KEY_ARN}
+
+blocks_storage:
+  s3:
+    bucket_name: ${MIMIR_BLOCKS_BUCKET}
+  tsdb:
+    dir: /data/tsdb
+    retention_period: 24h
+  bucket_store:
+    sync_dir: /data/tsdb-sync
+
+alertmanager_storage:
+  s3:
+    bucket_name: ${MIMIR_ALERTMANAGER_BUCKET}
+
+ruler_storage:
+  s3:
+    bucket_name: ${MIMIR_RULER_BUCKET}
+
+ingester:
+  ring:
+    replication_factor: 3
+    zone_awareness_enabled: true
+
+distributor:
+  ring:
+    kvstore:
+      store: memberlist
+
+memberlist:
+  join_members:
+    - dns+mimir-gossip-ring.observability.svc.cluster.local:7946
+
+compactor:
+  data_dir: /data/compactor
+  compaction_interval: 30m
+  deletion_delay: 12h
+
+store_gateway:
+  sharding_ring:
+    replication_factor: 3
+
+ruler:
+  alertmanager_url: http://mimir-alertmanager.observability.svc.cluster.local:8080/alertmanager
+  rule_path: /data/ruler
+  enable_api: true
+
+alertmanager:
+  data_dir: /data/alertmanager
+  external_url: https://grafana.${REPLICANT_ENV}.replicant.internal/alertmanager
+  fallback_config_file: /etc/mimir/alertmanager-fallback.yaml
+
+limits:
+  # Defaults; tenant "replicant" values in runtime.yaml.
+  ingestion_rate: 100000
+  ingestion_burst_size: 1000000
+  max_global_series_per_user: 3000000
+  max_global_exemplars_per_user: 200000
+  max_label_names_per_series: 40
+  out_of_order_time_window: 10m
+  compactor_blocks_retention_period: 400d     # 13 months plus margin (platform.md section 4)
+  ruler_max_rules_per_rule_group: 50
+  native_histograms_ingestion_enabled: true
+
+runtime_config:
+  file: /etc/mimir/runtime.yaml
+
+usage_stats:
+  enabled: false

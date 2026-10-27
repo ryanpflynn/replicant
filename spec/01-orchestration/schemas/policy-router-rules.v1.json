@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/kinds/policy-router_rules/v1.json",
+  "title": "Policy spec, policyType router_rules (WS-01)",
+  "description": "Deterministic trigger routing (router.md). Global scope only (tenant layers may not change routing; WS-06 ADR-001 / CCR-06-06).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["policyType", "thresholds", "fallback", "strictness", "allowed_types_by_channel", "rules"],
+  "properties": {
+    "policyType": {"const": "router_rules"},
+    "thresholds": {
+      "type": "object", "additionalProperties": false, "required": ["accept", "clarify_below", "max_clarifications"],
+      "properties": {
+        "accept": {"type": "number", "minimum": 0.5, "maximum": 1.0},
+        "clarify_below": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "max_clarifications": {"type": "integer", "minimum": 0, "maximum": 3}
+      }
+    },
+    "fallback": {"$ref": "#/$defs/wtype"},
+    "llm_risk_review": {"type": "boolean", "default": true},
+    "strictness": {"description": "Order from least to most strict; a requested type may only be replaced by a stricter one.", "type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/wtype"}},
+    "allowed_types_by_channel": {
+      "type": "object", "additionalProperties": false,
+      "patternProperties": {"^(github|jira|slack|ui|cli|schedule|api|eval)$": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/wtype"}}}
+    },
+    "rules": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"$ref": "#/$defs/rule"}}
+  },
+  "$defs": {
+    "wtype": {"enum": ["bugfix", "feature", "api_change", "docs", "hotfix", "maintenance", "pr_repair", "qa_only"]},
+    "globs": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"type": "string", "maxLength": 255}},
+    "rule": {
+      "type": "object", "additionalProperties": false, "required": ["id", "match", "decide"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,63}$"},
+        "match": {
+          "description": "All present matchers must hold (AND). An empty match always holds.",
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "channel": {"type": "array", "items": {"enum": ["github", "jira", "slack", "ui", "cli", "schedule", "api", "eval"]}},
+            "event_type": {"type": "array", "items": {"type": "string", "pattern": "^[a-z_:.]+$"}},
+            "requested": {"type": "array", "items": {"$ref": "#/$defs/wtype"}},
+            "priority": {"type": "array", "items": {"enum": ["low", "normal", "high", "urgent"]}},
+            "labels_any": {"type": "array", "items": {"type": "string", "maxLength": 100}},
+            "has_pull_request": {"type": "boolean"},
+            "paths_any": {"$ref": "#/$defs/globs"},
+            "paths_all": {"$ref": "#/$defs/globs"}
+          }
+        },
+        "decide": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "workflow_type": {"oneOf": [{"$ref": "#/$defs/wtype"}, {"const": "requested"}]},
+            "require_priority": {"enum": ["urgent", "high"]},
+            "else": {"$ref": "#/$defs/wtype"},
+            "escalate_if": {"type": "array", "items": {"type": "object", "additionalProperties": false,
+              "required": ["from", "to"], "properties": {"paths_not_all_match": {"$ref": "#/$defs/globs"},
+              "from": {"$ref": "#/$defs/wtype"}, "to": {"$ref": "#/$defs/wtype"}}}},
+            "needs_intent": {"type": "boolean"},
+            "candidates": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/wtype"}}
+          },
+          "oneOf": [{"required": ["workflow_type"]}, {"required": ["needs_intent", "candidates"]}]
+        }
+      }
+    }
+  }
+}

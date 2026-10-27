@@ -1,0 +1,30 @@
+# runner-local contract scenario no_result: text only, never the StructuredOutput call (RC-RUN-12).
+schema: replicant.gateway-script/v1
+name: runner-contract-no-result
+protocol: anthropic_messages
+finish: "I am done."
+turns:
+  - respond:
+      text: "I am done."
+      usage: {input_tokens: 500, output_tokens: 5}
+  - respond:
+      text: "I am done."
+      usage: {input_tokens: 500, output_tokens: 5}
+  - respond:
+      text: "I am done."
+      usage: {input_tokens: 500, output_tokens: 5}
+  - respond:
+      text: "I am done."
+      usage: {input_tokens: 500, output_tokens: 5}
+  - respond:
+      text: "I am done."
+      usage: {input_tokens: 500, output_tokens: 5}
+  - respond:
+      text: "I am done."
+      usage: {input_tokens: 500, output_tokens: 5}
+  - respond:
+      text: "I am done."
+      usage: {input_tokens: 500, output_tokens: 5}
+  - respond:
+      text: "I am done."
+      usage: {input_tokens: 500, output_tokens: 5}

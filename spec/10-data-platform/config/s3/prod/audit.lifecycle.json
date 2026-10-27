@@ -1,0 +1,102 @@
+{
+  "Rules": [
+    {
+      "ID": "expire-r2y",
+      "Status": "Enabled",
+      "Filter": {
+        "Tag": {
+          "Key": "replicant-retention",
+          "Value": "r2y"
+        }
+      },
+      "Expiration": {
+        "Days": 730
+      },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 7
+      }
+    },
+    {
+      "ID": "tier-r2y-0-glacier_ir",
+      "Status": "Enabled",
+      "Filter": {
+        "And": {
+          "Tags": [
+            {
+              "Key": "replicant-retention",
+              "Value": "r2y"
+            }
+          ],
+          "ObjectSizeGreaterThan": 131072
+        }
+      },
+      "Transitions": [
+        {
+          "Days": 90,
+          "StorageClass": "GLACIER_IR"
+        }
+      ]
+    },
+    {
+      "ID": "expire-r7y",
+      "Status": "Enabled",
+      "Filter": {
+        "Tag": {
+          "Key": "replicant-retention",
+          "Value": "r7y"
+        }
+      },
+      "Expiration": {
+        "Days": 2557
+      },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 7
+      }
+    },
+    {
+      "ID": "tier-r7y-0-glacier_ir",
+      "Status": "Enabled",
+      "Filter": {
+        "And": {
+          "Tags": [
+            {
+              "Key": "replicant-retention",
+              "Value": "r7y"
+            }
+          ],
+          "ObjectSizeGreaterThan": 131072
+        }
+      },
+      "Transitions": [
+        {
+          "Days": 90,
+          "StorageClass": "GLACIER_IR"
+        }
+      ]
+    },
+    {
+      "ID": "housekeeping",
+      "Status": "Enabled",
+      "Filter": {},
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 2
+      },
+      "Expiration": {
+        "ExpiredObjectDeleteMarker": true
+      }
+    },
+    {
+      "ID": "backstop-untagged",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": ""
+      },
+      "Expiration": {
+        "Days": 2557
+      },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 7
+      }
+    }
+  ]
+}

@@ -1,0 +1,94 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "JobLevelAndStepArtifacts",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging",
+        "s3:GetObject",
+        "s3:GetObjectTagging"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/steps/*",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/gates/*",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/index/*",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/takeover/*",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/inputs/*",
+        "arn:aws:s3:::acme-replicant-prod-session/tenants/*/jobs/*/runs/*/inputs/*"
+      ]
+    },
+    {
+      "Sid": "ReadRunOutputsAndSessionStateForStaging",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectTagging"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*",
+        "arn:aws:s3:::acme-replicant-prod-session/tenants/*/jobs/*/runs/*/cli_session_state/*",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/events/*",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/intake/*"
+      ]
+    },
+    {
+      "Sid": "ApprovalRecordsWriteOnce",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-audit/tenants/*/jobs/*/gates/*/decision-*"
+    },
+    {
+      "Sid": "TenantAndAuditKeysViaS3Only",
+      "Effect": "Allow",
+      "Action": [
+        "kms:GenerateDataKey",
+        "kms:Decrypt"
+      ],
+      "Resource": "arn:aws:kms:us-east-1:111111111111:key/*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "s3.us-east-1.amazonaws.com"
+        },
+        "ForAnyValue:StringEquals": {
+          "aws:ResourceTag/replicant-key-class": [
+            "tenant",
+            "audit"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "ReadEvalCaseInputsOnly",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-eval/runs/*/case/*"
+    },
+    {
+      "Sid": "NeverReadGoldenSets",
+      "Effect": "Deny",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-eval/golden/*"
+    },
+    {
+      "Sid": "DecryptEvalKeyViaS3",
+      "Effect": "Allow",
+      "Action": "kms:Decrypt",
+      "Resource": "arn:aws:kms:us-east-1:111111111111:key/*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "s3.us-east-1.amazonaws.com"
+        },
+        "ForAnyValue:StringEquals": {
+          "aws:ResourceTag/replicant-key-class": [
+            "eval"
+          ]
+        }
+      }
+    }
+  ]
+}

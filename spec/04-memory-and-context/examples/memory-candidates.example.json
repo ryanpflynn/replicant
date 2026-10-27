@@ -1,0 +1,85 @@
+{
+  "schema": "replicant.memory-candidates/v1",
+  "tenant_id": "payments",
+  "job_id": "job_01m5p7x7r0bt69j0h0fbxepw90",
+  "producer": {
+    "kind": "feedback_extraction",
+    "logical_activity_id": "memory.c1.n1.extract",
+    "extraction_prompt": "memory-extract-generalize@14",
+    "extraction_model": "anthropic/claude-sonnet-5-5",
+    "trace_id": "fc0575170c8597ce9805552723c08d6e",
+    "release_bundle_id": "rb_ds5p3wmcj4dag2e9a8ncp4py6k"
+  },
+  "proposals": [
+    {
+      "memory_type": "rule",
+      "proposed_scope": {
+        "level": "repo",
+        "repo": "github.com/acme-payments/ledger-api",
+        "languages": [
+          "go"
+        ]
+      },
+      "subject_key": "money.arithmetic",
+      "title": "Use shopspring/decimal for money",
+      "statement": "Represent monetary amounts with github.com/shopspring/decimal.Decimal; never float64. Round half-even to the currency minor unit only at presentation.",
+      "rationale": "Reviewer: float rounding caused proration drift (PR #1431).",
+      "structured": {
+        "prefer": [
+          "github.com/shopspring/decimal"
+        ],
+        "avoid": [
+          "float32",
+          "float64"
+        ],
+        "applies_to": "monetary values"
+      },
+      "examples": [
+        {
+          "kind": "bad",
+          "language": "go",
+          "code": "amount := float64(cents) * ratio"
+        },
+        {
+          "kind": "good",
+          "language": "go",
+          "code": "amount := decimal.NewFromInt(cents).Mul(ratio)"
+        }
+      ],
+      "source": {
+        "kind": "pr_review_comment",
+        "repo": "github.com/acme-payments/ledger-api",
+        "pr_number": 1431,
+        "comment_id": 1849302211,
+        "delivery_id": "6f1b4a40-5f1e-11ef-8a4b-1c9d6e0b2a11",
+        "comment_sha256": "d4f564a3987ae2395081580e65ccecdefacaf48fa7d4fe267e63ce0235f9fa00",
+        "author_principal_id": "usr_01knk8dfr0fvjc7v0b9vhvkzbp",
+        "url": "https://github.com/acme-payments/ledger-api/pull/1431#discussion_r1849302211"
+      },
+      "generalization": {
+        "prescriptive": 0.93,
+        "pr_independence": 0.88,
+        "recurrence": 0.81,
+        "counterfactual_examples": [
+          "A refund calculation in internal/refunds multiplying cents by a float ratio",
+          "A currency conversion helper returning float64"
+        ],
+        "explicit_remember": false,
+        "hedged": false,
+        "tool_enforceable": false
+      }
+    }
+  ],
+  "non_candidates": [
+    {
+      "source": {
+        "kind": "pr_review_comment",
+        "repo": "github.com/acme-payments/ledger-api",
+        "pr_number": 1431,
+        "comment_id": 1849302299
+      },
+      "decision": "pr_specific",
+      "reason": "Asks to rename a local variable in this function only"
+    }
+  ]
+}

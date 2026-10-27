@@ -1,0 +1,61 @@
+# Policy (policyType router_rules; WS-01 owns the kind schema: ../schemas/policy-router-rules.v1.json)
+# Deterministic routing rules (router.md). Evaluated in order by activity router.classify; the
+# first matching rule decides. LLM intent parsing runs only when the decision is `needs_intent`.
+apiVersion: replicant.example.com/v1
+kind: Policy
+metadata:
+  name: router-rules
+  scope:
+    level: global
+  owners: [replicant-platform]
+  description: "Global trigger -> workflow type routing rules"
+spec:
+  policyType: router_rules
+  thresholds:
+    accept: 0.80            # LLM confidence at or above which its choice is accepted
+    clarify_below: 0.55     # below this the router asks the requester (clarification gate)
+    max_clarifications: 2   # after this many clarification rounds use `fallback`
+  fallback: bugfix          # the most conservative code-changing graph with a risk-gated plan gate
+  llm_risk_review: true     # risk_classify may call risk.llm_review (can only raise, D-19)
+  # A requested type may be replaced only by a stricter one (D-19: never downgrade).
+  strictness: [docs, qa_only, maintenance, bugfix, hotfix, feature, api_change]
+  allowed_types_by_channel:
+    github: [bugfix, feature, api_change, docs, hotfix, pr_repair, qa_only]
+    jira: [bugfix, feature, api_change, docs]
+    slack: [bugfix, feature, api_change, docs, hotfix, qa_only]
+    ui: [bugfix, feature, api_change, docs, hotfix, maintenance, pr_repair, qa_only]
+    cli: [bugfix, feature, api_change, docs, hotfix, maintenance, pr_repair, qa_only]
+    schedule: [maintenance, qa_only]
+    api: [bugfix, feature, api_change, docs, hotfix, maintenance, pr_repair, qa_only]
+    eval: [bugfix, feature, api_change, docs, hotfix, maintenance, pr_repair, qa_only]
+  rules:
+    - id: schedule-is-maintenance
+      match: {channel: [schedule]}
+      decide: {workflow_type: maintenance}
+    - id: pr-command-is-pr-repair
+      match: {event_type: [issue_comment.created, pull_request_review_comment.created], has_pull_request: true}
+      decide: {workflow_type: pr_repair}
+    - id: explicit-hotfix
+      match: {requested: [hotfix], priority: [urgent]}
+      decide: {workflow_type: hotfix}
+    - id: hotfix-label-needs-urgent
+      match: {labels_any: [replicant-hotfix]}
+      decide: {workflow_type: hotfix, require_priority: urgent, else: bugfix}
+    - id: requested-type-honored
+      match: {requested: [bugfix, feature, api_change, docs, hotfix, qa_only, pr_repair, maintenance]}
+      decide: {workflow_type: requested, escalate_if: [{paths_not_all_match: ["docs/**", "**/*.md", "**/*.mdx"], from: docs, to: bugfix}]}
+    - id: api-contract-paths
+      match: {paths_any: ["**/*.proto", "**/openapi*.y*ml", "**/*.graphql", "**/asyncapi*.y*ml", "api/**"]}
+      decide: {workflow_type: api_change}
+    - id: docs-only-paths
+      match: {paths_all: ["docs/**", "**/*.md", "**/*.mdx", "mkdocs.yml"]}
+      decide: {workflow_type: docs}
+    - id: issue-label-bug
+      match: {labels_any: [bug, defect, regression]}
+      decide: {workflow_type: bugfix}
+    - id: issue-label-feature
+      match: {labels_any: [feature, enhancement]}
+      decide: {workflow_type: feature}
+    - id: otherwise-ask-the-model
+      match: {}
+      decide: {needs_intent: true, candidates: [bugfix, feature, api_change, docs]}

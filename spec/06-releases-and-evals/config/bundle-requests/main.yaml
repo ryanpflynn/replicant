@@ -1,0 +1,47 @@
+# WS-06 — canonical full bundle request (replicant-config: bundles/requests/main.yaml).
+# Validated by schemas/release-bundle-request.schema.json. Built nightly and on every merge to
+# the config repo; most day-to-day releases are overlay requests derived from the prod default
+# (see cli-claude-code-2.1.308.yaml) so that a candidate differs from the incumbent by one change.
+apiVersion: replicant.example.com/v1
+kind: ReleaseBundleRequest
+metadata:
+  name: main
+  owners: [replicant-platform]
+  description: Full resolution of every selector at build time.
+spec:
+  mode: full
+  changeSummary: Nightly full build from config repo HEAD.
+  full:
+    workerDeployment: {deploymentName: replicant-worker, buildId: b20261024-3f9a1c2e7d4b}
+    router: policy/router-rules
+    graphs:
+      bugfix: graph/bugfix
+      feature: graph/feature
+      api_change: graph/api-change
+      docs: graph/docs-low-risk
+      hotfix: graph/hotfix
+      maintenance: graph/maintenance-fanout
+      pr_repair: graph/pr-repair
+      qa_only: graph/qa-only
+    policies:
+      - policy/risk-rules
+      - policy/gate-rules
+      - policy/approval-channels
+      - policy/budgets
+      - policy/runtime-selection
+      - policy/network-profiles
+      - policy/codebase-bindings
+      - policy/repair-limits
+      - policy/retention
+      - policy/runner-polling
+    memorySnapshotPolicy: policy/memory-snapshot-default
+    inWorkerPrompts:
+      - prompt/router-intent@label:production
+      - prompt/feedback-triage@label:production
+      - prompt/memory-extraction@label:production
+    inWorkerModels:
+      - {purpose: router_intent, gatewayModelId: anthropic/claude-haiku-5-5}
+      - {purpose: feedback_triage, gatewayModelId: anthropic/claude-sonnet-5-5}
+      - {purpose: memory_extraction, gatewayModelId: anthropic/claude-sonnet-5-5}
+  evaluation:
+    tierFloor: T2

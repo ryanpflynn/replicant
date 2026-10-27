@@ -1,0 +1,64 @@
+# RuntimeClass objects owned by WS-02 (names fixed by C-CRD / C-RUNNER Isolation enum).
+# overhead.podFixed (one value, one formula; runtime-evaluation.md §9, R1-053/R1-278):
+#   Kata:  roundup_32Mi(overhead_memory 256Mi + p95(VMM + virtiofsd RSS)), starting 448Mi until B-OVH-01;
+#   gVisor: roundup_32Mi(p95(Sentry + Gofer RSS)), starting 192Mi.
+# Log transport (XD-FIX-R2-039): a RuntimeClass that fails B-LOG-01 gets annotation
+#   replicant.example.com/log-transport: otlp   (absent = stdout); the controller copies it into bootstrap.json.
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: replicant-kata-clh
+  labels: {app.kubernetes.io/part-of: replicant-exec}
+handler: kata-clh-runtime-rs          # containerd handler (runtime-evaluation.md §11.1)
+overhead:
+  podFixed:
+    cpu: 250m
+    memory: 448Mi
+scheduling:
+  nodeSelector:
+    replicant.example.com/pool-runtime: kata
+  tolerations:
+    - key: replicant.example.com/sandbox
+      operator: Equal
+      value: "true"
+      effect: NoSchedule
+---
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: replicant-gvisor
+  labels: {app.kubernetes.io/part-of: replicant-exec}
+handler: runsc
+overhead:
+  podFixed:
+    cpu: 250m
+    memory: 192Mi
+scheduling:
+  nodeSelector:
+    replicant.example.com/pool-runtime: gvisor
+  tolerations:
+    - key: replicant.example.com/sandbox
+      operator: Equal
+      value: "true"
+      effect: NoSchedule
+---
+# Defined so the C-CRD enum resolves; no node pool carries pool-runtime=kata-fc and runtime_selection
+# never selects it, so pods would stay Pending and fail RuntimeClassUnavailable/Unschedulable.
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: replicant-kata-fc
+  labels: {app.kubernetes.io/part-of: replicant-exec, replicant.example.com/disabled: "true"}
+handler: kata-fc
+overhead:
+  podFixed:
+    cpu: 250m
+    memory: 130Mi
+scheduling:
+  nodeSelector:
+    replicant.example.com/pool-runtime: kata-fc
+  tolerations:
+    - key: replicant.example.com/sandbox
+      operator: Equal
+      value: "true"
+      effect: NoSchedule

@@ -1,0 +1,228 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/kinds/policy-codebase_bindings/v1.json",
+  "title": "Policy codebase_bindings (kind schema v1)",
+  "description": "Owner: WS-03. The `graphModifiers` item schema is owned by WS-01 and referenced, never redefined (R1-003): https://schemas.replicant.example.com/kinds/graph-definition/v1.json#/$defs/graphModifier. Maps repository selectors to an environment definition, per-role agent overrides, resource profile overrides, graph modifiers, and repo-instruction handling. Resolution (normative): the bundle's bindings policy (tenant layer first, then base) is evaluated per target repo; the binding with the highest priority whose match is satisfied wins; ties break on the more specific match (repoIds > repos without wildcard > repos with wildcard > catalog selectors > default) and then on name. Exactly one binding (or default) applies to each target. Selectors in this document are resolved to pinned references at bundle build and the targets join the bundle closure (C-DEF 4.3 step 2).",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://schemas.replicant.example.com/contracts/definition-envelope/v1.json"
+    }
+  ],
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "properties": {
+    "kind": {
+      "const": "Policy"
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policyType",
+        "bindings",
+        "default"
+      ],
+      "properties": {
+        "policyType": {
+          "const": "codebase_bindings"
+        },
+        "bindings": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "$ref": "#/$defs/binding"
+          }
+        },
+        "default": {
+          "description": "Applied when no binding matches. Must not set match.",
+          "$ref": "#/$defs/bindingBody"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "binding": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/bindingBody"
+        }
+      ],
+      "type": "object",
+      "required": [
+        "name",
+        "match",
+        "priority"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$"
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "match": {
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "properties": {
+            "repoIds": {
+              "description": "Provider immutable repository ids (JobRequest target repo_id).",
+              "type": "array",
+              "maxItems": 500,
+              "items": {
+                "type": "string",
+                "maxLength": 64
+              }
+            },
+            "repos": {
+              "description": "<host>/<owner>/<name> globs; '*' matches one path segment.",
+              "type": "array",
+              "maxItems": 200,
+              "items": {
+                "type": "string",
+                "maxLength": 455,
+                "pattern": "^[a-z0-9.-]+/[A-Za-z0-9_.*-]+/[A-Za-z0-9_.*-]+$"
+              }
+            },
+            "catalog": {
+              "description": "Selectors over the derived service catalog (WS-04 ecosystem): all listed keys must match.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "languages": {
+                  "type": "array",
+                  "maxItems": 10,
+                  "items": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "frameworks": {
+                  "type": "array",
+                  "maxItems": 10,
+                  "items": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "system": {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                "lifecycle": {
+                  "type": "string",
+                  "maxLength": 32
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "bindingBody": {
+      "type": "object",
+      "required": [
+        "environment"
+      ],
+      "properties": {
+        "name": true,
+        "priority": true,
+        "match": true,
+        "environment": {
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/environment_selector"
+        },
+        "agents": {
+          "description": "Per-role agent override. Roles not listed use the graph node's default agent reference.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "planner": {
+              "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/agent_selector"
+            },
+            "implementer": {
+              "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/agent_selector"
+            },
+            "repair": {
+              "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/agent_selector"
+            },
+            "reviewer": {
+              "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/agent_selector"
+            },
+            "qa": {
+              "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/agent_selector"
+            },
+            "takeover": {
+              "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/agent_selector"
+            }
+          }
+        },
+        "resourceProfiles": {
+          "description": "Per-role override of EnvironmentDefinition.profileByRole. Values must be profile names of the bound environment (bundle build checks).",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "planner": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,62}$"
+            },
+            "implementer": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,62}$"
+            },
+            "repair": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,62}$"
+            },
+            "reviewer": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,62}$"
+            },
+            "qa": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,62}$"
+            }
+          }
+        },
+        "graphModifiers": {
+          "description": "Configuration-level graph changes (CC-1). Items are WS-01 graphModifier objects (ops insertBefore, insertAfter, replace, setConfig, skipWhen, requireGateWhen), applied in binding priority order by graph.compose (01-orchestration/extensibility.md section 5).",
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "https://schemas.replicant.example.com/kinds/graph-definition/v1.json#/$defs/graphModifier"
+          }
+        },
+        "repoInstructions": {
+          "description": "How the target repo's own agent instruction files (CLAUDE.md, AGENTS.md, .claude/rules, .cursor/rules) are treated. ignore: never shown to the agent. quote_as_context (default): the context assembler (WS-04) includes them in the briefing as quoted, untrusted reference text with a size cap; the CLI never auto-loads them. trusted_load: the CLI auto-loads them; allowed only with trustRepoInstructions=true and an agent whose claudeCode/codex repoInstructionFiles=load.",
+          "type": "string",
+          "enum": [
+            "ignore",
+            "quote_as_context",
+            "trusted_load"
+          ],
+          "default": "quote_as_context"
+        },
+        "trustRepoInstructions": {
+          "type": "boolean",
+          "default": false
+        },
+        "dataClassification": {
+          "type": "string",
+          "enum": [
+            "public",
+            "internal",
+            "confidential",
+            "restricted"
+          ]
+        }
+      }
+    }
+  }
+}

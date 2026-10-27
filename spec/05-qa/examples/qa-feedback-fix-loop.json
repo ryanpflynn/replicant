@@ -1,0 +1,42 @@
+{
+  "schema": "replicant.qa-feedback/v1",
+  "job_id": "job_01m5p7x7r0bt69j0h0fbxepw90",
+  "qa_run_id": "run_chxtsxqzcpds1fc1c4dvw9e4em",
+  "iteration": 1,
+  "max_iterations": 2,
+  "instructions_ref": {"name": "qa-feedback-frame", "version": 3},
+  "blocking": [
+    {
+      "stage": "unit",
+      "test_id": "go:github.com/acme-payments/ledger-api/internal/ledger.TestApplyRefund/partial_eur_fx_fee",
+      "cause": "code",
+      "evidence_summary": "failed 3/3 on the change, passed 3/3 on base (8c1e4f2); stable in history (0 failures in 214 runs)",
+      "message": "ledger_test.go:188: fx_fee_reversal amount = EUR 0.48, want EUR 0.19 (40% of 0.48 prorated, rounded half-even)",
+      "stack_excerpt": "--- FAIL: TestApplyRefund/partial_eur_fx_fee (0.00s)\n    ledger_test.go:188: fx_fee_reversal amount = EUR 0.48, want EUR 0.19",
+      "file": "internal/ledger/ledger_test.go",
+      "line": 188,
+      "in_diff": false
+    }
+  ],
+  "non_blocking": [
+    {
+      "stage": "build",
+      "test_id": "step:build/go_vet",
+      "cause": "code",
+      "evidence_summary": "go vet failed on a line changed by this diff (required: false)",
+      "message": "internal/ledger/refund.go:142:3: fmt.Sprintf format %d has arg amt of wrong type decimal.Decimal",
+      "file": "internal/ledger/refund.go",
+      "line": 142,
+      "in_diff": true
+    }
+  ],
+  "reproduce": [
+    {
+      "test_id": "go:github.com/acme-payments/ledger-api/internal/ledger.TestApplyRefund/partial_eur_fx_fee",
+      "command": "go test -race -count=1 -run '^TestApplyRefund$/^partial_eur_fx_fee$' ./internal/ledger",
+      "needs_services": []
+    }
+  ],
+  "diagnosis": "[model output, unverified] The refund path now calls reverseFxFee before prorating; the reversal uses the full captured fee (0.48) instead of amount/captured * fee. See internal/ledger/refund.go:131-149.",
+  "previous_iterations": []
+}

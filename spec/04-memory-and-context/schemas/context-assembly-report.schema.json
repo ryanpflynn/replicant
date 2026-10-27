@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/ws04/context-assembly-report/v1.json",
+  "title": "Context assembly report",
+  "description": "WS-04. What the Context Assembler put into one run's context window, measured, and what it cut. Proposed new artifact type `context_assembly_report` (CCR-04-02): artifacts bucket, application/json, 1 MiB, r2y, redaction n/a (references and counts only, no untrusted text). Written to the run's inputs prefix next to the inputs manifest; also emitted as Langfuse observation metadata (counts only).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "job_id", "run_id", "role", "model", "context_window", "tokenizer", "budget_profile", "sections", "totals"],
+  "properties": {
+    "schema": { "const": "replicant.context-assembly-report/v1" },
+    "job_id": { "type": "string", "pattern": "^job_[0-9a-hjkmnp-tv-z]{26}$" },
+    "run_id": { "type": "string", "pattern": "^run_[0-9a-hjkmnp-tv-z]{26}$" },
+    "role": { "type": "string", "enum": ["planner", "implementer", "qa", "reviewer", "repair", "takeover", "eval"] },
+    "model": { "type": "string", "maxLength": 200 },
+    "context_window": { "type": "integer", "minimum": 1000 },
+    "tokenizer": { "type": "string", "maxLength": 100 },
+    "token_count_method": { "type": "string", "enum": ["exact_endpoint", "exact_local", "estimate_chars"] },
+    "budget_profile": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,63}@[1-9][0-9]*$" },
+    "sections": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["section", "slot", "budget_tokens", "used_tokens", "action"],
+        "properties": {
+          "section": { "type": "string", "enum": ["role_prompt", "constraints", "memory", "briefing", "working_memory", "task", "steering"] },
+          "slot": { "type": "string", "enum": ["system_append", "user_scope_instructions", "first_user_message", "input_file", "mcp_only"] },
+          "budget_tokens": { "type": "integer", "minimum": 0 },
+          "used_tokens": { "type": "integer", "minimum": 0 },
+          "source_tokens": { "type": "integer", "minimum": 0, "description": "Size before any cut" },
+          "action": { "type": "string", "enum": ["fit", "trimmed_by_priority", "summarized_deterministic", "moved_to_file", "moved_to_mcp", "dropped"] },
+          "cut_items": {
+            "type": "array", "maxItems": 500,
+            "items": {
+              "type": "object", "additionalProperties": false, "required": ["id", "tokens"],
+              "properties": {
+                "id": { "type": "string", "maxLength": 1100 },
+                "tokens": { "type": "integer", "minimum": 0 },
+                "reason": { "type": "string", "enum": ["budget", "low_relevance", "duplicate", "conflict_suppressed"] }
+              }
+            }
+          },
+          "artifact_key": { "type": "string", "maxLength": 1024 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "totals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["injected_tokens", "reserved_headroom_tokens", "headroom_ratio"],
+      "properties": {
+        "injected_tokens": { "type": "integer", "minimum": 0 },
+        "reserved_headroom_tokens": { "type": "integer", "minimum": 0 },
+        "headroom_ratio": { "type": "number", "minimum": 0, "maximum": 1 },
+        "cli_overhead_tokens_estimate": { "type": "integer", "minimum": 0, "description": "CLI's own system prompt and tool schemas (measured per CLI version, context-budget.md §4)" }
+      }
+    }
+  }
+}

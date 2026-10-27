@@ -1,0 +1,102 @@
+# Registry document (C-DEF envelope) for the default memory snapshot policy, pinned by
+# every Release Bundle as spec.memory_snapshot_policy (ReleaseBundleRequest:
+# memorySnapshotPolicy: policy/memory-snapshot-default). Spec validated against
+# ../schemas/policy-memory-snapshot.schema.json.
+apiVersion: replicant.example.com/v1
+kind: Policy
+metadata:
+  name: memory-snapshot-default
+  scope: {level: global}
+  owners: [replicant-admins]
+  description: Default memory eligibility, per-role push sections, pull limits, and holdout experiments.
+spec:
+  policyType: memory_snapshot
+  eligibility:
+    scope_levels: [org, tenant, service_group, repo, path]
+    types: [rule, procedure, negative, preference]
+    min_confidence: 0.55
+    include_probation: true
+    include_auto_activated: true
+  limits:
+    max_snapshot_entries: 400
+    max_per_scope_level: {org: 50, tenant: 100, service_group: 100, repo: 200, path: 150}
+  push:
+    roles:
+      planner:     {sections: [enforced, rule, procedure, negative], max_entries: 60, min_relevance: 0.15, path_filter: repo_wide}
+      implementer: {sections: [enforced, rule, procedure, negative, preference], max_entries: 80, min_relevance: 0.10, path_filter: touched_or_planned}
+      repair:      {sections: [enforced, rule, negative, preference], max_entries: 60, min_relevance: 0.10, path_filter: touched_or_planned}
+      reviewer:    {sections: [enforced, rule, preference], max_entries: 80, min_relevance: 0.0, path_filter: touched_or_planned}
+      qa:          {sections: [enforced, procedure], max_entries: 20, min_relevance: 0.20, path_filter: repo_wide}
+  pull:
+    enabled: true
+    types: [rule, episode, procedure, negative]
+    episode_repo_scope: service_group
+    max_results_per_call: 10
+    max_calls_per_run: 40
+    episode_max_age_days: 365
+  refresh:
+    mode: pinned_with_revocation
+  experiments:
+    holdout_enabled: true
+    probation_holdout_rate: 0.2
+    periodic_recheck_rate: 0.05
+    global_holdout_rate: 0.02
+    never_holdout_enforced: true
+  context_budgets:
+    profile: context-default@2
+    roles:
+      planner:
+        working_window_cap: 400000
+        min_headroom_pct: 80
+        sections:
+          role_prompt:    {pct: 2,   cap: 8000,  overflow: fail}
+          constraints:    {pct: 1,   cap: 4000,  overflow: fail}
+          memory:         {pct: 2,   cap: 8000,  overflow: trim_by_priority}
+          briefing:       {pct: 4,   cap: 16000, overflow: move_to_mcp}
+          working_memory: {pct: 2,   cap: 8000,  overflow: summarize_deterministic}
+          task:           {pct: 4,   cap: 16000, overflow: move_to_file}
+          steering:       {pct: 1,   cap: 4000,  overflow: move_to_file}
+      implementer:
+        working_window_cap: 400000
+        min_headroom_pct: 80
+        sections:
+          role_prompt:    {pct: 2,   cap: 8000,  overflow: fail}
+          constraints:    {pct: 1,   cap: 4000,  overflow: fail}
+          memory:         {pct: 2,   cap: 8000,  overflow: trim_by_priority}
+          briefing:       {pct: 3,   cap: 12000, overflow: move_to_mcp}
+          working_memory: {pct: 2.5, cap: 10000, overflow: summarize_deterministic}
+          task:           {pct: 4,   cap: 16000, overflow: move_to_file}
+          steering:       {pct: 1,   cap: 4000,  overflow: move_to_file}
+      repair:
+        working_window_cap: 400000
+        min_headroom_pct: 80
+        sections:
+          role_prompt:    {pct: 2,   cap: 8000,  overflow: fail}
+          constraints:    {pct: 1,   cap: 4000,  overflow: fail}
+          memory:         {pct: 1.5, cap: 6000,  overflow: trim_by_priority}
+          briefing:       {pct: 2,   cap: 8000,  overflow: move_to_mcp}
+          working_memory: {pct: 3,   cap: 12000, overflow: summarize_deterministic}
+          task:           {pct: 5,   cap: 20000, overflow: move_to_file}
+          steering:       {pct: 1,   cap: 4000,  overflow: move_to_file}
+      reviewer:
+        working_window_cap: 300000
+        min_headroom_pct: 70
+        sections:
+          role_prompt:    {pct: 2,   cap: 8000,  overflow: fail}
+          constraints:    {pct: 1,   cap: 4000,  overflow: fail}
+          memory:         {pct: 2,   cap: 8000,  overflow: trim_by_priority}
+          briefing:       {pct: 3,   cap: 12000, overflow: move_to_mcp}
+          working_memory: {pct: 2,   cap: 8000,  overflow: summarize_deterministic}
+          task:           {pct: 16,  cap: 48000, overflow: move_to_file}
+          steering:       {pct: 1,   cap: 4000,  overflow: move_to_file}
+      qa:
+        working_window_cap: 200000
+        min_headroom_pct: 85
+        sections:
+          role_prompt:    {pct: 3,   cap: 6000,  overflow: fail}
+          constraints:    {pct: 1.5, cap: 3000,  overflow: fail}
+          memory:         {pct: 1,   cap: 2000,  overflow: trim_by_priority}
+          briefing:       {pct: 2,   cap: 4000,  overflow: move_to_mcp}
+          working_memory: {pct: 3,   cap: 6000,  overflow: summarize_deterministic}
+          task:           {pct: 4,   cap: 8000,  overflow: move_to_file}
+          steering:       {pct: 0.5, cap: 1000,  overflow: move_to_file}

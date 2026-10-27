@@ -1,0 +1,39 @@
+{
+  "Version": "2012-10-17",
+  "Id": "replicant-prod-quarantine",
+  "Statement": [
+    {
+      "Sid": "AccountRootForIamDelegationOnly",
+      "Effect": "Allow",
+      "Principal": {"AWS": "arn:aws:iam::111111111111:root"},
+      "Action": ["kms:DescribeKey", "kms:GetKeyPolicy", "kms:ListResourceTags", "kms:GetKeyRotationStatus"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "KeyAdministrationWithoutUse",
+      "Effect": "Allow",
+      "Principal": {"AWS": "arn:aws:iam::111111111111:role/replicant-prod-platform-deployer"},
+      "Action": ["kms:Describe*", "kms:Enable*", "kms:List*", "kms:Put*", "kms:Update*", "kms:Get*",
+                 "kms:TagResource", "kms:UntagResource"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AnyReplicantWriterMayEncryptViaS3DefaultEncryption",
+      "Effect": "Allow",
+      "Principal": {"AWS": "*"},
+      "Action": "kms:GenerateDataKey",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {"kms:ViaService": "s3.us-east-1.amazonaws.com", "aws:PrincipalOrgID": "o-acmereplicant1"}
+      }
+    },
+    {
+      "Sid": "OnlyStorageSecurityMayDecrypt",
+      "Effect": "Allow",
+      "Principal": {"AWS": "arn:aws:iam::111111111111:role/replicant-prod-storage-security"},
+      "Action": "kms:Decrypt",
+      "Resource": "*",
+      "Condition": {"StringEquals": {"kms:ViaService": "s3.us-east-1.amazonaws.com"}}
+    }
+  ]
+}

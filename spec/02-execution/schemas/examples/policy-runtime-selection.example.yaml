@@ -1,0 +1,26 @@
+apiVersion: replicant.example.com/v1
+kind: Policy
+metadata:
+  name: runtime-selection
+  scope: {level: global}
+  owners: [replicant-platform, replicant-security]
+  description: Kata CLH for all classes; gVisor allowed as standby (runtime-evaluation.md section 10).
+spec:
+  policyType: runtime_selection
+  hintPolicy: honorIfAllowed
+  classes:
+    coding: {default: kata-clh, allowedRuntimes: [kata-clh, gvisor], maxCpu: "16", maxMemory: 64Gi}
+    qa_build: {default: kata-clh, allowedRuntimes: [kata-clh, gvisor], maxCpu: "24", maxMemory: 96Gi}
+    review: {default: kata-clh, allowedRuntimes: [kata-clh, gvisor], maxCpu: "8", maxMemory: 32Gi}
+    utility: {default: kata-clh, allowedRuntimes: [kata-clh, gvisor], maxCpu: "4", maxMemory: 16Gi}
+  workspace:
+    maxLocalSize: 200Gi
+    maxSize: 1Ti
+    localMaxByPool: {sbx-kata: 400Gi, sbx-kata-metal: 800Gi, sbx-gvisor: 200Gi}
+    overflowStorageClass: replicant-workspace-gp3
+    enforcementByRuntime:
+      kata-clh: guestBlockDevice
+      gvisor: xfsProjectQuota
+  gvisor:
+    directfs: false
+    platform: systrap

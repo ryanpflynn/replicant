@@ -1,0 +1,102 @@
+# AgentDefinition: reviewer on Codex CLI (codex exec --json), read-only intent with test execution.
+# Validates against schemas/agent-definition.schema.json (tools/validate.py).
+# Codex 0.164.0 is the latest stable release on 2026-10-24
+# [verified: GitHub releases openai/codex rust-v0.164.0 (2026-10-23), checked 2026-10-24].
+apiVersion: replicant.example.com/v1
+kind: AgentDefinition
+metadata:
+  name: reviewer-codex
+  scope:
+    level: global
+  owners:
+    - replicant-platform
+  description: >-
+    Independent reviewer on a different model family from the implementer. Reads the diff on a
+    fresh checkout, may run tests, never produces a diff. Workspace changes are detected and void
+    the verdict (workspaceIntegrity=enforce).
+  labels:
+    replicant.cli: codex
+spec:
+  roles: [reviewer]
+  workloadClass: review
+  cli: codex
+  cliImage:
+    image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/cli-codex@sha256:6e8a0c2b4d5f7e9a1c3b5d7f9e2a3c5b7d9f1e3a4c6b8d0f2e4a5c7b9d1f3e5a
+    version: 0.164.0
+    entrypointVersion: 1.1.0
+  model:
+    primary: openai/gpt-5-codex-2025-09-15
+    parameters:
+      reasoningEffort: high
+      reasoningSummary: concise
+      verbosity: medium
+  prompts:
+    role:
+      ref: prompt/reviewer-role@label:production
+      mode: append
+    constraints: prompt/replicant-constraints@label:production
+    task: prompt/reviewer-task@label:production
+  tools:
+    read: true
+    edit: false
+    shell:
+      mode: any
+      deny:
+        - "git commit:*"
+        - "git push:*"
+        - "git checkout:*"
+        - "git reset:*"
+        - "curl:*"
+      defaultTimeoutSeconds: 600
+      maxTimeoutSeconds: 1800
+    web:
+      fetch: false
+      search: false
+    subagents:
+      enabled: false
+  mcpServers:
+    - name: context
+      service: context
+      required: false
+    - name: code_search
+      service: code_search
+      required: false
+  limits:
+    maxTurns: 60
+    maxWallSeconds: 2400
+    maxCostUsd: 8
+    startupSeconds: 300
+    finalizeSeconds: 180
+    cliGraceSeconds: 20
+  gateway:
+    protocol: openai_responses
+    retry:
+      maxAttempts: 6
+      maxCumulativeWaitSeconds: 600
+    requestTimeoutSeconds: 300
+    softBudgetFraction: 0.9
+    unavailableAfterSeconds: 600
+  env:
+    CI: "true"
+  steering:
+    live: false
+  session:
+    capture: on_success
+    resumable: false
+  outputContract:
+    roleResultSchema: replicant.role-result.reviewer/v1
+    structuredResult: cli_schema
+    outputs:
+      diff_bundle: forbidden
+      handoff: forbidden
+      review_report: required
+      session_state: optional
+      plan: forbidden
+      memory_candidates: forbidden
+      workspace_archive: forbidden
+    workspaceIntegrity: enforce
+  codex:
+    mode: exec
+    sandboxMode: danger-full-access
+    approvalPolicy: never
+    repoInstructionFiles: ignore

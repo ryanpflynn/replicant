@@ -1,0 +1,19 @@
+# containerd 2.x CRI runtime handler fragment for the Kata runtime-rs + Cloud Hypervisor handler
+# (WS-02 owns the full containerd config; WS-09 owns pod_annotations / container_annotations).
+# Forward no pod or container annotations to the Kata shim. Every 2026 annotation-to-host advisory
+# (GHSA-rr59-xxvx-96qr, GHSA-mp2j-xm59-qfgw, GHSA-7fhf-v3p3-rp56, GHSA-37rf-pj8c-g5g3) requires the
+# annotation to reach the runtime [verified: https://github.com/kata-containers/kata-containers/security/advisories, 2026-10-24].
+# [unverified: exact table path for containerd 2.x config version 3; WS-02 confirms against containerd 2.4]
+version = 3
+
+[plugins."io.containerd.cri.v1.runtime".containerd.runtimes.kata-clh-runtime-rs]
+  runtime_type = "io.containerd.kata-clh.v2"
+  privileged_without_host_devices = true
+  pod_annotations = []
+  container_annotations = []
+
+[plugins."io.containerd.cri.v1.runtime".containerd.runtimes.runsc]
+  runtime_type = "io.containerd.runsc.v1"
+  # No annotations to runsc either: gVisor uses plain bind mounts with directfs off (XD-02-05, R1-222).
+  pod_annotations = []
+  container_annotations = []

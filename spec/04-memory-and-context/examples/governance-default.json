@@ -1,0 +1,149 @@
+{
+  "schema": "replicant.memory-governance/v1",
+  "extraction": {
+    "enabled": true,
+    "min_author_permission": "write",
+    "require_codeowner_for_path_scope": false,
+    "generalization_threshold": 0.7,
+    "max_candidates_per_job": 10,
+    "accept_agent_proposals": true,
+    "min_identity_link_age_days": 7,
+    "max_agent_proposals_per_job": 2
+  },
+  "dedupe": {
+    "judge_prompt": "memory-dedupe-judge@3",
+    "judge_model": "anthropic/claude-haiku-5-5",
+    "contradiction_prompt": "memory-contradiction-judge@2",
+    "neighbors": 10
+  },
+  "auto_activation": {
+    "repo_rule": {
+      "enabled": true,
+      "require_pr_merged": true,
+      "require_fix_in_merged_diff": true,
+      "min_generalization": 0.75,
+      "min_author_permission": "write",
+      "require_codeowner": false,
+      "quiet_period_hours": 24
+    },
+    "path_rule": {
+      "enabled": true,
+      "require_pr_merged": true,
+      "require_fix_in_merged_diff": true,
+      "min_generalization": 0.75,
+      "min_author_permission": "write",
+      "require_codeowner": false,
+      "quiet_period_hours": 24
+    },
+    "episode": {
+      "enabled": true,
+      "require_pr_merged": true,
+      "require_fix_in_merged_diff": false,
+      "quiet_period_hours": 24
+    },
+    "procedure": {
+      "enabled": false
+    },
+    "negative": {
+      "enabled": false
+    },
+    "preference": {
+      "enabled": false
+    },
+    "agent_proposal": {
+      "enabled": false
+    }
+  },
+  "evidence": {
+    "service_group": {
+      "min_independent_occurrences": 2,
+      "min_distinct_authors": 2,
+      "min_distinct_repos": 2,
+      "curator_approvals": 1
+    },
+    "tenant": {
+      "min_independent_occurrences": 3,
+      "min_distinct_authors": 2,
+      "min_distinct_repos": 3,
+      "curator_approvals": 2
+    },
+    "org": {
+      "min_independent_occurrences": 5,
+      "min_distinct_authors": 3,
+      "min_distinct_repos": 4,
+      "min_distinct_tenants": 2,
+      "curator_approvals": 2,
+      "require_eval_pass": true
+    }
+  },
+  "limits": {
+    "active_per_repo_soft": 150,
+    "active_per_repo_hard": 300,
+    "active_per_scope": {
+      "org": 50,
+      "tenant": 100,
+      "service_group": 100,
+      "repo": 150,
+      "path": 150
+    },
+    "candidate_ttl_days": 30
+  },
+  "safety": {
+    "ruleset_version": "memsafe-2026.10.1",
+    "url_allowlist": [
+      "docs.acme.internal",
+      "github.com/acme-*",
+      "pkg.go.dev",
+      "docs.python.org"
+    ],
+    "classifier_prompt": "memory-safety-classifier@4",
+    "block_on_classifier": 0.5
+  },
+  "anomaly": {
+    "author_candidates_per_day": 8,
+    "author_zscore": 3,
+    "tenant_candidates_per_hour": 30,
+    "cross_repo_burst_repos": 4,
+    "on_breach": "restrict_author"
+  },
+  "lifecycle": {
+    "probation_days": 14,
+    "probation_min_exposures": 10,
+    "staleness_review_days": 180,
+    "episode_retention_days": 365,
+    "suspend_on_reviewer_contradiction": true
+  },
+  "outcomes": {
+    "auto_disable_enabled": true,
+    "min_exposures": 20,
+    "min_holdout": 5,
+    "harm_probability": 0.9,
+    "ineffective_repeat_rate": 0.3
+  },
+  "flags": {
+    "sla_hours": 72,
+    "probation_disable_distinct_flaggers": 2,
+    "per_principal_per_day": 20,
+    "agent_flags_to_disable": 2
+  },
+  "corrections": {
+    "suspend_on_request": true,
+    "sla_hours": 48,
+    "allow_codeowner": true
+  },
+  "outcome_reports": {
+    "revert_window_days": 30,
+    "apply_on": [
+      "reverted",
+      "wrong_fix",
+      "regression"
+    ],
+    "confidence_beta_increment": 2
+  },
+  "queue": {
+    "cluster_similarity": 0.85,
+    "age_slo_days_p90": 7,
+    "expiry_notice_days": 7,
+    "max_open_candidates_per_tenant": 500
+  }
+}

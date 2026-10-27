@@ -1,0 +1,46 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "WriteKillSwitchMirrorWithCompareAndSwap",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:GetObjectVersion"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-ops/kill-switches/v1/state.json",
+      "Condition": {
+        "StringLike": {
+          "aws:PrincipalTag/breakglass-ticket": "INC-*"
+        },
+        "DateLessThan": {
+          "aws:CurrentTime": "${aws:PrincipalTag/breakglass-expires-at}"
+        }
+      }
+    },
+    {
+      "Sid": "EncryptWithOpsKeyViaS3",
+      "Effect": "Allow",
+      "Action": [
+        "kms:GenerateDataKey",
+        "kms:Decrypt"
+      ],
+      "Resource": "arn:aws:kms:us-east-1:111111111111:key/*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "s3.us-east-1.amazonaws.com"
+        },
+        "ForAnyValue:StringEquals": {
+          "kms:ResourceAliases": "alias/replicant/prod/ops"
+        },
+        "StringLike": {
+          "aws:PrincipalTag/breakglass-ticket": "INC-*"
+        },
+        "DateLessThan": {
+          "aws:CurrentTime": "${aws:PrincipalTag/breakglass-expires-at}"
+        }
+      }
+    }
+  ]
+}

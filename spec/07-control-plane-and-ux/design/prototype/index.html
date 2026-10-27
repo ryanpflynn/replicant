@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prototype index · replicant</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main class="sheet">
+  <div class="row"><span class="brand" style="border:0;padding:0;height:auto"><span class="mark"><i></i><i></i><i></i><i></i></span><span class="word">replicant</span></span><span class="t3">control-plane prototype · static HTML/CSS · no network</span></div>
+  <h2>Screens</h2>
+  <table class="t" style="max-width:900px">
+    <thead><tr><th>Screen</th><th>File</th><th>Query parameters</th></tr></thead>
+    <tbody>
+      <tr><td>Job list</td><td class="mono"><a href="job-list.html">job-list.html</a></td><td class="mono">?theme=light|dark</td></tr>
+      <tr><td>Job detail (running, steered)</td><td class="mono"><a href="job-detail.html">job-detail.html</a></td><td class="mono">&amp;palette=1 opens ⌘K · &amp;state=failed|capacity|stale</td></tr>
+      <tr><td>Approval inbox + packet</td><td class="mono"><a href="approvals.html">approvals.html</a></td><td class="mono">&amp;state=rolledback|stale|empty|degraded</td></tr>
+      <tr><td>Slack and GitHub renderings</td><td class="mono"><a href="channels.html">channels.html</a></td><td class="mono">—</td></tr>
+      <tr><td>Releases and versions</td><td class="mono"><a href="releases.html?admin=1">releases.html</a></td><td class="mono">&amp;admin=1</td></tr>
+      <tr><td>Memory curation (replicant-admins)</td><td class="mono"><a href="memory.html?admin=1">memory.html</a></td><td class="mono">&amp;admin=1</td></tr>
+      <tr><td>Memory direct link, non-admin (403)</td><td class="mono"><a href="memory-denied.html?admin=0">memory-denied.html</a></td><td class="mono">&amp;admin=0</td></tr>
+      <tr><td>Token sheet</td><td class="mono"><a href="tokens.html">tokens.html</a></td><td class="mono">—</td></tr>
+    </tbody>
+  </table>
+  <p class="t3 small" style="margin-top:12px">Screenshots: <span class="mono">../screenshots/&lt;screen&gt;-&lt;1440|1024&gt;-&lt;light|dark&gt;.png</span>, rendered by <span class="mono">design/tools/screenshots.py</span>.</p>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

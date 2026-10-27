@@ -1,0 +1,130 @@
+# AgentDefinition: implementer (and repair) on Claude Code.
+# Validates against schemas/agent-definition.schema.json (tools/validate.py).
+# Digests are illustrative; values that WS-03 pins for real are the CLI version (2.1.310, latest on
+# 2026-10-24 [verified: https://registry.npmjs.org/@anthropic-ai/claude-code/latest, 2026-10-24]) and
+# the flag set the adapter renders (cli-invocation.md section 2).
+apiVersion: replicant.example.com/v1
+kind: AgentDefinition
+metadata:
+  name: implementer-claude
+  scope:
+    level: global
+  owners:
+    - replicant-platform
+  description: >-
+    Implementer and repair agent on Claude Code in headless print mode with stream-json input and
+    output, live steering, memory and context MCP, and session capture for resumption.
+  labels:
+    replicant.cli: claude-code
+spec:
+  roles: [implementer, repair]
+  workloadClass: coding
+  cli: claude-code
+  cliImage:
+    image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/cli-claude-code@sha256:5d7f9b1a3c4e6d8f0b2a4c6e8d1f2b4a6c8e0d2f3b5a7c9e1d3f4b6a8c0e2d4f
+    version: 2.1.310
+    entrypointVersion: 1.1.0
+  model:
+    primary: anthropic/claude-sonnet-5-5
+    fallbacks:
+      - anthropic/claude-opus-5-5
+    small: anthropic/claude-haiku-5-5
+    parameters:
+      maxOutputTokens: 32000
+      thinkingTokens: 8000
+  prompts:
+    role:
+      ref: prompt/implementer-role@label:production
+      mode: append
+    constraints: prompt/replicant-constraints@label:production
+    task: prompt/implementer-task@label:production
+    finalize: prompt/finalize-handoff@label:production
+  tools:
+    read: true
+    edit: true
+    shell:
+      mode: any
+      deny:
+        - "git push:*"
+        - "git remote add:*"
+        - "curl:*"
+        - "wget:*"
+        - "ssh:*"
+        - "docker:*"
+      defaultTimeoutSeconds: 300
+      maxTimeoutSeconds: 1800
+      maxOutputChars: 30000
+    web:
+      fetch: false
+      search: false
+    subagents:
+      enabled: true
+    denyTools: [WebFetch, WebSearch, NotebookEdit, EnterWorktree]
+  mcpServers:
+    - name: memory
+      service: memory
+      tools:
+        allow: [search_memory, get_memory_entry]
+      required: false
+      toolTimeoutSeconds: 30
+    - name: context
+      service: context
+      required: false
+    - name: code_search
+      service: code_search
+      required: false
+  limits:
+    maxTurns: 200
+    maxWallSeconds: 5400
+    maxCostUsd: 25
+    maxModelCalls: 2000
+    startupSeconds: 300
+    finalizeSeconds: 300
+    cliGraceSeconds: 30
+  gateway:
+    protocol: anthropic_messages
+    retry:
+      maxAttempts: 6
+      maxCumulativeWaitSeconds: 900
+      baseDelayMs: 1000
+      maxDelayMs: 60000
+    requestTimeoutSeconds: 600
+    softBudgetFraction: 0.9
+    unavailableAfterSeconds: 600
+  env:
+    CI: "true"
+    TZ: UTC
+  steering:
+    live: true
+  session:
+    capture: always
+    resumable: true
+  outputContract:
+    roleResultSchema: replicant.role-result.implementer/v1
+    structuredResult: cli_schema
+    outputs:
+      diff_bundle: required
+      handoff: required
+      session_state: optional
+      memory_candidates: optional
+      plan: forbidden
+      review_report: forbidden
+      workspace_archive: optional
+    diffPolicy:
+      forbiddenPaths: [".github/workflows/**", "**/*.pem", "**/.env"]
+      onForbiddenPath: strip_and_report
+      maxFilesChanged: 300
+      maxPatchBytes: 33554432
+      allowBinary: false
+      allowSubmoduleChanges: false
+      allowModeChanges: true
+    workspaceIntegrity: "off"
+  claudeCode:
+    repoInstructionFiles: ignore
+    includePartialMessages: false
+    propagateTraceparent: true
+    telemetry:
+      metrics: true
+      logs: true
+      traces: false
+      logToolDetails: false

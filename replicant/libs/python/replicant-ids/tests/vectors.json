@@ -1,0 +1,11 @@
+{
+  "source": "spec/00-contracts/ids-and-naming.md §1 and §5 (C-IDS 2.0.0)",
+  "derived": [
+    {"prefix": "run", "fields": ["payments", "ik1:job_01m5p7x7r0bt69j0h0fbxepw90:implementer.c0.n1.run"], "out": "run_gj3h3ep3phjfs9e23v768zrca5"},
+    {"prefix": "run", "fields": ["payments", "ik1:job_01m5p7x7r0bt69j0h0fbxepw90:qa.c0.n1.run"], "out": "run_chxtsxqzcpds1fc1c4dvw9e4em"},
+    {"prefix": "gate", "fields": ["job_01m5p7x7r0bt69j0h0fbxepw90", "plan_approval", "c0", "n1"], "out": "gate_r1a2avb51zgbsjy0x4ghyktt2e"}
+  ],
+  "job_trace_id": [{"in": "job_01m5p7x7r0bt69j0h0fbxepw90", "out": "fc0575170c8597ce9805552723c08d6e"}],
+  "job_span_id": [{"in": "job_01m5p7x7r0bt69j0h0fbxepw90", "out": "2f9b8c2c87b35ba4"}],
+  "run_span_id": [{"in": "run_gj3h3ep3phjfs9e23v768zrca5", "out": "b776c51d0276da4e"}]
+}

@@ -1,0 +1,3486 @@
+openapi: 3.1.1
+jsonSchemaDialect: https://spec.openapis.org/oas/3.1/dialect/base
+info:
+  title: Replicant memory-service API
+  version: 1.2.0
+  summary: Internal and admin API of memory-service (WS-04). Single writer of Postgres schema `memory` (C-PG).
+  description: |
+    Three audiences, three listeners (the MCP listener for sandboxes is specified separately in
+    `../mcp/memory-mcp.tools.json`):
+
+    * **Internal** (`/internal/v1/...`, tag `internal`): called by `replicant-worker` activities
+      (`memory.create_snapshot`, `context.assemble`, `memory.write_candidates`, `memory.write_episode`,
+      `memory.record_outcome`), by `control-plane-api` for the read-only job memory view, and by
+      `context-mcp` (job binding lookup). Caller authentication: Kubernetes projected ServiceAccount
+      token, audience `memory-service`, allowlisted subjects per operation (x-allowed-callers).
+    * **Admin** (`/internal/v1/admin/...`, tag `admin`): called only by `control-plane-api` on behalf
+      of a human. control-plane-api forwards the end user's verified identity in
+      `X-Replicant-Principal` (the Okta-mapped `usr_` ID) plus its own ServiceAccount token.
+      **memory-service re-checks the route's permission on every request** by calling identity-service
+      `POST /internal/v1/authorize {principal_id, action: <the route's x-replicant-permission>}` (D-25: no cached
+      grant; SCIM changes take effect on the next request). That is `memory:admin` on every admin route
+      except restore-resync and its status poll, which use `restore:execute` as the shared restore envelope
+      requires (XD-FIX-R1-237, R1V-027). control-plane-api checks the same permission, so both layers agree. A denial returns 403 and is audited
+      (`audit.emit`, event `memory.admin_denied`). Every admin mutation requires `Idempotency-Key`
+      and writes `memory.curator_actions` plus an audit event in the same transaction.
+    * Mutations of a single entry require `If-Match: "<entry_id>:<state_seq>"` (optimistic
+      concurrency); a stale ETag returns 412 with the current entry.
+
+    Errors are RFC 9457 `application/problem+json` with `code` and `retryable`, the same
+    convention as the Runner API.
+
+    **Revision 1.1.0 (wave-1 fixes).** One verb table shared with control-plane-api (R1-097): every admin
+    operation below carries `x-public-path`, the route control-plane-api exposes and proxies 1:1. Lifecycle verbs
+    are explicit (`:approve`, `:reject`, `:disable`, `:deprecate`, `:restore`, `:reopen`, `:quarantine`,
+    `:promote`, `:merge`, `:clear-hold`, `PATCH` for edits). Every single-entry mutation needs `If-Match` and
+    returns **412** `precondition_failed` with the current entry when the ETag is stale, **409**
+    `invalid_transition` when the action is not allowed from the current state, and **202** with
+    `pending_second_approval: true` when a tenant- or org-scope action waits for a second, different admin.
+    There is no `DELETE` on entries: hard deletion is `POST …/purges`.
+
+    Authorization calls to identity-service (R1-098): `POST /internal/v1/authorize` with
+    `{principal_id, action: "memory:admin", tenant_id: null, freshness: "request"}` → `{decision, reason, evidence, evaluated_at}` before every admin request (flags use `action: "memory:flag"`; restore-resync uses `action: "restore:execute"`, `tenant_id: null`),
+    and `POST /internal/v1/authorize:batch-repos` with `{principal_id, action: "repo:read", repo_ids[1..100], freshness: "request"}` → `{results: [{repo_id, decision, permission, source}], as_of}` for
+    repository visibility (memory-mcp episodes, provenance links, public entry view). See XD-FIX-R1-098.
+
+    **Revision 1.2.0 (wave 2).** Leak purges are called by `ops-worker` (XD-FIX-R1-103). Restore resync uses the
+    shared restore envelope (XD-FIX-R1-237). Eval component endpoints for eval-worker (XD-FIX-R1-151). Embeddings are
+    requested from the gateway shim at `POST /embeddings/v1/embeddings` (XD-FIX-R2-057); memory-service holds no
+    provider key.
+  contact:
+    name: WS-04 Memory and Context
+servers:
+- url: https://memory-service.replicant-context.svc.cluster.local:8443
+  description: In-cluster (core). Not exposed outside the core cluster.
+tags:
+- name: internal
+- name: admin
+security:
+- serviceToken: []
+paths:
+  /internal/v1/snapshots:
+    post:
+      tags:
+      - internal
+      operationId: createSnapshot
+      summary: Create (or idempotently fetch) the memory snapshot for a job's context assembly.
+      description: |-
+        Called by activity `memory.create_snapshot`: logical activity ID `context.c<cycle>.n<ord>.snapshot` for the
+        first assembly (mode `create` or `eval_pinned`) and `<node>.c<cycle>.n<ord>.resnap` before each agent run
+        (mode `revocation_filter`), using WS-01's node keys (R1-111). Deterministic: the eligible set is read under the
+        snapshot policy in one REPEATABLE READ transaction. The snapshot ID is content-addressed over
+        `{tenant_id, entries, policy}` (C-IDS, CCR-04-04), so two tenants never share a snapshot row (R1-096). The
+        snapshot export is written to S3 (`If-None-Match: *`) **before** the row is inserted (blob first). Holdout arms
+        are assigned per (job, entry) in `memory.holdout_assignments`, never stored in the shared snapshot.
+
+        Mode `eval_prepare` (caller eval-worker only) builds a snapshot for `scope_context {tenant_id, repo, as_of}` with
+        no job and no binding, and returns only the snapshot fields; WS-06's `eval.prepare_memory` then passes the ID in
+        `options.evaluation.memory_snapshot_id`. Mode `eval_pinned` binds an evaluation job to that snapshot. With
+        `replay_job_id` (C-JOBREQ `options.evaluation.memory_replay_job_id`, CCR-04-05) the binding replays the source
+        job's recorded injections and retrievals (R1-101).
+      x-allowed-callers:
+      - system:serviceaccount:replicant-workers:replicant-worker
+      - system:serviceaccount:replicant-eval:eval-worker
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSnapshotRequest'
+      responses:
+        '201':
+          description: Snapshot created and (except eval_prepare) bound to the job.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SnapshotBinding'
+        '200':
+          description: Same idempotency key; the existing binding is returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SnapshotBinding'
+        '400':
+          $ref: '#/components/responses/Problem'
+        '409':
+          $ref: '#/components/responses/Problem'
+        '422':
+          $ref: '#/components/responses/Problem'
+        '503':
+          $ref: '#/components/responses/Problem'
+  /internal/v1/snapshots/{snapshot_id}:
+    get:
+      tags:
+      - internal
+      operationId: getSnapshot
+      summary: Snapshot with full item content (for rendering, eval replay, and approval packets).
+      x-allowed-callers:
+      - system:serviceaccount:replicant-workers:replicant-worker
+      - system:serviceaccount:replicant-eval:eval-worker
+      parameters:
+      - $ref: '#/components/parameters/SnapshotId'
+      responses:
+        '200':
+          description: Snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Snapshot'
+        '404':
+          $ref: '#/components/responses/Problem'
+  /internal/v1/snapshots/{snapshot_id}:select:
+    post:
+      tags:
+      - internal
+      operationId: selectForRun
+      summary: Rank and render the snapshot's entries for one run, within a token budget.
+      description: |-
+        Called by activity `context.stage_inputs` (`<node>.c<cycle>.n<ord>.stage`) for each run. Applies role sections,
+        path/language applicability, precedence and conflict suppression, this job's holdout arms (per job, not per
+        snapshot), and the budget; renders `replicant.memory-block/v1` with a pinned renderer version; counts tokens with
+        the target model's tokenizer. Records `memory.injections` (refs in order, withheld refs, renderer version,
+        sha256). For a replay binding it renders the **source run's** recorded refs in recorded order with the recorded
+        renderer version, matched by `(node_key, cycle, ordinal)`, and verifies `rendered_sha256` (purged items render
+        as tombstones and the mismatch is reported). The rendered text is returned only in this response and stored only
+        in the `memory_injection` artifact; no other staged input may duplicate it (R1-105). Idempotent on `run_id`.
+      x-allowed-callers:
+      - system:serviceaccount:replicant-workers:replicant-worker
+      - system:serviceaccount:replicant-eval:eval-worker
+      parameters:
+      - $ref: '#/components/parameters/SnapshotId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SelectRequest'
+      responses:
+        '200':
+          description: Rendered injection (the body is the memory_injection artifact document).
+          content:
+            application/json:
+              schema:
+                $ref: ../schemas/memory-injection.schema.json
+        '404':
+          $ref: '#/components/responses/Problem'
+        '422':
+          $ref: '#/components/responses/Problem'
+  /internal/v1/jobs/{job_id}/binding:
+    get:
+      tags:
+      - internal
+      operationId: getJobBinding
+      summary: The job's current snapshot binding (used by memory-mcp and context-mcp to scope calls).
+      x-allowed-callers:
+      - system:serviceaccount:replicant-context:context-mcp
+      - system:serviceaccount:replicant-workers:replicant-worker
+      parameters:
+      - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Binding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SnapshotBinding'
+        '404':
+          $ref: '#/components/responses/Problem'
+  /internal/v1/jobs/{job_id}/memory:
+    get:
+      tags:
+      - internal
+      operationId: getJobMemoryView
+      summary: Read-only memory view for a job (non-admin view, D-25). control-plane-api authorizes the viewer for
+        the job first.
+      x-allowed-callers:
+      - system:serviceaccount:replicant-control:control-plane-api
+      - system:serviceaccount:replicant-workers:replicant-worker
+      parameters:
+      - $ref: '#/components/parameters/JobId'
+      - name: viewer_repo_access
+        in: query
+        description: Comma-separated repos the viewer can read (computed by control-plane-api); controls whether
+          source PR links are shown.
+        schema:
+          type: string
+          maxLength: 20000
+      responses:
+        '200':
+          description: Entries that influenced the job.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobMemoryView'
+        '404':
+          $ref: '#/components/responses/Problem'
+  /internal/v1/candidates:
+    post:
+      tags:
+      - internal
+      operationId: submitCandidates
+      summary: Submit candidate proposals from the feedback extraction or an agent's memory_candidates artifact.
+      description: |
+        Runs the write-path gates (write-path.md §1–§5): identity and author restriction, safety
+        content rules, dedupe/merge, contradiction detection, candidate creation, and any automatic
+        transition the governance policy allows. Idempotent per (tenant, source item, extractor).
+      x-allowed-callers:
+      - system:serviceaccount:replicant-workers:replicant-worker
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/memory-candidates.schema.json
+      responses:
+        '200':
+          description: Per-proposal decisions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CandidateDecisions'
+        '400':
+          $ref: '#/components/responses/Problem'
+        '422':
+          $ref: '#/components/responses/Problem'
+  /internal/v1/episodes:
+    post:
+      tags:
+      - internal
+      operationId: writeEpisode
+      summary: Record the episodic memory entry for a terminal job (activity memory.write_episode).
+      x-allowed-callers:
+      - system:serviceaccount:replicant-workers:replicant-worker
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EpisodeRequest'
+      responses:
+        '201':
+          description: Episode created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryRef'
+        '200':
+          description: Already recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryRef'
+  /internal/v1/outcomes:
+    post:
+      tags:
+      - internal
+      operationId: recordOutcome
+      summary: Record or revise a job's outcome metrics (activity memory.record_outcome; revised on late PR events).
+      x-allowed-callers:
+      - system:serviceaccount:replicant-workers:replicant-worker
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OutcomeRequest'
+      responses:
+        '200':
+          description: Stored.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - job_id
+                - revision
+                properties:
+                  job_id:
+                    $ref: '#/components/schemas/JobId'
+                  revision:
+                    type: integer
+  /internal/v1/feedback-signals:
+    post:
+      tags:
+      - internal
+      operationId: recordFeedbackSignals
+      summary: Reviewer comments matched against entries (confirmed, contradicted, repeated) for usage telemetry
+        and probation suspension.
+      x-allowed-callers:
+      - system:serviceaccount:replicant-workers:replicant-worker
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FeedbackSignals'
+      responses:
+        '200':
+          description: Recorded; lists entries suspended under policy, if any.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  suspended:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EntryRefString'
+  /internal/v1/admin/candidates:
+    get:
+      tags:
+      - admin
+      operationId: listCandidates
+      summary: Candidate queue (filters by tenant, scope, type, origin, age, conflict, anomaly).
+      parameters:
+      - $ref: '#/components/parameters/Principal'
+      - name: tenant_id
+        in: query
+        schema:
+          $ref: '#/components/schemas/TenantId'
+      - name: memory_type
+        in: query
+        schema:
+          $ref: '#/components/schemas/MemoryType'
+      - name: scope_level
+        in: query
+        schema:
+          $ref: '#/components/schemas/ScopeLevel'
+      - name: has_conflict
+        in: query
+        schema:
+          type: boolean
+      - name: page_token
+        in: query
+        schema:
+          type: string
+          maxLength: 512
+      - name: page_size
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 50
+      responses:
+        '200':
+          description: Page of candidates.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryPage'
+        '403':
+          $ref: '#/components/responses/Problem'
+      x-public-path: /v1/admin/memory/candidates
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/entries:
+    get:
+      tags:
+      - admin
+      operationId: searchEntries
+      summary: Search all entries (any state) with full-text, trigram, and filters.
+      parameters:
+      - $ref: '#/components/parameters/Principal'
+      - name: q
+        in: query
+        schema:
+          type: string
+          maxLength: 500
+      - name: tenant_id
+        in: query
+        schema:
+          $ref: '#/components/schemas/TenantId'
+      - name: state
+        in: query
+        schema:
+          $ref: '#/components/schemas/EntryState'
+      - name: repo
+        in: query
+        schema:
+          type: string
+          maxLength: 455
+      - name: author_principal_id
+        in: query
+        schema:
+          $ref: '#/components/schemas/UserId'
+      - name: created_after
+        in: query
+        schema:
+          type: string
+          format: date-time
+      - name: created_before
+        in: query
+        schema:
+          type: string
+          format: date-time
+      - name: page_token
+        in: query
+        schema:
+          type: string
+          maxLength: 512
+      responses:
+        '200':
+          description: Page of entries.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryPage'
+        '403':
+          $ref: '#/components/responses/Problem'
+      x-public-path: /v1/admin/memory/entries
+      x-replicant-permission: memory:admin
+    post:
+      tags:
+      - admin
+      operationId: createEntry
+      summary: Admin-authored entry (origin curator). Tenant and org scope require a second, different admin (two-person
+        rule).
+      parameters:
+      - $ref: '#/components/parameters/Principal'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EntryContent'
+      responses:
+        '201':
+          description: Created (active, or pending second approval for tenant or org scope).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDetail'
+        '403':
+          $ref: '#/components/responses/Problem'
+        '422':
+          $ref: '#/components/responses/Problem'
+      x-public-path: /v1/admin/memory/entries
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/entries/{entry_id}:
+    get:
+      tags:
+      - admin
+      operationId: getEntryDetail
+      summary: Full entry detail — all versions, provenance with author identities, state history, conflicts, usage,
+        outcome statistics.
+      parameters:
+      - $ref: '#/components/parameters/Principal'
+      - $ref: '#/components/parameters/EntryId'
+      responses:
+        '200':
+          description: Entry.
+          headers:
+            ETag:
+              schema:
+                type: string
+              description: '"<entry_id>:<state_seq>"'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDetail'
+        '403':
+          $ref: '#/components/responses/Problem'
+        '404':
+          $ref: '#/components/responses/Problem'
+      x-public-path: /v1/admin/memory/entries/{entry_id}
+      x-replicant-permission: memory:admin
+    patch:
+      tags:
+      - admin
+      operationId: editEntry
+      x-public-path: /v1/admin/memory/entries/{entry_id}
+      summary: Create a new version (content and same-or-narrower scope; widening uses :promote).
+      parameters:
+      - &id002
+        $ref: '#/components/parameters/Principal'
+      - &id003
+        $ref: '#/components/parameters/EntryId'
+      - &id004
+        $ref: '#/components/parameters/IdempotencyKey'
+      - &id005
+        $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EntryEdit'
+      responses:
+        '200':
+          description: New version.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDetail'
+        '202':
+          description: Pending second approval (tenant/org).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDetail'
+        '403': &id001
+          $ref: '#/components/responses/Problem'
+        '409': *id001
+        '412': *id001
+        '422': *id001
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/entries/{entry_id}:merge:
+    post:
+      tags:
+      - admin
+      operationId: mergeEntries
+      summary: 'Merge: the path entry SURVIVES; absorb_entry_ids are merged into it (their evidence moves; they
+        become superseded with merged_into → survivor).'
+      parameters:
+      - *id002
+      - *id003
+      - *id004
+      - *id005
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - absorb_entry_ids
+              - reason
+              properties:
+                absorb_entry_ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 50
+                  items:
+                    $ref: '#/components/schemas/EntryId'
+                reason:
+                  type: string
+                  maxLength: 2000
+      responses:
+        '200':
+          description: Merged.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDetail'
+        '403':
+          $ref: '#/components/responses/Problem'
+        '409': *id001
+        '412': *id001
+      x-public-path: /v1/admin/memory/entries/{entry_id}:merge
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/entries/{entry_id}/jobs:
+    get:
+      tags:
+      - admin
+      operationId: entryBlastRadius
+      summary: Jobs and runs that received (injected) or retrieved (pulled) this entry, with current job status
+        from jobs_read.
+      parameters:
+      - $ref: '#/components/parameters/Principal'
+      - $ref: '#/components/parameters/EntryId'
+      - name: version
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+      - name: include_running_only
+        in: query
+        schema:
+          type: boolean
+          default: false
+      - name: page_token
+        in: query
+        schema:
+          type: string
+          maxLength: 512
+      responses:
+        '200':
+          description: Blast radius.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BlastRadius'
+        '403':
+          $ref: '#/components/responses/Problem'
+      x-public-path: /v1/admin/memory/entries/{entry_id}/jobs
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/conflicts:
+    get:
+      tags:
+      - admin
+      operationId: listConflicts
+      parameters:
+      - $ref: '#/components/parameters/Principal'
+      - name: tenant_id
+        in: query
+        schema:
+          $ref: '#/components/schemas/TenantId'
+      - name: state
+        in: query
+        schema:
+          type: string
+          enum:
+          - open
+          - resolved
+          - dismissed
+          default: open
+      responses:
+        '200':
+          description: Conflicts with both sides' content.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - conflicts
+                properties:
+                  conflicts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Conflict'
+                  next_page_token:
+                    type: string
+        '403':
+          $ref: '#/components/responses/Problem'
+      x-public-path: /v1/admin/memory/conflicts
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/conflicts/{conflict_id}:resolve:
+    post:
+      tags:
+      - admin
+      operationId: resolveConflict
+      parameters:
+      - $ref: '#/components/parameters/Principal'
+      - name: conflict_id
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^mcfl_[0-9a-hjkmnp-tv-z]{26}$
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - resolution
+              - reason
+              properties:
+                resolution:
+                  type: string
+                  enum:
+                  - keep_a
+                  - keep_b
+                  - scope_split
+                  - merged
+                  - both_valid
+                  - neither
+                scope_split:
+                  description: For scope_split, the narrowed scope applied to each side as new versions.
+                  type: object
+                  properties:
+                    a:
+                      $ref: '#/components/schemas/Scope'
+                    b:
+                      $ref: '#/components/schemas/Scope'
+                reason:
+                  type: string
+                  maxLength: 2000
+      responses:
+        '200':
+          description: Resolved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conflict'
+        '403':
+          $ref: '#/components/responses/Problem'
+      x-public-path: /v1/admin/memory/conflicts/{conflict_id}:resolve
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/quarantines:
+    post:
+      tags:
+      - admin
+      operationId: createQuarantine
+      summary: 'Bulk disable or quarantine by selector (this is the public "bulk:disable"): dry_run first, then
+        apply in one transaction.'
+      parameters:
+      - $ref: '#/components/parameters/Principal'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuarantineRequest'
+      responses:
+        '200':
+          description: Dry run result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuarantineResult'
+        '201':
+          description: Applied in one transaction; effective for every snapshot created after commit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuarantineResult'
+        '403':
+          $ref: '#/components/responses/Problem'
+        '422':
+          $ref: '#/components/responses/Problem'
+      x-public-path: /v1/admin/memory/quarantines
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/quarantines/{quarantine_id}:release:
+    post:
+      tags:
+      - admin
+      operationId: releaseQuarantine
+      summary: Restore every member to its prior state (members purged in between stay purged).
+      parameters:
+      - $ref: '#/components/parameters/Principal'
+      - name: quarantine_id
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^mqtn_[0-9a-hjkmnp-tv-z]{26}$
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - reason
+              properties:
+                reason:
+                  type: string
+                  maxLength: 2000
+                exclude_entry_ids:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/EntryId'
+      responses:
+        '200':
+          description: Released.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuarantineResult'
+        '403':
+          $ref: '#/components/responses/Problem'
+      x-public-path: /v1/admin/memory/quarantines/{quarantine_id}:release
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/purges:
+    post:
+      tags:
+      - admin
+      operationId: purgeEntries
+      summary: Hard delete (tombstone) entries and propagate to derived copies (data-model.md §8). Irreversible.
+      parameters:
+      - $ref: '#/components/parameters/Principal'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - entry_ids
+              - reason_code
+              - reason_text
+              - confirm
+              properties:
+                entry_ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 10000
+                  items:
+                    $ref: '#/components/schemas/EntryId'
+                reason_code:
+                  type: string
+                  enum:
+                  - poisoned
+                  - secret_leak
+                  - pii
+                  - legal_request
+                  - tenant_offboarding
+                  - curator
+                reason_text:
+                  type: string
+                  maxLength: 2000
+                confirm:
+                  const: true
+                include_transcripts:
+                  type: boolean
+                  default: false
+                  description: Also request break-glass deletion of transcript chunks that contain the content (secret_leak
+                    and legal_request only)
+      responses:
+        '202':
+          description: Database purge committed; propagation in progress.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Purge'
+        '403':
+          $ref: '#/components/responses/Problem'
+      x-public-path: /v1/admin/memory/purges
+      description: |-
+        Writes the deletion-ledger entries (`del_…`, audit bucket, C-STATE) first, then purges in the database, then
+        propagates (data-model.md §8). Irreversible. Reasons secret_leak and pii additionally open a WS-08 LeakPurge
+        request for session state and transcripts (gate kind leak_purge).
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/purges/{purge_id}:
+    get:
+      tags:
+      - admin
+      operationId: getPurge
+      parameters:
+      - $ref: '#/components/parameters/Principal'
+      - name: purge_id
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^mprg_[0-9a-hjkmnp-tv-z]{26}$
+      responses:
+        '200':
+          description: Purge status per propagation target.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Purge'
+        '403':
+          $ref: '#/components/responses/Problem'
+      x-public-path: /v1/admin/memory/purges/{purge_id}
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/exports:
+    post:
+      tags:
+      - admin
+      operationId: createExport
+      summary: Export entries (NDJSON zstd, artifact type memory_export) to the memory bucket; downloaded through
+        a presigned GET issued by control-plane-api.
+      parameters:
+      - $ref: '#/components/parameters/Principal'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - scope
+              properties:
+                scope:
+                  type: string
+                  enum:
+                  - tenant
+                  - org
+                tenant_id:
+                  $ref: '#/components/schemas/TenantId'
+                states:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/EntryState'
+                include_provenance_identities:
+                  type: boolean
+                  default: false
+      responses:
+        '202':
+          description: Export started.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - export_id
+                - status
+                properties:
+                  export_id:
+                    type: string
+                    pattern: ^mexp_[0-9a-hjkmnp-tv-z]{26}$
+                  status:
+                    type: string
+        '403':
+          $ref: '#/components/responses/Problem'
+      x-public-path: /v1/admin/memory/exports
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/governance/{tenant_id}:
+    get:
+      tags:
+      - admin
+      operationId: getGovernance
+      parameters:
+      - $ref: '#/components/parameters/Principal'
+      - name: tenant_id
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/TenantId'
+      responses:
+        '200':
+          description: Current effective policy (org default merged with the tenant layer) and its versions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - effective
+                - versions
+                properties:
+                  effective:
+                    $ref: ../schemas/memory-governance.schema.json
+                  versions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        tenant_id:
+                          type: string
+                        policy_version:
+                          type: integer
+                        digest:
+                          type: string
+                        created_by:
+                          type: string
+                        created_at:
+                          type: string
+                          format: date-time
+        '403':
+          $ref: '#/components/responses/Problem'
+      x-public-path: /v1/admin/memory/governance/{tenant_id}
+      x-replicant-permission: memory:admin
+    put:
+      tags:
+      - admin
+      operationId: putGovernance
+      summary: New governance version. For a tenant, only tightening relative to the org default is accepted.
+      parameters:
+      - $ref: '#/components/parameters/Principal'
+      - name: tenant_id
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/TenantId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - document
+              - change_note
+              properties:
+                document:
+                  $ref: ../schemas/memory-governance.schema.json
+                change_note:
+                  type: string
+                  maxLength: 2000
+      responses:
+        '200':
+          description: Stored.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  policy_version:
+                    type: integer
+                  digest:
+                    type: string
+        '403':
+          $ref: '#/components/responses/Problem'
+        '422':
+          $ref: '#/components/responses/Problem'
+      x-public-path: /v1/admin/memory/governance/{tenant_id}
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/authors/{principal_id}:restrict:
+    post:
+      tags:
+      - admin
+      operationId: restrictAuthor
+      parameters:
+      - $ref: '#/components/parameters/Principal'
+      - name: principal_id
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/UserId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - tenant_id
+              - restriction
+              - reason
+              properties:
+                tenant_id:
+                  $ref: '#/components/schemas/TenantId'
+                restriction:
+                  type: string
+                  enum:
+                  - no_extraction
+                  - review_all_candidates
+                until:
+                  type: string
+                  format: date-time
+                reason:
+                  type: string
+                  maxLength: 2000
+      responses:
+        '200':
+          description: Stored.
+        '403':
+          $ref: '#/components/responses/Problem'
+      x-public-path: /v1/admin/memory/authors/{principal_id}:restrict
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/analytics/{report}:
+    get:
+      tags:
+      - admin
+      operationId: getAnalytics
+      summary: Memory analytics (admin-only, D-25). Reports are served from the analytics views plus per-entry outcome
+        statistics.
+      parameters:
+      - $ref: '#/components/parameters/Principal'
+      - name: report
+        in: path
+        required: true
+        schema:
+          type: string
+          enum:
+          - overview
+          - candidate_flow
+          - injection
+          - outcomes
+          - verdicts
+          - capacity
+          - anomalies
+      - name: tenant_id
+        in: query
+        schema:
+          $ref: '#/components/schemas/TenantId'
+      - name: since
+        in: query
+        schema:
+          type: string
+          format: date-time
+      responses:
+        '200':
+          description: Report rows.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - rows
+                properties:
+                  rows:
+                    type: array
+                    items:
+                      type: object
+        '403':
+          $ref: '#/components/responses/Problem'
+      x-public-path: /v1/admin/memory/analytics/{report}
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/entries/{entry_id}:approve:
+    post:
+      tags:
+      - admin
+      operationId: approveEntry
+      summary: 'candidate → active (optionally superseding entries). Tenant/org scope: second admin required'
+      x-public-path: /v1/admin/memory/entries/{entry_id}:approve
+      parameters:
+      - *id002
+      - *id003
+      - *id004
+      - *id005
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransitionRequest'
+      responses:
+        '200':
+          description: Applied.
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDetail'
+        '202':
+          description: First of two required approvals recorded (tenant or org scope).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDetail'
+        '403': *id001
+        '409': *id001
+        '412': *id001
+        '422': *id001
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/entries/{entry_id}:reject:
+    post:
+      tags:
+      - admin
+      operationId: rejectEntry
+      summary: candidate → rejected
+      x-public-path: /v1/admin/memory/entries/{entry_id}:reject
+      parameters:
+      - *id002
+      - *id003
+      - *id004
+      - *id005
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransitionRequest'
+      responses:
+        '200':
+          description: Applied.
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDetail'
+        '202':
+          description: First of two required approvals recorded (tenant or org scope).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDetail'
+        '403': *id001
+        '409': *id001
+        '412': *id001
+        '422': *id001
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/entries/{entry_id}:disable:
+    post:
+      tags:
+      - admin
+      operationId: disableEntry
+      summary: active → disabled
+      x-public-path: /v1/admin/memory/entries/{entry_id}:disable
+      parameters:
+      - *id002
+      - *id003
+      - *id004
+      - *id005
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransitionRequest'
+      responses:
+        '200':
+          description: Applied.
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDetail'
+        '202':
+          description: First of two required approvals recorded (tenant or org scope).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDetail'
+        '403': *id001
+        '409': *id001
+        '412': *id001
+        '422': *id001
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/entries/{entry_id}:deprecate:
+    post:
+      tags:
+      - admin
+      operationId: deprecateEntry
+      summary: active → deprecated
+      x-public-path: /v1/admin/memory/entries/{entry_id}:deprecate
+      parameters:
+      - *id002
+      - *id003
+      - *id004
+      - *id005
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransitionRequest'
+      responses:
+        '200':
+          description: Applied.
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDetail'
+        '202':
+          description: First of two required approvals recorded (tenant or org scope).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDetail'
+        '403': *id001
+        '409': *id001
+        '412': *id001
+        '422': *id001
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/entries/{entry_id}:restore:
+    post:
+      tags:
+      - admin
+      operationId: restoreEntry
+      summary: disabled, deprecated, or quarantined (single entry) → the state recorded before that removal (one
+        meaning, shared with the UI)
+      x-public-path: /v1/admin/memory/entries/{entry_id}:restore
+      parameters:
+      - *id002
+      - *id003
+      - *id004
+      - *id005
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransitionRequest'
+      responses:
+        '200':
+          description: Applied.
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDetail'
+        '202':
+          description: First of two required approvals recorded (tenant or org scope).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDetail'
+        '403': *id001
+        '409': *id001
+        '412': *id001
+        '422': *id001
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/entries/{entry_id}:reopen:
+    post:
+      tags:
+      - admin
+      operationId: reopenEntry
+      summary: rejected or expired → candidate
+      x-public-path: /v1/admin/memory/entries/{entry_id}:reopen
+      parameters:
+      - *id002
+      - *id003
+      - *id004
+      - *id005
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransitionRequest'
+      responses:
+        '200':
+          description: Applied.
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDetail'
+        '202':
+          description: First of two required approvals recorded (tenant or org scope).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDetail'
+        '403': *id001
+        '409': *id001
+        '412': *id001
+        '422': *id001
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/entries/{entry_id}:quarantine:
+    post:
+      tags:
+      - admin
+      operationId: quarantineEntry
+      summary: candidate, active, disabled, or deprecated → quarantined (single entry)
+      x-public-path: /v1/admin/memory/entries/{entry_id}:quarantine
+      parameters:
+      - *id002
+      - *id003
+      - *id004
+      - *id005
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransitionRequest'
+      responses:
+        '200':
+          description: Applied.
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDetail'
+        '202':
+          description: First of two required approvals recorded (tenant or org scope).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDetail'
+        '403': *id001
+        '409': *id001
+        '412': *id001
+        '422': *id001
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/entries/{entry_id}:promote:
+    post:
+      tags:
+      - admin
+      operationId: promoteEntry
+      summary: New version with a wider scope (evidence thresholds; tenant/org need two admins)
+      x-public-path: /v1/admin/memory/entries/{entry_id}:promote
+      parameters:
+      - *id002
+      - *id003
+      - *id004
+      - *id005
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PromoteRequest'
+      responses:
+        '200':
+          description: Applied.
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDetail'
+        '202':
+          description: First of two required approvals recorded (tenant or org scope).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDetail'
+        '403': *id001
+        '409': *id001
+        '412': *id001
+        '422': *id001
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/entries/{entry_id}:clear-hold:
+    post:
+      tags:
+      - admin
+      operationId: clearHold
+      summary: Clear an activation hold set by a correction request, flags, or an outcome report
+      x-public-path: /v1/admin/memory/entries/{entry_id}:clear-hold
+      parameters:
+      - *id002
+      - *id003
+      - *id004
+      - *id005
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransitionRequest'
+      responses:
+        '200':
+          description: Applied.
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDetail'
+        '202':
+          description: First of two required approvals recorded (tenant or org scope).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntryDetail'
+        '403': *id001
+        '409': *id001
+        '412': *id001
+        '422': *id001
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/conflicts/{conflict_id}:dismiss:
+    post:
+      tags:
+      - admin
+      operationId: dismissConflict
+      x-public-path: /v1/admin/memory/conflicts/{conflict_id}:dismiss
+      parameters:
+      - *id002
+      - name: conflict_id
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^mcfl_[0-9a-hjkmnp-tv-z]{26}$
+      - *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - reason
+              properties:
+                reason:
+                  type: string
+                  maxLength: 2000
+      responses:
+        '200':
+          description: Dismissed (state dismissed, no resolution).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conflict'
+        '403': *id001
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/authors/{principal_id}:unrestrict:
+    post:
+      tags:
+      - admin
+      operationId: unrestrictAuthor
+      x-public-path: /v1/admin/memory/authors/{principal_id}:unrestrict
+      parameters:
+      - *id002
+      - name: principal_id
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/UserId'
+      - *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - tenant_id
+              - reason
+              properties:
+                tenant_id:
+                  $ref: '#/components/schemas/TenantId'
+                reason:
+                  type: string
+                  maxLength: 2000
+      responses:
+        '200':
+          description: Restriction removed.
+        '403': *id001
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/flags:
+    get:
+      tags:
+      - admin
+      operationId: listFlags
+      x-public-path: /v1/admin/memory/flags
+      summary: 'Open human flags, correction requests, and agent flags, oldest due first (SLA: governance flags.sla_hours).'
+      parameters:
+      - *id002
+      - name: tenant_id
+        in: query
+        schema:
+          $ref: '#/components/schemas/TenantId'
+      - name: status
+        in: query
+        schema:
+          type: string
+          enum:
+          - open
+          - actioned
+          - dismissed
+          default: open
+      responses:
+        '200':
+          description: Flags.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - flags
+                properties:
+                  flags:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Flag'
+                  next_page_token:
+                    type: string
+        '403': *id001
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/flags/{flag_id}:resolve:
+    post:
+      tags:
+      - admin
+      operationId: resolveFlag
+      x-public-path: /v1/admin/memory/flags/{flag_id}:resolve
+      parameters:
+      - *id002
+      - name: flag_id
+        in: path
+        required: true
+        schema:
+          type: integer
+      - *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - status
+              - reason
+              properties:
+                status:
+                  type: string
+                  enum:
+                  - actioned
+                  - dismissed
+                reason:
+                  type: string
+                  maxLength: 2000
+      responses:
+        '200':
+          description: Resolved; the reporter is notified.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Flag'
+        '403': *id001
+      x-replicant-permission: memory:admin
+  /internal/v1/admin/imports:
+    post:
+      tags:
+      - admin
+      operationId: importExport
+      x-public-path: /v1/admin/memory/imports
+      summary: Import a memory_export (same IDs and versions; rows that already exist are skipped; entries named
+        in deletion-ledger entries are skipped). Used by WS-10 restore and region rebuild (XD-10-12).
+      parameters:
+      - *id002
+      - *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - export_key
+              properties:
+                export_key:
+                  type: string
+                  maxLength: 1024
+                mode:
+                  type: string
+                  enum:
+                  - missing_only
+                  default: missing_only
+                dry_run:
+                  type: boolean
+                  default: true
+      responses:
+        '202':
+          description: Import started.
+        '403': *id001
+      x-replicant-permission: memory:admin
+  /internal/v1/purges:leak:
+    post:
+      tags:
+      - internal
+      operationId: leakPurge
+      summary: Service-callable purge for the WS-08 LeakPurge workflow (activity memory.leak_purge, XD-08-13).
+      description: 'Caller: ops-worker (task queue `replicant-ops`, where the LeakPurge workflow runs; principal `svc_ops-worker`),
+        activity `memory.leak_purge`, `Idempotency-Key: ik1:<leak_id>:memory.c0.n1.leak_purge`. Requires an approved
+        leak_purge gate: approved_by holds its two distinct replicant-admin approvers, re-verified against identity-service.
+        Selects entries by provenance job_ids and/or by re-running the given redaction rule IDs over entry text
+        in the window, purges them (actor_kind leak_purge), writes ledger entries first, and propagates like an
+        admin purge.'
+      x-allowed-callers:
+      - system:serviceaccount:replicant-workers:ops-worker
+      parameters:
+      - *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LeakPurgeRequest'
+      responses:
+        '202':
+          description: Purged in the database; propagation in progress.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Purge'
+        '200':
+          description: Same leak_id already processed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Purge'
+        '403': *id001
+        '422': *id001
+  /internal/v1/outcome-reports:
+    post:
+      tags:
+      - internal
+      operationId: reportOutcome
+      summary: 'Post-merge outcome report: wrong fix, regression, or detected revert (R2-017).'
+      description: 'Callers: control-plane-api (`POST /v1/jobs/{job_id}/outcome-reports`, any principal authorized
+        to view the job; X-Replicant-Principal) and github-integration (`/replicant wrong <reason>` from a linked user
+        with ≥ write; revert detection within 30 days of merge). Effects, all tightening and recorded in `effects`:
+        the job''s episode → disabled (system_policy `post_merge_reverted` / `post_merge_wrong_fix`), excluded from
+        similar_past_work and mining; the job''s candidates get an activation hold; entries from the job still in
+        probation → disabled; older entries sourced only from the job → admin queue with Beta β += 2; job_outcomes.post_merge_reverted.
+        Idempotent on dedupe_key.'
+      x-allowed-callers:
+      - system:serviceaccount:replicant-control:control-plane-api
+      - system:serviceaccount:replicant-integrations:github-integration
+      x-public-path: /v1/jobs/{job_id}/outcome-reports
+      parameters:
+      - *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OutcomeReport'
+      responses:
+        '201':
+          description: Recorded and applied.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - report_id
+                - effects
+                properties:
+                  report_id:
+                    type: integer
+                  effects:
+                    type: object
+        '200':
+          description: Duplicate (same dedupe_key).
+        '403': *id001
+        '404': *id001
+  /internal/v1/jobs/{job_id}/memory/{entry_id}/flags:
+    post:
+      tags:
+      - internal
+      operationId: flagEntry
+      summary: 'Any principal authorized to view the job flags an entry that influenced it (R2-028). D-25 intact:
+        a flag changes no state by itself.'
+      description: Caller control-plane-api with X-Replicant-Principal after its job-view authorization. memory-service
+        checks the entry was injected into or retrieved by the job. Two flags from distinct principals while the
+        entry is a candidate or in probation → activation hold / probation disable by system policy (governance
+        flags). Every flag goes to the admin queue with due_at = now + flags.sla_hours. Rate limit 20 flags per
+        principal per day.
+      x-allowed-callers:
+      - system:serviceaccount:replicant-control:control-plane-api
+      x-public-path: /v1/jobs/{job_id}/memory/{entry_id}/flags
+      parameters:
+      - $ref: '#/components/parameters/JobId'
+      - *id003
+      - *id002
+      - *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FlagRequest'
+      responses:
+        '201':
+          description: Flag recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Flag'
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '429': *id001
+      x-replicant-permission: memory:flag
+  /internal/v1/entries/{entry_id}/public:
+    get:
+      tags:
+      - internal
+      operationId: getPublicEntry
+      summary: 'Provenance view for the source author and source-repo readers (R2-018): the statement exactly as
+        agents see it, its true state and next automatic transition, and correction status.'
+      description: Caller control-plane-api (`GET /v1/memory/entries/{entry_id}/public`) with X-Replicant-Principal.
+        Allowed when the principal authored a source comment of the entry, or identity-service confirms repo:read
+        on a source repo (batch-repos). Never shows other authors, scores, or other jobs.
+      x-allowed-callers:
+      - system:serviceaccount:replicant-control:control-plane-api
+      - system:serviceaccount:replicant-integrations:github-integration
+      x-public-path: /v1/memory/entries/{entry_id}/public
+      parameters:
+      - *id003
+      - *id002
+      responses:
+        '200':
+          description: Public view.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicEntryView'
+        '403': *id001
+        '404': *id001
+  /internal/v1/entries/{entry_id}/correction-requests:
+    post:
+      tags:
+      - internal
+      operationId: requestCorrection
+      summary: Source author or CODEOWNER of the source path asks for a correction (`/replicant memory-wrong <reason>`
+        or the public view).
+      description: Immediately sets an activation hold on a candidate, or disables an entry in probation (system_policy,
+        reason author_correction / codeowner_correction, governance corrections.suspend_on_request); a mature entry
+        goes to the admin queue with SLA. The requester is told the result in-thread (github-integration memory
+        notice). Admin applies any content change (D-25).
+      x-allowed-callers:
+      - system:serviceaccount:replicant-control:control-plane-api
+      - system:serviceaccount:replicant-integrations:github-integration
+      x-public-path: /v1/memory/entries/{entry_id}/correction-requests
+      parameters:
+      - *id003
+      - *id002
+      - *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CorrectionRequest'
+      responses:
+        '201':
+          description: Recorded with its effect.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Flag'
+        '403': *id001
+        '404': *id001
+  /internal/v1/admin/restore-resync:
+    post:
+      tags:
+      - admin
+      operationId: restoreResync
+      x-public-path: /v1/admin/memory/restore-resync
+      x-replicant-permission: restore:execute
+      summary: 'After a Postgres point-in-time restore (WS-10 recovery.md §4.2): re-apply every deletion-ledger
+        entry of reason memory_hard_delete since the restore point, then verify every snapshot row has its export object
+        (and its .purged replacement) and every export object has a row; report drift (R1-102). Shared restore envelope
+        (XD-FIX-R1-237): permission restore:execute in both layers (R1V-027); 409 restore_not_open unless an
+        ops.restore_events row is open; 202 with a step to poll.'
+      description: 'Shape (XD-W3-R1V-029): no request body. Query `since` (RFC 3339, the restore point) and optional
+        `dry_run` (default false). A dry run computes the same report and changes nothing. The runbook calls
+        `?since=<restore point>&dry_run=true` first, then `dry_run=false`. The two runs use different
+        Idempotency-Keys. memory-service''s second-layer check is identity-service `authorize {action: "restore:execute",
+        tenant_id: null}`. A denial returns 403 and emits `memory.admin_denied` with `details.permission: restore:execute`.'
+      parameters:
+      - $ref: '#/components/parameters/Principal'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - name: since
+        in: query
+        required: true
+        schema:
+          type: string
+          format: date-time
+        description: The restore point
+      - name: dry_run
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+        description: Report only; re-apply nothing (XD-W3-R1V-029)
+      responses:
+        '202':
+          description: Step started.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RestoreStep'
+        '403': &id006
+          $ref: '#/components/responses/Problem'
+        '409': *id006
+  /internal/v1/admin/restore-resync/{restore_step_id}:
+    get:
+      tags:
+      - admin
+      operationId: getRestoreResyncStep
+      x-public-path: /v1/admin/memory/restore-resync/{restore_step_id}
+      x-replicant-permission: restore:execute
+      parameters:
+      - $ref: '#/components/parameters/Principal'
+      - name: restore_step_id
+        in: path
+        required: true
+        schema:
+          type: string
+          maxLength: 64
+      responses:
+        '200':
+          description: Step state and report.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RestoreStep'
+        '404': *id006
+  /internal/v1/eval/components/{suite}:
+    post:
+      tags:
+      - internal
+      operationId: runMemoryComponentEval
+      summary: 'Run one memory component on labelled cases for the eval harness (WS-06 eval-harness.md §11, XD-FIX-R1-151).
+        Read-only: no memory state changes, no candidate writes.'
+      description: Caller eval-worker (`svc_eval-worker`). The component runs with the prompt and model versions
+        pinned in `config` (bundle-resolved by eval-worker) and returns per-case outputs; scoring stays in eval-worker.
+        memory_capacity_curve takes {task_ref, entry_counts[]} and returns snapshot IDs built with `eval_prepare`
+        + `counterfactual` for each count.
+      x-allowed-callers:
+      - system:serviceaccount:replicant-eval:eval-worker
+      parameters:
+      - name: suite
+        in: path
+        required: true
+        schema:
+          type: string
+          enum:
+          - memory_extraction
+          - memory_grounding
+          - memory_dedupe
+          - memory_retrieval
+          - memory_capacity_curve
+          - memory_safety_classifier
+          - memory_matcher
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - eval_run_id
+              - config
+              - cases
+              properties:
+                eval_run_id:
+                  type: string
+                  pattern: ^eval_[0-9a-hjkmnp-tv-z]{26}$
+                config:
+                  type: object
+                  description: Pinned prompt refs, model ids, thresholds, embedding space
+                cases:
+                  type: array
+                  minItems: 1
+                  maxItems: 1000
+                  items:
+                    type: object
+                    required:
+                    - case_id
+                    - input
+                    properties:
+                      case_id:
+                        type: string
+                        maxLength: 128
+                      input:
+                        type: object
+      responses:
+        '200':
+          description: Per-case outputs.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - results
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                      - case_id
+                      - output
+                      properties:
+                        case_id:
+                          type: string
+                        output:
+                          type: object
+                        latency_ms:
+                          type: integer
+        '403': *id006
+        '422': *id006
+components:
+  securitySchemes:
+    serviceToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Projected ServiceAccount token (audience memory-service) from the core cluster.
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 257
+      description: Activities send their ik1 key (sf-string). Admin calls send a client ULID.
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      schema:
+        type: string
+        pattern: ^"mem_[0-9a-hjkmnp-tv-z]{26}:[1-9][0-9]*"$
+    Principal:
+      name: X-Replicant-Principal
+      in: header
+      required: true
+      description: The human admin on whose behalf control-plane-api calls; re-verified live with identity-service.
+      schema:
+        $ref: '#/components/schemas/UserId'
+    SnapshotId:
+      name: snapshot_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^msnap_[0-9a-hjkmnp-tv-z]{26}$
+    JobId:
+      name: job_id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/JobId'
+    EntryId:
+      name: entry_id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/EntryId'
+  responses:
+    Problem:
+      description: RFC 9457 problem.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    TenantId:
+      type: string
+      minLength: 3
+      maxLength: 32
+      pattern: ^[a-z][a-z0-9]*(-[a-z0-9]+)*$
+    JobId:
+      type: string
+      pattern: ^job_[0-9a-hjkmnp-tv-z]{26}$
+    RunId:
+      type: string
+      pattern: ^run_[0-9a-hjkmnp-tv-z]{26}$
+    UserId:
+      type: string
+      pattern: ^usr_[0-9a-hjkmnp-tv-z]{26}$
+    EntryId:
+      type: string
+      pattern: ^mem_[0-9a-hjkmnp-tv-z]{26}$
+    EntryRefString:
+      type: string
+      pattern: ^mem_[0-9a-hjkmnp-tv-z]{26}@[1-9][0-9]*$
+    MemoryType:
+      type: string
+      enum:
+      - rule
+      - episode
+      - procedure
+      - negative
+      - preference
+    ScopeLevel:
+      type: string
+      enum:
+      - org
+      - tenant
+      - service_group
+      - repo
+      - path
+    EntryState:
+      type: string
+      enum:
+      - candidate
+      - active
+      - disabled
+      - quarantined
+      - deprecated
+      - superseded
+      - rejected
+      - expired
+      - purged
+    Scope:
+      type: object
+      additionalProperties: false
+      required:
+      - level
+      properties:
+        level:
+          $ref: '#/components/schemas/ScopeLevel'
+        service_group:
+          type: string
+          maxLength: 63
+        repo:
+          type: string
+          maxLength: 455
+        path_globs:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            maxLength: 300
+        languages:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+        frameworks:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+        workflow_types:
+          type: array
+          maxItems: 8
+          items:
+            type: string
+        roles:
+          type: array
+          maxItems: 5
+          items:
+            type: string
+    EntryContent:
+      type: object
+      additionalProperties: false
+      required:
+      - memory_type
+      - scope
+      - statement
+      properties:
+        tenant_id:
+          $ref: '#/components/schemas/TenantId'
+        memory_type:
+          $ref: '#/components/schemas/MemoryType'
+        scope:
+          $ref: '#/components/schemas/Scope'
+        subject_key:
+          type: string
+          maxLength: 128
+        title:
+          type: string
+          maxLength: 120
+        statement:
+          type: string
+          minLength: 10
+          maxLength: 4000
+        rationale:
+          type: string
+          maxLength: 1000
+        structured:
+          type: object
+        examples:
+          type: array
+          maxItems: 4
+          items:
+            type: object
+        enforced:
+          type: boolean
+          default: false
+    EntryRef:
+      type: object
+      required:
+      - entry_id
+      - version
+      - state
+      properties:
+        entry_id:
+          $ref: '#/components/schemas/EntryId'
+        version:
+          type: integer
+          minimum: 1
+        state:
+          $ref: '#/components/schemas/EntryState'
+    EntryDetail:
+      type: object
+      required:
+      - entry_id
+      - tenant_id
+      - memory_type
+      - state
+      - state_seq
+      - current_version
+      - versions
+      properties:
+        entry_id:
+          $ref: '#/components/schemas/EntryId'
+        tenant_id:
+          $ref: '#/components/schemas/TenantId'
+        memory_type:
+          $ref: '#/components/schemas/MemoryType'
+        origin:
+          type: string
+        state:
+          $ref: '#/components/schemas/EntryState'
+        state_seq:
+          type: integer
+        current_version:
+          type: integer
+        enforced:
+          type: boolean
+        confidence:
+          type: number
+        evidence:
+          type: object
+          properties:
+            count:
+              type: integer
+            independent:
+              type: integer
+            authors:
+              type: integer
+            repos:
+              type: integer
+        probation_until:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        versions:
+          type: array
+          items:
+            allOf:
+            - $ref: '#/components/schemas/EntryContent'
+            - type: object
+              properties:
+                version:
+                  type: integer
+                content_digest:
+                  type: string
+                created_at:
+                  type: string
+                  format: date-time
+                created_by:
+                  type: string
+                change_kind:
+                  type: string
+        provenance:
+          type: array
+          items:
+            type: object
+        state_history:
+          type: array
+          items:
+            type: object
+        conflicts:
+          type: array
+          items:
+            $ref: '#/components/schemas/Conflict'
+        usage:
+          type: object
+          properties:
+            injection_count:
+              type: integer
+            jobs:
+              type: integer
+            last_injected_at:
+              type: string
+              format: date-time
+        outcome_stats:
+          type: object
+        pending_second_approval:
+          type: boolean
+        first_approver:
+          type: string
+          description: usr_ of the first admin while pending
+        second_approval_expires_at:
+          type: string
+          format: date-time
+        activation_hold:
+          type: boolean
+        hold_reason:
+          type: string
+        open_flags:
+          type: integer
+    EntryPage:
+      type: object
+      required:
+      - entries
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/EntryDetail'
+        next_page_token:
+          type: string
+    TransitionRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - reason
+      properties:
+        reason:
+          type: string
+          minLength: 3
+          maxLength: 2000
+        supersedes:
+          type: array
+          items:
+            $ref: '#/components/schemas/EntryId'
+          description: ':approve only: entries this one replaces'
+    Conflict:
+      type: object
+      required:
+      - conflict_id
+      - kind
+      - state
+      - a
+      - b
+      properties:
+        conflict_id:
+          type: string
+          pattern: ^mcfl_[0-9a-hjkmnp-tv-z]{26}$
+        kind:
+          type: string
+          enum:
+          - contradiction
+          - scope_overlap
+          - probable_duplicate
+        detected_by:
+          type: string
+        state:
+          type: string
+          enum:
+          - open
+          - resolved
+          - dismissed
+        a:
+          $ref: '#/components/schemas/EntryDetail'
+        b:
+          $ref: '#/components/schemas/EntryDetail'
+        resolution:
+          type: string
+    QuarantineRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - kind
+      - selector
+      - reason
+      properties:
+        kind:
+          type: string
+          enum:
+          - quarantine
+          - bulk_disable
+        dry_run:
+          type: boolean
+          default: true
+        reason:
+          type: string
+          minLength: 3
+          maxLength: 2000
+        selector:
+          type: object
+          additionalProperties: false
+          minProperties: 1
+          properties:
+            tenant_id:
+              $ref: '#/components/schemas/TenantId'
+            entry_ids:
+              type: array
+              maxItems: 10000
+              items:
+                $ref: '#/components/schemas/EntryId'
+            author_principal_id:
+              $ref: '#/components/schemas/UserId'
+            created_after:
+              type: string
+              format: date-time
+            created_before:
+              type: string
+              format: date-time
+            scope_level:
+              $ref: '#/components/schemas/ScopeLevel'
+            repo:
+              type: string
+              maxLength: 455
+            origin:
+              type: string
+            extractor:
+              type: string
+              maxLength: 200
+            states:
+              type: array
+              items:
+                type: string
+                enum:
+                - candidate
+                - active
+                - disabled
+                - deprecated
+        cancel_running_jobs:
+          type: boolean
+          default: false
+          description: If true, control-plane-api (not memory-service) issues job.cancel for running jobs in the
+            blast radius after the admin confirms them in the UI.
+    QuarantineResult:
+      type: object
+      required:
+      - entries_affected
+      - running_jobs_affected
+      properties:
+        quarantine_id:
+          type: string
+          pattern: ^mqtn_[0-9a-hjkmnp-tv-z]{26}$
+        dry_run:
+          type: boolean
+        entries_affected:
+          type: integer
+        entry_ids:
+          type: array
+          items:
+            $ref: '#/components/schemas/EntryId'
+        running_jobs_affected:
+          type: array
+          items:
+            $ref: '#/components/schemas/JobId'
+        effective_at:
+          type: string
+          format: date-time
+    Purge:
+      type: object
+      required:
+      - purge_id
+      - status
+      - propagation
+      properties:
+        purge_id:
+          type: string
+          pattern: ^mprg_[0-9a-hjkmnp-tv-z]{26}$
+        status:
+          type: string
+          enum:
+          - db_purged
+          - propagating
+          - complete
+          - failed_retrying
+        propagation:
+          type: object
+          properties:
+            snapshot_exports:
+              $ref: '#/components/schemas/PropagationStatus'
+            memory_injections:
+              $ref: '#/components/schemas/PropagationStatus'
+            langfuse:
+              $ref: '#/components/schemas/PropagationStatus'
+            memory_export:
+              $ref: '#/components/schemas/PropagationStatus'
+            session_and_transcripts:
+              $ref: '#/components/schemas/PropagationStatus'
+        path:
+          type: string
+          enum:
+          - admin
+          - leak
+          - horizon
+        deletion_ledger_ids:
+          type: array
+          items:
+            type: string
+            pattern: ^del_[0-9a-hjkmnp-tv-z]{26}$
+        leak_id:
+          type: string
+          pattern: ^leak_[0-9a-hjkmnp-tv-z]{26}$
+    PropagationStatus:
+      type: object
+      required:
+      - state
+      properties:
+        state:
+          type: string
+          enum:
+          - not_applicable
+          - pending
+          - done
+          - failed_retrying
+          - requires_break_glass
+        objects:
+          type: integer
+        detail:
+          type: string
+    BlastRadius:
+      type: object
+      required:
+      - entry_id
+      - jobs
+      properties:
+        entry_id:
+          $ref: '#/components/schemas/EntryId'
+        totals:
+          type: object
+          properties:
+            injected_runs:
+              type: integer
+            retrieved_runs:
+              type: integer
+            jobs:
+              type: integer
+            running_jobs:
+              type: integer
+        jobs:
+          type: array
+          items:
+            type: object
+            required:
+            - job_id
+            - how
+            properties:
+              job_id:
+                $ref: '#/components/schemas/JobId'
+              status:
+                type: string
+              repo:
+                type: string
+              how:
+                type: string
+                enum:
+                - injected
+                - retrieved
+                - snapshotted_only
+                - withheld_holdout
+              versions:
+                type: array
+                items:
+                  type: integer
+              run_ids:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RunId'
+              first_at:
+                type: string
+                format: date-time
+        next_page_token:
+          type: string
+    CreateSnapshotRequest:
+      type: object
+      additionalProperties: false
+      description: |-
+        Required fields depend on `mode` (R1V-026, XD-W3-R1V-026).
+        * `create`, `eval_pinned`, `policy_refresh`, `bundle_migration`: job_id, repos, workflow_type,
+          release_bundle_id, requester_principal_id and policy.
+        * `eval_prepare`: scope_context and policy, with no job.
+        * `revocation_filter`: job_id and base_snapshot_id only. memory-service fills policy, repos,
+          workflow_type, release_bundle_id, requester_principal_id, scope and evaluation_mode from the job's
+          latest binding (`memory.job_snapshots`) and from the base snapshot's pinned policy. WS-01 does not
+          resend them. If the request does send any of them, each must equal the bound value, or the call
+          fails with 409 `binding_mismatch`. base_snapshot_id must be the job's latest bound snapshot.
+        The run-context fields run_id, role, node_key, cycle and parent_job_id are optional for every mode
+        except eval_prepare. They are recorded in the resnap's log and trace attributes only and never
+        change the snapshot's content.
+      required:
+      - tenant_id
+      - mode
+      properties:
+        tenant_id:
+          $ref: '#/components/schemas/TenantId'
+        job_id:
+          $ref: '#/components/schemas/JobId'
+        run_id:
+          type: string
+          pattern: ^run_[0-9a-hjkmnp-tv-z]{26}$
+          description: Run context (log and trace only)
+        role:
+          type: string
+          maxLength: 40
+          description: Run context (log and trace only)
+        node_key:
+          type: string
+          pattern: ^[a-z][a-z0-9_]{0,40}$
+          description: Run context (log and trace only)
+        cycle:
+          type: integer
+          minimum: 0
+          description: Run context (log and trace only)
+        parent_job_id:
+          oneOf:
+          - $ref: '#/components/schemas/JobId'
+          - type: 'null'
+          description: Run context (log and trace only)
+        service_groups:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+            maxLength: 63
+          description: From the ecosystem catalog (service_repos → services.service_group)
+        languages:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+        frameworks:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+        workflow_type:
+          type: string
+        release_bundle_id:
+          type: string
+          pattern: ^rb_[0-9a-hjkmnp-tv-z]{26}$
+        policy:
+          type: object
+          required:
+          - ref
+          - digest
+          properties:
+            ref:
+              type: string
+              maxLength: 200
+            digest:
+              type: string
+              pattern: ^sha256:[0-9a-f]{64}$
+        requester_principal_id:
+          type: string
+          pattern: ^(usr_[0-9a-hjkmnp-tv-z]{26}|svc_[a-z][a-z0-9-]{2,40})$
+        task_text_sha256:
+          type: string
+          pattern: ^[0-9a-f]{64}$
+        mode:
+          type: string
+          enum:
+          - create
+          - revocation_filter
+          - policy_refresh
+          - bundle_migration
+          - eval_pinned
+          - eval_prepare
+        evaluation_mode:
+          type: string
+          enum:
+          - eval
+          - shadow
+          description: From JobRequest.options.evaluation.mode (CCR-06-01). Candidate, episode, outcome, and feedback-signal
+            writes are refused for bindings with evaluation_mode set
+        scope_context:
+          description: 'eval-worker / evaluation jobs only (XD-06-04): build the snapshot from this tenant and repo
+            memory as it was at as_of (bitemporal: memory.state_as_of and the version current then). The binding
+            records scope_tenant_id; the caller tenant stays replicant-eval'
+          type: object
+          additionalProperties: false
+          required:
+          - tenant_id
+          properties:
+            tenant_id:
+              $ref: '#/components/schemas/TenantId'
+            repo:
+              type: string
+              maxLength: 455
+            as_of:
+              type: string
+              format: date-time
+        use_snapshot_id:
+          description: 'mode=eval_pinned: bind the job to this existing snapshot (C-JOBREQ 2.0.0 options.evaluation.memory_snapshot_id),
+            so both arms of a comparison see identical memory. scope_context is copied from options.evaluation.memory_scope_context'
+          type: string
+          pattern: ^msnap_[0-9a-hjkmnp-tv-z]{26}$
+        base_snapshot_id:
+          type: string
+          pattern: ^msnap_[0-9a-hjkmnp-tv-z]{26}$
+        repos:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            type: string
+            maxLength: 455
+          description: Target repos (WS-01 sends every JobRequest target). The first is primary; the eligible set
+            is the union over all repos (scoping.md §2).
+        replay_job_id:
+          type: string
+          pattern: ^job_[0-9a-hjkmnp-tv-z]{26}$
+          description: 'mode=eval_pinned only: source job whose recorded memory is replayed exactly (R1-101). Its
+            snapshot must equal use_snapshot_id.'
+        counterfactual:
+          description: 'eval-worker only, mode eval_prepare: add or remove entries for memory evals (memory-evals.md
+            §5)'
+          type: object
+          additionalProperties: false
+          properties:
+            add_entry_refs:
+              type: array
+              items:
+                $ref: '#/components/schemas/EntryRefString'
+            remove_entry_ids:
+              type: array
+              items:
+                $ref: '#/components/schemas/EntryId'
+            empty:
+              type: boolean
+      allOf:
+      - if:
+          properties:
+            mode:
+              const: eval_prepare
+        then:
+          required:
+          - scope_context
+          - policy
+          not:
+            anyOf:
+            - required:
+              - run_id
+            - required:
+              - node_key
+      - if:
+          properties:
+            mode:
+              enum:
+              - create
+              - eval_pinned
+              - policy_refresh
+              - bundle_migration
+        then:
+          required:
+          - job_id
+          - repos
+          - workflow_type
+          - release_bundle_id
+          - requester_principal_id
+          - policy
+      - if:
+          properties:
+            mode:
+              const: eval_pinned
+        then:
+          required:
+          - use_snapshot_id
+      - if:
+          properties:
+            mode:
+              const: revocation_filter
+        then:
+          required:
+          - job_id
+          - base_snapshot_id
+    SnapshotBinding:
+      type: object
+      required:
+      - memory_snapshot_id
+      - spec_digest
+      - pull_as_of
+      - entry_refs
+      properties:
+        job_id:
+          $ref: '#/components/schemas/JobId'
+        ordinal:
+          type: integer
+          minimum: 1
+        memory_snapshot_id:
+          type: string
+          pattern: ^msnap_[0-9a-hjkmnp-tv-z]{26}$
+        base_snapshot_id:
+          type: string
+        spec_digest:
+          type: string
+          pattern: ^sha256:[0-9a-f]{64}$
+        pull_as_of:
+          type: string
+          format: date-time
+        entry_refs:
+          type: array
+          maxItems: 2000
+          items:
+            $ref: '#/components/schemas/EntryRefString'
+        removed_refs:
+          type: array
+          items:
+            $ref: '#/components/schemas/EntryRefString'
+          description: 'revocation_filter: refs removed relative to the base'
+        export_uri:
+          type: string
+          maxLength: 1100
+        requester_principal_id:
+          type: string
+        replay_of_job_id:
+          type: string
+          pattern: ^job_[0-9a-hjkmnp-tv-z]{26}$
+        scope_tenant_id:
+          $ref: '#/components/schemas/TenantId'
+      description: job_id and ordinal are absent for mode eval_prepare (no binding).
+    Snapshot:
+      $ref: ../schemas/memory-snapshot-export.schema.json
+    SelectRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - job_id
+      - run_id
+      - role
+      - cli
+      - model
+      - node_key
+      - cycle
+      - budget_tokens
+      properties:
+        job_id:
+          $ref: '#/components/schemas/JobId'
+        run_id:
+          $ref: '#/components/schemas/RunId'
+        role:
+          type: string
+          enum:
+          - planner
+          - implementer
+          - qa
+          - reviewer
+          - repair
+          - takeover
+          - eval
+        cli:
+          type: string
+          enum:
+          - claude-code
+          - claude-agent-sdk
+          - codex
+        model:
+          type: string
+          maxLength: 200
+        node_key:
+          type: string
+          maxLength: 41
+        cycle:
+          type: integer
+          minimum: 0
+        budget_tokens:
+          type: integer
+          minimum: 0
+        paths:
+          type: array
+          maxItems: 500
+          items:
+            type: string
+            maxLength: 1024
+        languages:
+          type: array
+          items:
+            type: string
+        task_text:
+          type: string
+          maxLength: 20000
+          description: Used only for relevance ranking; never stored (its sha256 is)
+        artifact_key:
+          type: string
+          maxLength: 1024
+        ordinal:
+          type: integer
+          minimum: 1
+    JobMemoryView:
+      type: object
+      required:
+      - job_id
+      - snapshots
+      - entries
+      properties:
+        job_id:
+          $ref: '#/components/schemas/JobId'
+        snapshots:
+          type: array
+          items:
+            type: object
+            properties:
+              memory_snapshot_id:
+                type: string
+              reason:
+                type: string
+              created_at:
+                type: string
+                format: date-time
+        entries:
+          type: array
+          items:
+            type: object
+            required:
+            - ref
+            - memory_type
+            - scope
+            - statement
+            - how_used
+            - current_state
+            properties:
+              ref:
+                $ref: '#/components/schemas/EntryRefString'
+              memory_type:
+                $ref: '#/components/schemas/MemoryType'
+              scope:
+                type: string
+              title:
+                type: string
+              statement:
+                type: string
+              how_used:
+                type: string
+                enum:
+                - injected
+                - retrieved
+              runs:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RunId'
+              curated:
+                type: boolean
+              current_state:
+                $ref: '#/components/schemas/EntryState'
+              source:
+                type: object
+                properties:
+                  kind:
+                    type: string
+                  url:
+                    type: string
+                    description: present only when the viewer can read the source repository
+                  repository_hidden:
+                    type: boolean
+    CandidateDecisions:
+      type: object
+      required:
+      - decisions
+      properties:
+        decisions:
+          type: array
+          items:
+            type: object
+            required:
+            - index
+            - decision
+            properties:
+              index:
+                type: integer
+                minimum: 0
+              decision:
+                type: string
+                enum:
+                - not_generalizable
+                - candidate_created
+                - evidence_merged
+                - blocked_safety
+                - blocked_author
+                - blocked_identity
+                - opted_out
+                - conflict_opened
+                - rate_limited
+                - superseded_edit
+              entry_id:
+                $ref: '#/components/schemas/EntryId'
+              conflict_id:
+                type: string
+              state:
+                $ref: '#/components/schemas/EntryState'
+              safety_rules:
+                type: array
+                items:
+                  type: string
+    EpisodeRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - tenant_id
+      - job_id
+      - repo
+      - workflow_type
+      - outcome
+      - facts
+      properties:
+        tenant_id:
+          $ref: '#/components/schemas/TenantId'
+        job_id:
+          $ref: '#/components/schemas/JobId'
+        repo:
+          type: string
+        workflow_type:
+          type: string
+        outcome:
+          type: string
+          enum:
+          - merged
+          - closed_unmerged
+          - failed
+          - cancelled
+          - taken_over
+          - no_change
+        facts:
+          description: Replicant-derived structured facts (never model text).
+          type: object
+          properties:
+            pr_url:
+              type: string
+            review_rounds:
+              type: integer
+            files:
+              type: array
+              items:
+                type: string
+            reviewer_comment_ids:
+              type: array
+              items:
+                type: integer
+            qa_first_pass:
+              type: boolean
+            failure_reason:
+              type: string
+        reviewer_topic_keys:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            maxLength: 128
+          description: 'Triage topic keys (subject_key vocabulary). No free text: the summary is templated from
+            facts (R2-008)'
+      description: Facts only. memory-service renders the episode statement from a fixed template; no model-written
+        or comment text is stored. Episodes of jobs whose PR did not merge are recorded for outcome statistics but
+        are never retrievable.
+    OutcomeRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - tenant_id
+      - job_id
+      - repo
+      - workflow_type
+      - release_bundle_id
+      - terminal_status
+      properties:
+        tenant_id:
+          $ref: '#/components/schemas/TenantId'
+        job_id:
+          $ref: '#/components/schemas/JobId'
+        repo:
+          type: string
+        workflow_type:
+          type: string
+        release_bundle_id:
+          type: string
+        terminal_status:
+          type: string
+          enum:
+          - succeeded
+          - failed
+          - cancelled
+          - rejected
+          - expired
+          - taken_over
+        pr_merged:
+          type: boolean
+        review_rounds:
+          type: integer
+          minimum: 0
+        changes_requested_reviews:
+          type: integer
+          minimum: 0
+        human_comment_count:
+          type: integer
+          minimum: 0
+        first_pass_qa:
+          type: boolean
+        first_review_approved:
+          type: boolean
+        seconds_to_merge:
+          type: integer
+          minimum: 0
+        merged_at:
+          type: string
+          format: date-time
+          description: 'PR merge time (XD-W2-06-01): exposed per job in memory.v_job_outcomes'
+        release_cohort:
+          type: string
+          enum: [default, candidate, holdback, experiment, override, migrated, eval, shadow]
+          description: 'Label for replicant_jobs_post_merge_reverted_total (XD-W2-06-04)'
+        merged_head_sha:
+          type: string
+          pattern: ^[0-9a-f]{40}([0-9a-f]{24})?$
+        addressed_candidates:
+          description: 'For each candidate created from this job: was the commit that applied it still present in
+            the merged PR (computed by activity memory.record_outcome from the GitHub compare API through github-integration)?
+            Required for auto-activation (governance auto_activation.*.require_fix_in_merged_diff).'
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            required:
+            - entry_id
+            - fix_commit_sha
+            - fix_present_in_merge
+            properties:
+              entry_id:
+                $ref: '#/components/schemas/EntryId'
+              fix_commit_sha:
+                type: string
+                pattern: ^[0-9a-f]{40}([0-9a-f]{24})?$
+              fix_present_in_merge:
+                type: boolean
+              reviewer_objected:
+                type: boolean
+                description: A later authorized review comment contradicted the fix
+    FeedbackSignals:
+      type: object
+      additionalProperties: false
+      required:
+      - tenant_id
+      - job_id
+      - signals
+      properties:
+        tenant_id:
+          $ref: '#/components/schemas/TenantId'
+        job_id:
+          $ref: '#/components/schemas/JobId'
+        signals:
+          type: array
+          maxItems: 200
+          items:
+            type: object
+            required:
+            - ref
+            - signal
+            - comment_id
+            properties:
+              ref:
+                $ref: '#/components/schemas/EntryRefString'
+              signal:
+                type: string
+                enum:
+                - reviewer_confirmed
+                - reviewer_contradicted
+                - reviewer_repeated
+                - agent_flagged
+              comment_id:
+                type: integer
+              author_principal_id:
+                $ref: '#/components/schemas/UserId'
+              judge_score:
+                type: number
+                minimum: 0
+                maximum: 1
+    Problem:
+      type: object
+      required:
+      - type
+      - title
+      - status
+      - code
+      - retryable
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        code:
+          type: string
+          enum:
+          - conflict
+          - evidence_insufficient
+          - forbidden_caller
+          - forbidden_not_admin
+          - internal
+          - invalid_request
+          - invalid_transition
+          - not_found
+          - not_in_job
+          - precondition_failed
+          - rate_limited
+          - restore_not_open
+          - safety_blocked
+          - scope_cap_exceeded
+          - two_person_rule_pending
+          - unauthenticated
+          - unavailable
+        retryable:
+          type: boolean
+        current:
+          description: 'On 412: the current entry'
+    EntryEdit:
+      allOf:
+      - $ref: '#/components/schemas/EntryContent'
+      - type: object
+        required:
+        - change_note
+        properties:
+          change_note:
+            type: string
+            minLength: 3
+            maxLength: 2000
+    PromoteRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - target_scope
+      - reason
+      properties:
+        target_scope:
+          $ref: '#/components/schemas/Scope'
+        reason:
+          type: string
+          maxLength: 2000
+        override_evidence:
+          type: boolean
+          default: false
+        rewritten_statement:
+          type: string
+          maxLength: 600
+          description: 'Required for org: text free of tenant identifiers (MS-12)'
+    LeakPurgeRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - leak_id
+      - tenant_id
+      - approved_by
+      - selector
+      properties:
+        leak_id:
+          type: string
+          pattern: ^leak_[0-9a-hjkmnp-tv-z]{26}$
+        tenant_id:
+          $ref: '#/components/schemas/TenantId'
+        approved_by:
+          type: array
+          minItems: 2
+          maxItems: 5
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/UserId'
+        selector:
+          type: object
+          additionalProperties: false
+          minProperties: 1
+          properties:
+            job_ids:
+              type: array
+              maxItems: 10000
+              items:
+                $ref: '#/components/schemas/JobId'
+            rule_ids:
+              type: array
+              maxItems: 50
+              items:
+                type: string
+                maxLength: 100
+              description: WS-08 redaction rule IDs to re-run over entry text
+            window:
+              type: object
+              properties:
+                from:
+                  type: string
+                  format: date-time
+                to:
+                  type: string
+                  format: date-time
+    OutcomeReport:
+      type: object
+      additionalProperties: false
+      description: Internal, service-to-service only (R1V-047). Browsers never send this shape. control-plane-api
+        accepts the public OutcomeReportInput {kind wrong_fix|regression, evidence_url?, note?} and fills tenant_id,
+        job_id, source ui, reporter_principal_id (the authenticated caller) and dedupe_key ui:<principal>:<job_id>:<kind>.
+        memory-service enforces caller and source pairs. control-plane-api may send only source ui with kind wrong_fix
+        or regression. github-integration sends pr_command, linked_bug and revert_detector. kind reverted is accepted
+        only with source revert_detector. Any other pair returns 403 source_not_allowed_for_caller
+      required:
+      - tenant_id
+      - job_id
+      - kind
+      - source
+      - reporter_principal_id
+      - dedupe_key
+      properties:
+        tenant_id:
+          $ref: '#/components/schemas/TenantId'
+        job_id:
+          $ref: '#/components/schemas/JobId'
+        kind:
+          type: string
+          enum:
+          - wrong_fix
+          - regression
+          - reverted
+        source:
+          type: string
+          enum:
+          - ui
+          - pr_command
+          - revert_detector
+          - linked_bug
+        reporter_principal_id:
+          type: string
+          pattern: ^(usr_[0-9a-hjkmnp-tv-z]{26}|svc_[a-z][a-z0-9-]{2,40})$
+        evidence_url:
+          type: string
+          maxLength: 2048
+          pattern: ^https://
+        note:
+          type: string
+          maxLength: 1000
+        dedupe_key:
+          type: string
+          maxLength: 256
+          examples:
+          - revert:R_kgDOK2a9Xw:1502
+          - ui:usr_01knk8dfr0fvjc7v0b9vhvkzbp:job_01m5p7x7r0bt69j0h0fbxepw90:wrong_fix
+    FlagRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - reason_code
+      properties:
+        reason_code:
+          type: string
+          enum:
+          - wrong
+          - outdated
+          - too_broad
+          - harmful
+          - unsafe
+          - other
+        note:
+          type: string
+          maxLength: 500
+    CorrectionRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - reason_code
+      - source
+      - requester_role
+      properties:
+        reason_code:
+          type: string
+          enum:
+          - misread_comment
+          - too_broad
+          - wrong
+          - outdated
+          - other
+        note:
+          type: string
+          maxLength: 500
+        source:
+          type: string
+          enum:
+          - pr_command
+          - ui_public_view
+        requester_role:
+          type: string
+          enum:
+          - author
+          - codeowner
+          description: Set by the calling service, never by an end user (R1V-048). control-plane-api sets it from its public
+            CorrectionRequestInput {reason_code, note?}. github-integration sets it for /replicant memory-wrong. memory-service
+            re-verifies `author` against provenance. `codeowner` is accepted only when the caller is github-integration, or
+            control-plane-api after github-integration verified CODEOWNERS and team membership
+        github_comment_id:
+          type: integer
+          minimum: 1
+    Flag:
+      type: object
+      required:
+      - flag_id
+      - entry_ref
+      - kind
+      - status
+      - effect
+      - due_at
+      properties:
+        flag_id:
+          type: integer
+        entry_ref:
+          $ref: '#/components/schemas/EntryRefString'
+        kind:
+          type: string
+          enum:
+          - viewer_flag
+          - author_correction
+          - codeowner_correction
+          - agent_flag
+        reason_code:
+          type: string
+        status:
+          type: string
+          enum:
+          - open
+          - actioned
+          - dismissed
+        effect:
+          type: string
+          enum:
+          - queued
+          - hold_set
+          - probation_disabled
+        due_at:
+          type: string
+          format: date-time
+        job_id:
+          $ref: '#/components/schemas/JobId'
+    PublicEntryView:
+      type: object
+      required:
+      - ref
+      - state
+      - statement
+      - scope
+      - rendered_line
+      properties:
+        ref:
+          $ref: '#/components/schemas/EntryRefString'
+        state:
+          $ref: '#/components/schemas/EntryState'
+        statement:
+          type: string
+        scope:
+          type: string
+        rendered_line:
+          type: string
+          description: Exactly the line agents receive in replicant.memory-block/v1
+        next_transition:
+          type: object
+          properties:
+            kind:
+              type: string
+              enum:
+              - auto_activation
+              - probation_end
+              - candidate_expiry
+              - admin_review
+            not_before:
+              type: string
+              format: date-time
+        activation_hold:
+          type: boolean
+        your_requests:
+          type: array
+          items:
+            $ref: '#/components/schemas/Flag'
+        source_comment_url:
+          type: string
+          description: Only when the viewer can read the source repo
+    RestoreStep:
+      type: object
+      required:
+      - restore_step_id
+      - state
+      properties:
+        restore_step_id:
+          type: string
+        state:
+          type: string
+          enum:
+          - running
+          - succeeded
+          - failed
+        dry_run:
+          type: boolean
+          description: Echo of the request's dry_run; in a dry run the counts are what would be changed
+        report:
+          type: object
+          properties:
+            ledger_entries_replayed:
+              type: integer
+            entries_repurged:
+              type: integer
+            snapshots_missing_export:
+              type: integer
+            exports_missing_row:
+              type: integer

@@ -1,0 +1,1109 @@
+openapi: 3.1.1
+info:
+  title: Replicant control-plane-api — releases, bundles, and evals (WS-06 surface)
+  version: 1.0.0
+  description: |
+    WS-06 specifies these endpoints; WS-07 implements them inside control-plane-api (the single writer
+    of the `registry` schema, C-PG). Every mutating call is authorized server-side against Okta groups via
+    identity-service (D-18), writes `audit.emit()` in the same transaction, and requires an
+    `Idempotency-Key` header (sf-string, C-IDS §7). Permissions:
+    `release:read` (all operators and engineers), `release:operate` (replicant-release-operators: rollback, ramp,
+    overrides, revoke), `release:signoff` (replicant-release-managers), `release:pin` and `eval:run`
+    (svc_eval-worker, release operators), `release:transition` (svc_eval-worker and svc_release-controller only),
+    `release:revoke` (replicant-release-managers: revoke and operator-forced migration), `eval:curate`
+    (replicant-eval-curators: golden-task verification and human labels), `release:signoff_tenant_layer`
+    (tenant admins, scoped to their own tenant's behavioral layers).
+    Errors use RFC 9457 `application/problem+json`.
+
+    **Authoritative components (R1-138).** The components `Assignment`, `Ramp`, `BundleDiff`, `BundleView`,
+    `BuildResult`, `PromotionState` and the operation `getReleaseBundle` are defined here only. The WS-07
+    control-plane-api document references them with `$ref` (XD-FIX-R1-138) and does not redefine them, so the
+    build-time merge has no collisions.
+servers:
+  - url: https://api.replicant.example.com
+security:
+  - oktaBearer: []
+tags:
+  - name: bundles
+  - name: assignment
+  - name: pipelines
+  - name: evals
+  - name: webhooks
+paths:
+  /v1/registry/bundles:build:
+    post:
+      tags: [bundles]
+      operationId: buildBundle
+      summary: Resolve a ReleaseBundleRequest into a content-addressed bundle (C-DEF §4.3)
+      parameters:
+        - $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [request]
+              properties:
+                request:
+                  description: ReleaseBundleRequest document (schemas/release-bundle-request.schema.json).
+                  type: object
+                source_commit:
+                  type: string
+                  pattern: '^[0-9a-f]{40}$'
+                start_pipeline:
+                  description: Start a ReleasePipeline for the built bundle in the given environment.
+                  type: string
+                  enum: [local, dev, staging, prod]
+      responses:
+        '200':
+          description: Bundle already existed (identical spec).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BuildResult'}
+        '201':
+          description: Bundle created.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BuildResult'}
+        '422':
+          $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/responses/Problem'
+  /v1/registry/bundles/{release_bundle_id}:
+    get:
+      tags: [bundles]
+      operationId: getReleaseBundle
+      parameters:
+        - $ref: '#/components/parameters/ReleaseBundleId'
+      responses:
+        '200':
+          description: Bundle document, promotion state and history, pinned-job counts.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BundleView'}
+        '404':
+          $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/responses/Problem'
+  /v1/registry/bundles/{release_bundle_id}/diff:
+    get:
+      tags: [bundles]
+      operationId: diffBundles
+      summary: Structured diff between two bundles (release-bundle.md §5)
+      parameters:
+        - $ref: '#/components/parameters/ReleaseBundleId'
+        - name: against
+          in: query
+          required: true
+          schema: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'}
+        - name: depth
+          in: query
+          schema:
+            type: string
+            enum: [refs, documents, full]
+            default: documents
+      responses:
+        '200':
+          description: Diff document.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BundleDiff'}
+  /v1/releases/bundles/{release_bundle_id}:transition:
+    post:
+      tags: [bundles]
+      operationId: transitionBundle
+      summary: Change promotion state (internal; svc_eval-worker and svc_release-controller only)
+      parameters:
+        - $ref: '#/components/parameters/ReleaseBundleId'
+        - $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [from_state, to_state, state_version, reason]
+              properties:
+                from_state: {$ref: '#/components/schemas/PromotionState'}
+                to_state: {$ref: '#/components/schemas/PromotionState'}
+                state_version:
+                  description: Optimistic concurrency; must equal the current value.
+                  type: integer
+                  minimum: 0
+                tier:
+                  type: string
+                  enum: [T0, T1, T2, T3]
+                pipeline_id: {type: string, pattern: '^rpl_[0-9a-hjkmnp-tv-z]{26}$'}
+                comparison_id: {type: string, pattern: '^cmp_[0-9a-hjkmnp-tv-z]{26}$'}
+                reason: {type: string, minLength: 3, maxLength: 4000}
+                evidence: {type: object}
+      responses:
+        '200':
+          description: Transition recorded.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BundleView'}
+        '409':
+          description: state_version or from_state mismatch, or illegal edge.
+          content:
+            application/problem+json:
+              schema: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/Problem'}
+  /v1/releases/bundles/{release_bundle_id}:revoke:
+    post:
+      tags: [bundles]
+      operationId: revokeBundle
+      summary: Revoke a bundle and notify every running job pinned to it (release.notice bundle_revoked)
+      parameters:
+        - $ref: '#/components/parameters/ReleaseBundleId'
+        - $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason, migration_target]
+              properties:
+                reason: {type: string, minLength: 3, maxLength: 2000}
+                migration_target:
+                  description: Bundle offered to pinned jobs (job.offer_bundle_migration required=true). Must be promoted.
+                  $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'
+                deadline:
+                  type: string
+                  format: date-time
+      responses:
+        '202':
+          description: Revocation committed; batch Signal started.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [revoked, derived_revoked, batch_job_id, affected_running_jobs]
+                properties:
+                  revoked: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'}
+                  derived_revoked:
+                    type: array
+                    items: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'}
+                  batch_job_id: {type: string}
+                  affected_running_jobs: {type: integer, minimum: 0}
+  /v1/releases/{env}/assignment:
+    get:
+      tags: [assignment]
+      operationId: getAssignment
+      parameters:
+        - $ref: '#/components/parameters/Env'
+      responses:
+        '200':
+          description: Current assignment. ETag carries the version.
+          headers:
+            ETag:
+              schema: {type: string}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Assignment'}
+  /v1/releases/{env}/assignment:rollback:
+    post:
+      tags: [assignment]
+      operationId: rollback
+      summary: One-call rollback (promotion.md §7). No If-Match required, so it never loses a race to a stale UI.
+      parameters:
+        - $ref: '#/components/parameters/Env'
+        - $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason, migrate_running, preview_digest]
+              properties:
+                preview_digest:
+                  description: Digest of the blast-radius preview the operator saw (GET …/assignment:rollback-preview). Stale previews are rejected with 409 so nobody commits a rollback on outdated counts (R2-021).
+                  type: string
+                  pattern: '^sha256:[0-9a-f]{64}$'
+                triggered_by:
+                  type: string
+                  enum: [guardrail, manual]
+                  default: manual
+                to_release_bundle_id:
+                  description: Defaults to assignment.rollback_release_bundle_id (the previous promoted default). Must be in state promoted or deprecated, not revoked.
+                  $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'
+                scope:
+                  type: string
+                  enum: [default_and_ramp, ramp_only]
+                  default: default_and_ramp
+                revoke_current:
+                  type: boolean
+                  default: false
+                migrate_running:
+                  description: |
+                    Required, no server default (R2-021). The UI preselects `required_by_operator` when the rollback ends a
+                    failed canary (the pinned jobs were assigned the candidate by hash, not by choice) and preselects
+                    nothing otherwise, showing the blast radius first.
+                    none = running jobs stay pinned (their open gates still carry the rolled-back banner and are blocked);
+                    offer = release.notice(bundle_rolled_back) plus consented migration;
+                    required = revoke, then job.offer_bundle_migration(required=true) with requester consent;
+                    required_by_operator = revoke, then migration at the next safe point without requester consent
+                    (permission release:revoke), packets re-issued.
+                  type: string
+                  enum: [none, offer, required, required_by_operator]
+                reason: {type: string, minLength: 3, maxLength: 2000}
+      responses:
+        '200':
+          description: Committed. New jobs resolve to the rollback target from the next intake transaction.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [assignment, committed_at]
+                properties:
+                  assignment: {$ref: '#/components/schemas/Assignment'}
+                  committed_at: {type: string, format: date-time}
+                  worker_current_version_reset:
+                    description: True when Temporal's current version for replicant-worker was set back (system workflows).
+                    type: boolean
+                  pinned_running_jobs:
+                    type: integer
+                    minimum: 0
+                  gates_blocked:
+                    description: Open approval gates on the rolled-back bundle (and its derived bundles) that now carry the banner and refuse approval until migrated or explicitly overridden.
+                    type: integer
+                    minimum: 0
+  /v1/releases/{env}/assignment:rollback-preview:
+    get:
+      tags: [assignment]
+      operationId: rollbackPreview
+      summary: Blast radius before a rollback commits (R2-021)
+      parameters:
+        - $ref: '#/components/parameters/Env'
+        - name: scope
+          in: query
+          schema: {type: string, enum: [default_and_ramp, ramp_only], default: default_and_ramp}
+      responses:
+        '200':
+          description: Counts are computed from the projection and Temporal visibility; preview_digest binds the commit to this view.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [preview_digest, bundles_affected, jobs_by_status, jobs_by_tenant, suggested_migrate_running]
+                properties:
+                  preview_digest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+                  bundles_affected:
+                    description: The bundle being rolled back plus its derived bundles.
+                    type: array
+                    items: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'}
+                  jobs_by_status:
+                    description: Pinned running jobs by status (running, waiting_human with the open gate kind, waiting_external in PR review).
+                    type: object
+                    additionalProperties: {type: integer, minimum: 0}
+                  jobs_by_tenant:
+                    type: object
+                    additionalProperties: {type: integer, minimum: 0}
+                  open_gates_by_kind:
+                    type: object
+                    additionalProperties: {type: integer, minimum: 0}
+                  suggested_migrate_running:
+                    description: required_by_operator when the scope ends a failed canary, otherwise null (no preselection).
+                    type: [string, 'null']
+                    enum: [required_by_operator, null]
+  /v1/releases/{env}/assignment:bootstrap:
+    post:
+      tags: [assignment]
+      operationId: bootstrapAssignment
+      summary: First default for an environment with no assignment row (R1-139)
+      description: |
+        Allowed only while `registry.bundle_assignments` has no row for `env`. The bundle must be `eval_passed`
+        from a single-arm T1 run with an absolute floor (eval-harness.md §6.7). In `local` and `dev` one
+        `release:operate` caller suffices; in `staging` and `prod` the request carries two distinct sign-off
+        decision IDs from `replicant-release-managers` (sign-off point `bootstrap_default`). The bundle moves
+        `eval_passed → promoted` and becomes `default` and `rollback_release_bundle_id` in one transaction.
+      parameters:
+        - $ref: '#/components/parameters/Env'
+        - $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [release_bundle_id, reason]
+              properties:
+                release_bundle_id: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'}
+                signoff_decision_ids:
+                  type: array
+                  maxItems: 2
+                  items: {type: string, pattern: '^dec_[0-9a-hjkmnp-tv-z]{26}$'}
+                reason: {type: string, minLength: 3, maxLength: 2000}
+      responses:
+        '201':
+          description: Assignment created.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Assignment'}
+        '409':
+          $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/responses/Problem'
+  /v1/releases/{env}/assignment/default:
+    put:
+      tags: [assignment]
+      operationId: setDefault
+      summary: Set the default to a promoted or deprecated bundle outside a pipeline (local, dev, staging only)
+      description: In `prod` this returns 403 `use_pipeline_or_rollback`; production defaults change only through a ReleasePipeline or the rollback endpoint.
+      parameters:
+        - $ref: '#/components/parameters/Env'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [release_bundle_id, reason]
+              properties:
+                release_bundle_id: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'}
+                reason: {type: string, minLength: 3, maxLength: 2000}
+      responses:
+        '200':
+          description: Default set.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Assignment'}
+        '403':
+          $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/responses/Problem'
+  /v1/releases/{env}/assignment/ramps/{slot}:
+    put:
+      tags: [assignment]
+      operationId: setRamp
+      summary: Create or update one of up to 3 ramps (C-DEF 3.0.0 §4.5)
+      description: |
+        Validates in the assignment transaction: candidate state per the C-DEF §4.4 slot table (canary or experiment →
+        `canary`; holdback → `promoted` or `deprecated`); `[bucket_lo, bucket_lo + percent × 100)` does not overlap
+        another ramp's range; the candidate's worker build has registered its task queues (C-DEF §4.5 precondition);
+        the candidate is not `eval_only`. Normally called by the ReleasePipeline, not by people.
+      parameters:
+        - $ref: '#/components/parameters/Env'
+        - name: slot
+          in: path
+          required: true
+          schema: {type: integer, minimum: 0, maximum: 2}
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Ramp'}
+      responses:
+        '200':
+          description: Ramp set.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Assignment'}
+        '409':
+          description: Overlapping bucket range, wrong candidate state, unregistered worker build, or eval-only bundle.
+          content:
+            application/problem+json:
+              schema: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/Problem'}
+        '412':
+          $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/responses/Problem'
+    delete:
+      tags: [assignment]
+      operationId: clearRamp
+      parameters:
+        - $ref: '#/components/parameters/Env'
+        - name: slot
+          in: path
+          required: true
+          schema: {type: integer, minimum: 0, maximum: 2}
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Ramp cleared.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Assignment'}
+  /v1/releases/{env}/assignment/tenant-overrides/{tenant_id}:
+    put:
+      tags: [assignment]
+      operationId: setTenantOverride
+      parameters:
+        - $ref: '#/components/parameters/Env'
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [release_bundle_id, kind, reason]
+              properties:
+                release_bundle_id: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'}
+                kind:
+                  type: string
+                  enum: [holdback_tenant, pinned_by_operator, layer_pending]
+                reason: {type: string, minLength: 3, maxLength: 2000}
+                expires_at: {type: string, format: date-time}
+      responses:
+        '200':
+          description: Override set.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Assignment'}
+    delete:
+      tags: [assignment]
+      operationId: clearTenantOverride
+      parameters:
+        - $ref: '#/components/parameters/Env'
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Override cleared.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Assignment'}
+  /v1/releases/pipelines:
+    post:
+      tags: [pipelines]
+      operationId: startPipeline
+      summary: Start a ReleasePipeline workflow for a built candidate (workflow ID = pipeline_id)
+      parameters:
+        - $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [candidate_bundle_id, env, reason]
+              properties:
+                candidate_bundle_id: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'}
+                env:
+                  type: string
+                  enum: [local, dev, staging, prod]
+                baseline_bundle_id:
+                  description: Defaults to the environment's current default.
+                  $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'
+                reason: {type: string, minLength: 3, maxLength: 2000}
+      responses:
+        '202':
+          description: Pipeline started.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [pipeline_id, required_tier]
+                properties:
+                  pipeline_id: {type: string, pattern: '^rpl_[0-9a-hjkmnp-tv-z]{26}$'}
+                  required_tier: {type: string, enum: [T0, T1, T2, T3]}
+                  require_shadow: {type: boolean}
+  /v1/releases/pipelines/{pipeline_id}:
+    get:
+      tags: [pipelines]
+      operationId: getPipeline
+      parameters:
+        - $ref: '#/components/parameters/PipelineId'
+      responses:
+        '200':
+          description: Projection from evals.release_pipelines (derived from the ReleasePipeline workflow). Shape = C-MSG ReleaseSnapshot plus the WS-06 fields below.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReleaseSnapshotView'}
+  /v1/releases/pipelines/{pipeline_id}/evidence/{signoff_point}:
+    get:
+      tags: [pipelines]
+      operationId: getEvidencePacket
+      summary: The release evidence packet a signer must review (R1-144)
+      parameters:
+        - $ref: '#/components/parameters/PipelineId'
+        - name: signoff_point
+          in: path
+          required: true
+          schema: {type: string, maxLength: 64}
+      responses:
+        '200':
+          description: The packet (`release_evidence_packet`, promotion.md §10.1). Its digest is `sha256(JCS(packet))`, the value a signer sends as presented_digest.
+          headers:
+            ETag:
+              description: The packet digest.
+              schema: {type: string}
+          content:
+            application/json:
+              schema: {type: object}
+  /v1/releases/pipelines/{pipeline_id}/signoffs:
+    post:
+      tags: [pipelines]
+      operationId: signoff
+      summary: Human sign-off; sent to the ReleasePipeline as Update release.signoff (Update ID = decision_id)
+      parameters:
+        - $ref: '#/components/parameters/PipelineId'
+        - $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [signoff_point, decision, presented_digest]
+              properties:
+                signoff_point:
+                  description: The last five values are added by CCR-06-11 (R1-145).
+                  type: string
+                  enum: [t3_eval_pass, canary_pct50_to_full, expedited, judge_only_gain, superiority_claim, stratum_flag,
+                         tenant_layer_behavioral, cost_acceptance, judge_acceptance, shadow_extension, bootstrap_default]
+                decision:
+                  type: string
+                  enum: [approve, reject]
+                presented_digest:
+                  description: Digest of the release evidence packet the signer saw (stale views are rejected).
+                  type: string
+                  pattern: '^sha256:[0-9a-f]{64}$'
+                comment: {type: string, maxLength: 8000}
+      responses:
+        '200':
+          description: Update result (accepted, superseded, denied, rejected_self_signoff).
+          content:
+            application/json:
+              schema: {type: object}
+  /v1/releases/pipelines/{pipeline_id}:abort:
+    post:
+      tags: [pipelines]
+      operationId: abortPipeline
+      parameters:
+        - $ref: '#/components/parameters/PipelineId'
+        - $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: {type: string, minLength: 3, maxLength: 2000}
+                rollback:
+                  type: boolean
+                  default: true
+      responses:
+        '200':
+          description: Update release.abort accepted.
+          content:
+            application/json:
+              schema: {type: object}
+  /v1/evals/runs:
+    post:
+      tags: [evals]
+      operationId: startAdhocEval
+      summary: Ad hoc eval of any built bundle (no promotion effect, except purpose bootstrap)
+      description: |
+        Default `purpose: adhoc` has no promotion effect. `purpose: bootstrap` (R1V-035) is the producer of the
+        `eval_passed` state that bootstrapAssignment needs: allowed only while `registry.bundle_assignments` has no
+        row for the environment, with no `baseline_bundle_id`, for a bundle in `built`. eval-worker moves the
+        bundle `built → evaluating` at start, runs the single-arm T1 floor of eval-harness.md §6.7 (`smoke-local@1`
+        in local mode, subset forced to `smoke`), and moves it `evaluating → eval_passed` or `eval_failed`; the
+        verdict is the response of `GET /v1/evals/comparisons/{comparison_id}`.
+      parameters:
+        - $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [release_bundle_id, subset]
+              properties:
+                release_bundle_id: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'}
+                baseline_bundle_id: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'}
+                golden_set_id:
+                  description: Defaults to the active frozen set. `smoke-local@1` in local mode (eval-harness.md §10).
+                  type: string
+                  pattern: '^[a-z][a-z0-9-]{2,40}@[1-9][0-9]*$'
+                subset:
+                  type: string
+                  enum: [smoke, standard, full, targeted]
+                targeted_filter:
+                  type: object
+                  properties:
+                    workflow_types:
+                      type: array
+                      items: {type: string}
+                    codebase_types:
+                      type: array
+                      items: {type: string}
+                reps: {type: integer, minimum: 1, maximum: 5, default: 1}
+                max_usd: {type: number, minimum: 1, maximum: 20000}
+                purpose:
+                  type: string
+                  enum: [adhoc, bootstrap]
+                  default: adhoc
+      responses:
+        '202':
+          description: EvalSuite(s) started.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  comparison_id: {type: string}
+                  eval_run_ids:
+                    type: array
+                    items: {type: string}
+  /v1/evals/comparisons/{comparison_id}:
+    get:
+      tags: [evals]
+      operationId: getComparison
+      parameters:
+        - name: comparison_id
+          in: path
+          required: true
+          schema: {type: string, pattern: '^cmp_[0-9a-hjkmnp-tv-z]{26}$'}
+      responses:
+        '200':
+          description: Comparison with statistics and gate results (evals.comparisons).
+          content:
+            application/json:
+              schema: {type: object}
+  /v1/evals/labels:
+    post:
+      tags: [evals]
+      operationId: createHumanLabel
+      summary: Record a blind human label (judge calibration, audits). Permission eval:curate
+      description: control-plane-api authorizes the caller, mints `lbl_<ulid>` (C-IDS), and forwards to eval-worker `POST /internal/v1/evals/labels` (eval-worker is the only writer of `evals`, C-PG). The labeler never sees the judge's output or the arm.
+      parameters:
+        - $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [subject_kind, subject_ref, rubric, criterion, value]
+              properties:
+                subject_kind: {type: string, enum: [anchor_item, eval_case, online_job]}
+                subject_ref: {type: string, maxLength: 200}
+                rubric: {type: string, maxLength: 63}
+                criterion: {type: string, pattern: '^[a-z][a-z0-9_]{1,40}$'}
+                value: {type: number}
+      responses:
+        '201':
+          description: Label stored.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [label_id]
+                properties:
+                  label_id: {type: string, pattern: '^lbl_[0-9a-hjkmnp-tv-z]{26}$'}
+  /v1/evals/labeling-queue:
+    get:
+      tags: [evals]
+      operationId: getLabelingQueue
+      summary: Next items for the caller to label (anchor sets, the 3% audit sample, judge/deterministic disagreements)
+      parameters:
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 50, default: 10}
+      responses:
+        '200':
+          description: Items with presigned links to the input and the output under judgement; arm identity removed.
+          content:
+            application/json:
+              schema: {type: object}
+  /v1/evals/golden-tasks/{golden_task_id}:verify:
+    post:
+      tags: [evals]
+      operationId: verifyGoldenTask
+      summary: A curator's verification of a candidate golden task (two distinct curators for gating subsets). Permission eval:curate
+      parameters:
+        - name: golden_task_id
+          in: path
+          required: true
+          schema: {type: string, pattern: '^gtask_[0-9a-hjkmnp-tv-z]{26}$'}
+        - $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [checklist, decision]
+              properties:
+                decision: {type: string, enum: [verify, reject, request_edit]}
+                checklist:
+                  description: Every item of eval-harness.md §2.3 answered true or false.
+                  type: object
+                  additionalProperties: {type: boolean}
+                statement_edit:
+                  description: Replacement statement (creates a superseding task when the task is already active).
+                  type: object
+                comment: {type: string, maxLength: 4000}
+      responses:
+        '200':
+          description: Updated task state.
+          content:
+            application/json:
+              schema: {type: object}
+  /v1/evals/golden-tasks/{golden_task_id}:transition:
+    post:
+      tags: [evals]
+      operationId: transitionGoldenTask
+      summary: Quarantine, retire, or erase a golden task. Permission eval:curate (erase also needs release:operate)
+      parameters:
+        - name: golden_task_id
+          in: path
+          required: true
+          schema: {type: string, pattern: '^gtask_[0-9a-hjkmnp-tv-z]{26}$'}
+        - $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [to_state, reason]
+              properties:
+                to_state: {type: string, enum: [quarantined, active, retired, erased]}
+                reason: {type: string, minLength: 3, maxLength: 2000}
+      responses:
+        '200':
+          description: Updated task state.
+          content:
+            application/json:
+              schema: {type: object}
+  /v1/releases/model-retirements:
+    get:
+      tags: [bundles]
+      operationId: listModelRetirements
+      summary: Model retirement calendar used by the build-time window check (XD-ORCH-01)
+      responses:
+        '200':
+          description: Rows of registry.model_retirements.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/ModelRetirement'}
+  /v1/releases/model-retirements/{gateway_model_id}:
+    put:
+      tags: [bundles]
+      operationId: putModelRetirement
+      summary: Record or correct a model's retirement date. Permission release:operate
+      parameters:
+        - name: gateway_model_id
+          in: path
+          required: true
+          schema: {type: string, maxLength: 200}
+        - $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ModelRetirement'}
+      responses:
+        '200':
+          description: Stored. If the date falls inside any assigned bundle's window, the release controller schedules model_retiring notices (upgrades.md §6.5).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ModelRetirement'}
+  /v1/admin/evals/resync:
+    post:
+      tags: [evals]
+      operationId: resyncEvals
+      summary: Disaster-recovery re-synchronization after a replicant database restore (XD-10-16, XD-FIX-R1-237 envelope)
+      description: |
+        Permission `restore:execute`. Allowed only while an `ops.restore_events` row is open (else 409
+        `restore_not_open`). Re-projects `evals.release_pipelines` from Temporal (Query release.snapshot on open
+        pipelines, Describe on recently closed ones), re-reads case results from the eval bucket outputs for runs
+        completed after `since`, and re-exports Langfuse scores (idempotent score IDs). Idempotent on
+        Idempotency-Key and `since`. The response is the shared `RestoreStep` of WS-07's common components (R1V-033,
+        XD-W3-R1V-033); `restore_step_id` is opaque to callers and equals the eval-worker workflow ID
+        `evals-resync-<ulid>`.
+      parameters:
+        - name: since
+          in: query
+          required: true
+          schema: {type: string, format: date-time}
+        - $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: Resync started (or the existing step for the same key).
+          content:
+            application/json:
+              schema: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/RestoreStep'}
+        '409':
+          description: '`restore_not_open`: no open ops.restore_events row.'
+          content:
+            application/problem+json:
+              schema: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/Problem'}
+  /v1/admin/evals/resync/{restore_step_id}:
+    get:
+      tags: [evals]
+      operationId: getEvalsResync
+      summary: Poll an evals resync step (XD-FIX-R1-237 envelope)
+      description: Permission `restore:execute`.
+      parameters:
+        - name: restore_step_id
+          in: path
+          required: true
+          schema: {type: string, maxLength: 64}
+      responses:
+        '200':
+          description: Step state.
+          content:
+            application/json:
+              schema: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/RestoreStep'}
+        '404':
+          $ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/responses/Problem'
+  /internal/v1/langfuse/webhooks:
+    post:
+      tags: [webhooks]
+      operationId: langfuseWebhook
+      summary: Langfuse prompt-version webhook receiver (promotion.md §3)
+      description: |
+        Verifies `x-langfuse-signature: t=<ts>,v1=<hex>` as HMAC-SHA256 over `<ts>.<raw body>` with the
+        webhook secret (constant-time compare, 5-minute timestamp tolerance), dedupes on the payload `id`,
+        and acts only on `action: updated` events where the version gained label `candidate`. Returns 2xx
+        quickly; work happens asynchronously (Langfuse retries with exponential backoff on non-2xx).
+      security: []
+      parameters:
+        - name: x-langfuse-signature
+          in: header
+          required: true
+          schema: {type: string, maxLength: 512}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, timestamp, type, apiVersion, action, prompt]
+              properties:
+                id: {type: string}
+                timestamp: {type: string}
+                type: {const: prompt-version}
+                apiVersion: {const: v1}
+                action:
+                  type: string
+                  enum: [created, updated, deleted]
+                prompt:
+                  type: object
+                  required: [name, version, labels]
+                  properties:
+                    name: {type: string}
+                    version: {type: integer}
+                    labels:
+                      type: array
+                      items: {type: string}
+      responses:
+        '202':
+          description: Accepted (or ignored as not relevant).
+        '401':
+          description: Signature invalid.
+components:
+  securitySchemes:
+    oktaBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      schema: {type: string}
+    Env:
+      name: env
+      in: path
+      required: true
+      schema:
+        type: string
+        enum: [local, dev, staging, prod]
+    TenantId:
+      name: tenant_id
+      in: path
+      required: true
+      schema: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/TenantId'}
+    ReleaseBundleId:
+      name: release_bundle_id
+      in: path
+      required: true
+      schema: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'}
+    PipelineId:
+      name: pipeline_id
+      in: path
+      required: true
+      schema: {type: string, pattern: '^rpl_[0-9a-hjkmnp-tv-z]{26}$'}
+  schemas:
+    PromotionState:
+      type: string
+      enum: [built, evaluating, eval_passed, eval_failed, shadowing, canary, promoted, rolled_back, withdrawn, deprecated, revoked]
+    BuildResult:
+      type: object
+      required: [release_bundle_id, digest, created, promotion_state, required_tier, change_classes]
+      properties:
+        release_bundle_id: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'}
+        digest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        created: {type: boolean}
+        promotion_state: {$ref: '#/components/schemas/PromotionState'}
+        required_tier: {type: string, enum: [T0, T1, T2, T3]}
+        require_shadow: {type: boolean}
+        change_classes:
+          type: array
+          items: {type: string}
+        parent_release_bundle_id: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'}
+        pipeline_id: {type: string}
+    BundleView:
+      type: object
+      required: [release_bundle_id, promotion_state, state_version, document]
+      properties:
+        release_bundle_id: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'}
+        promotion_state: {$ref: '#/components/schemas/PromotionState'}
+        state_version: {type: integer}
+        document:
+          description: The ReleaseBundle document (C-DEF release-bundle.schema.json).
+          type: object
+        required_tier: {type: string}
+        change_classes:
+          type: array
+          items: {type: string}
+        history:
+          type: array
+          items: {type: object}
+        pinned_running_jobs: {type: integer}
+        derived:
+          type: array
+          items: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'}
+    BundleDiff:
+      description: release-bundle.md §5.2.
+      type: object
+      required: [from, to, change_classes, required_tier, entries]
+      properties:
+        from: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'}
+        to: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'}
+        worker_changed: {type: boolean}
+        change_classes:
+          type: array
+          items: {type: string}
+        required_tier: {type: string, enum: [T0, T1, T2, T3]}
+        require_shadow: {type: boolean}
+        entries:
+          type: array
+          items:
+            type: object
+            required: [element, op]
+            properties:
+              element: {type: string}
+              op: {type: string, enum: [added, removed, changed]}
+              from_ref: {type: string}
+              to_ref: {type: string}
+              change_class: {type: string}
+              document_patch:
+                description: RFC 6902 JSON Patch between the two definition documents.
+                type: array
+                items: {type: object}
+              text_diff:
+                description: Unified diff for prompt text.
+                type: string
+              links:
+                type: array
+                items: {type: string, format: uri}
+    Ramp:
+      type: object
+      additionalProperties: false
+      required: [candidate, percent, purpose, bucket_lo]
+      properties:
+        slot:
+          description: Read-only in responses; the path parameter selects the slot.
+          type: integer
+          minimum: 0
+          maximum: 2
+        bucket_lo:
+          description: Start of the ramp's job-hash bucket range [bucket_lo, bucket_lo + percent × 100). Ranges must not overlap (C-DEF 3.0.0 §4.5).
+          type: integer
+          minimum: 0
+          maximum: 10000
+        candidate: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'}
+        purpose:
+          type: string
+          enum: [canary, holdback, experiment]
+        percent:
+          type: number
+          minimum: 0
+          maximum: 100
+          multipleOf: 0.01
+        tenants_included:
+          type: array
+          items: {type: string}
+        tenants_excluded:
+          type: array
+          items: {type: string}
+        pipeline_id: {type: string}
+    Assignment:
+      type: object
+      required: [env, version, default]
+      properties:
+        env: {type: string}
+        version: {type: integer}
+        default: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'}
+        rollback_target: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'}
+        tenant_overrides:
+          type: object
+          additionalProperties: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'}
+        ramps:
+          description: At most 3, evaluated in slot order (C-DEF 3.0.0 §4.5).
+          type: array
+          maxItems: 3
+          items: {$ref: '#/components/schemas/Ramp'}
+    ModelRetirement:
+      type: object
+      additionalProperties: false
+      required: [gateway_model_id, retires_at, announced_at, source_url]
+      properties:
+        gateway_model_id: {type: string, maxLength: 200}
+        retires_at: {type: string, format: date-time}
+        announced_at: {type: string, format: date-time}
+        source_url: {type: string, format: uri}
+        successor_model_id: {type: string, maxLength: 200}
+    ReleaseSnapshotView:
+      description: C-MSG ReleaseSnapshot (stage offline|shadow|canary|holdback|done|rolled_back|aborted, held, pending_signoffs) plus WS-06 fields.
+      type: object
+      required: [schema, pipeline_id, candidate_release_bundle_id, stage, held, pending_signoffs]
+      properties:
+        schema: {const: replicant.release-snapshot/v1}
+        pipeline_id: {type: string}
+        candidate_release_bundle_id: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'}
+        baseline_release_bundle_id: {$ref: '../../07-control-plane-and-ux/api/common-components.yaml#/components/schemas/ReleaseBundleId'}
+        stage: {type: string, enum: [offline, shadow, canary, holdback, done, rolled_back, aborted]}
+        canary_stage: {type: string}
+        held: {type: boolean}
+        pending_signoffs:
+          type: array
+          items: {type: string}
+        evidence:
+          description: One entry per pending or decided sign-off point (R1-144).
+          type: array
+          items:
+            type: object
+            required: [signoff_point, evidence_digest, packet_uri]
+            properties:
+              signoff_point: {type: string}
+              evidence_digest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+              packet_uri: {type: string}
+              signers_required: {type: integer, minimum: 1}
+              signers_recorded: {type: integer, minimum: 0}
+        projection_seq: {type: integer, minimum: 1}

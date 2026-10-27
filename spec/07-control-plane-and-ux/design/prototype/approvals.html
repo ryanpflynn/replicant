@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Approvals (4) · replicant</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body data-page="approvals" data-admin="false">
+<div class="shell">
+  <aside class="rail" data-auto></aside>
+  <header class="topbar">
+    <div class="crumbs"><b>Approvals</b><span class="t3" data-hide="empty">· 4 waiting on you · 2 more on your teams</span><span class="t3" data-show="empty">· nothing waiting on you</span></div>
+    <span class="live" data-hide="stale degraded"><i></i>Live</span>
+    <span class="live off" data-show="stale degraded"><i></i>Reconnecting · data as of 10:41:12</span>
+    <div class="search" role="button" aria-label="Open command palette"><span>Jump to job, PR, run, bundle…</span><kbd>⌘K</kbd></div>
+    <button class="iconbtn" aria-label="Toggle theme"><svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.25"><circle cx="7" cy="7" r="5"/><path d="M7 2v10a5 5 0 0 0 0-10z" fill="currentColor"/></svg></button>
+  </header>
+
+  <main class="main" style="overflow:hidden">
+    <div class="inbox">
+      <section class="list" aria-label="Pending gates">
+        <div class="filters">
+          <span class="chip on">Mine <span class="n">4</span></span>
+          <span class="chip">My teams <span class="n">6</span></span>
+          <span class="chip hide-md">Delegated <span class="n">1</span></span>
+          <span class="chip">Repo ▾</span>
+          <span class="chip">Kind ▾</span>
+          <span class="grow"></span>
+          <span class="t3 small sortctl">Expiry ▾</span>
+        </div>
+
+        <div data-show="empty" class="empty">
+          <h3>Nothing is waiting on you</h3>
+          <p class="t2">Gates for your teams: <a href="#">6 open</a>. You will get a Slack DM when a gate names you as the suggested approver.</p>
+        </div>
+
+        <div data-hide="empty">
+        <div class="gitem sel" aria-selected="true">
+          <span class="gl"><i class="g f-attention" data-g="diamond"></i></span>
+          <span class="ttl">Publish · Stale FX rate cache after deploy</span>
+          <span class="age soon" title="Expires in 5 h 12 m">5h left</span>
+          <span class="sub"><span class="risk high">high</span><span class="mono ellipsis">ledger-api</span><span class="hide-md">Maya Torres</span><span class="chan"><i>UI</i><i>Slack</i><i>GH</i></span><span class="esc" title="Escalated once: reminder to #payments-leads">ESC 1</span></span>
+        </div>
+        <div class="gitem">
+          <span class="gl"><i class="g f-attention" data-g="diamond"></i></span>
+          <span class="ttl">Plan · Add idempotency key to POST /v2/payouts</span>
+          <span class="age">2d 4h</span>
+          <span class="sub"><span class="risk medium">medium</span><span class="mono ellipsis">payouts-svc</span><span class="hide-md">Daniel Okafor</span><span class="chan"><i>UI</i><i>Slack</i></span></span>
+        </div>
+        <div class="gitem">
+          <span class="gl"><i class="g f-attention" data-g="diamond"></i></span>
+          <span class="ttl">Question · Which currency table is canonical?</span>
+          <span class="age">3d 1h</span>
+          <span class="sub"><span class="t3">clarification</span><span class="mono ellipsis">fx-rates-svc</span><span class="hide-md">Lena Fischer</span><span class="chan"><i>UI</i><i>Slack</i></span></span>
+        </div>
+        <div class="gitem">
+          <span class="gl"><i class="g f-attention" data-g="diamond"></i></span>
+          <span class="ttl">Budget · Extend to $60 (used $39.12 of $40)</span>
+          <span class="age">6d 2h</span>
+          <span class="sub"><span class="t3">budget_extension</span><span class="mono ellipsis">settlement-batcher</span><span class="hide-md one">as payments-lead</span><span class="chan"><i>UI</i><i>Slack</i></span></span>
+        </div>
+        <div class="bulkbar"><span class="t2">2 low-risk docs gates can be decided together</span><span class="grow"></span><button class="btn sm">Review batch</button></div>
+        <div class="gitem">
+          <span class="gl"><i class="g f-attention" data-g="diamond-hollow"></i></span>
+          <span class="ttl">Publish · Fix broken links in settlement runbook</span>
+          <span class="age">1h</span>
+          <span class="sub"><span class="risk low">low</span><span class="mono ellipsis">payments-docs</span><span class="hide-md">team · payments-sre</span></span>
+        </div>
+        <div class="gitem">
+          <span class="gl"><i class="g f-attention" data-g="diamond-hollow"></i></span>
+          <span class="ttl">Publish · Update chargeback FAQ wording</span>
+          <span class="age">3h</span>
+          <span class="sub"><span class="risk low">low</span><span class="mono ellipsis">payments-docs</span><span class="hide-md">team · payments-sre</span></span>
+        </div>
+        </div>
+      </section>
+
+      <section class="packet" aria-label="Approval packet" data-hide="empty">
+        <div class="hd">
+          <div class="row" style="align-items:flex-start">
+            <div class="grow">
+              <div class="caps" style="margin-bottom:4px">Publish approval · gate_5fgbq8n2xz · cycle 0 · packet r3</div>
+              <h2>Stale FX rate cache after deploy</h2>
+              <div class="row g3 small t2" style="margin-top:6px;flex-wrap:wrap">
+                <span class="mono">acme-payments/ledger-api</span><a href="#" class="mono">#1440</a>
+                <span><a href="job-detail.html" class="mono">job_01m5n2a9qe</a></span>
+                <span>requested by Maya Torres</span>
+                <span>opened 18 h ago</span>
+                <span class="row g1"><i class="g f-attention" data-g="hourglass"></i><b>expires Oct 24 14:20</b> · then expires the job</span>
+              </div>
+            </div>
+            <span class="pill attention"><i class="g" data-g="diamond"></i>Waiting on you</span>
+          </div>
+        </div>
+        <div class="banner danger" data-show="rolledback"><i class="g" data-g="cross" style="margin-top:3px"></i><span class="t"><b>Produced by rb_k7wq0f2e9n, rolled back at 06:52 by Sam Whitfield: AgentResultInvalid spike on the implementer.</b> Consider Request changes. Approving needs a typed override reason, which is audited and shown on the gate.</span></div>
+        <div class="banner danger" data-show="degraded"><i class="g" data-g="cross" style="margin-top:3px"></i><span class="t"><b>Decisions cannot be recorded right now</b>: the orchestration service (Temporal) is not answering. Nothing you click here is lost or half-applied; buttons come back when it recovers. A decision you already sent shows its result here once recorded.</span><span class="acts"><button class="btn sm">Status page</button></span></div>
+        <div class="banner warning" data-show="stale"><i class="g" data-g="triangle" style="margin-top:3px"></i><span class="t"><b>This packet changed (r3 → r4)</b>: QA re-ran after a rebase on main. Changed sections are marked; decision buttons re-enable after you view them.</span><span class="acts"><button class="btn sm">Show r4</button></span></div>
+        <div class="banner warning" data-hide="rolledback"><i class="g" data-g="triangle" style="margin-top:3px"></i><span class="t">Escalated 6 h ago to <b>#payments-leads</b> after 12 h without a decision. Base branch moved 2 commits since QA: after approval Replicant rebases and re-runs QA, and publishes only if the rebase is clean and risk is unchanged.</span></div>
+
+        <div class="body">
+          <div>
+            <div class="section">
+              <div class="section-h"><h3>Why this needs a human</h3><span class="t3 small">deterministic rules · policy/risk-rules.payments@6</span></div>
+              <ul class="rules">
+                <li><i class="g f-danger" data-g="triangle"></i><span><span class="rid">path.money_movement</span> <span class="why">changed <span class="mono">ledger/fx/cache.go</span> matches <span class="mono">ledger/**</span></span></span><span class="risk high">high</span></li>
+                <li><i class="g f-danger" data-g="triangle"></i><span><span class="rid">service.tier1</span> <span class="why">ledger-api is tier 1 in the service catalog</span></span><span class="risk high">high</span></li>
+                <li><i class="g f-warning" data-g="diamond-hollow"></i><span><span class="rid">tests.changed</span> <span class="why"><span class="mono">ledger/fx/cache_test.go</span> changed; CI runs it</span></span><span class="risk medium">medium</span></li>
+              </ul>
+            </div>
+            <div class="section plan">
+              <div class="section-h"><h3>Plan</h3><span class="prov">Agent-written · untrusted</span><span class="t3 small">r2 · approved 08:12 by Priya Raman</span></div>
+              <ol>
+                <li>Invalidate <span class="mono">fxcache</span> on <span class="mono">RatesPublished</span> instead of on TTL only.</li>
+                <li>Version cache keys by rates snapshot ID so old pods read the old snapshot until restart.</li>
+                <li>Add regression test that publishes rates mid-request and asserts one snapshot per request.</li>
+              </ol>
+            </div>
+            <div class="section">
+              <div class="section-h"><h3>Diff</h3><span class="prov">Agent-written change</span><span class="t3 small">3 files · <span class="mono" style="color:var(--c-diff-add-mark)">+61</span> <span class="mono" style="color:var(--c-diff-del-mark)">−26</span> · sha256:6c8e…c7e</span><a class="aside small t2" href="#">Full diff <kbd>D</kbd></a></div>
+              <div class="facts">
+                <span class="fact"><i class="g f-warning" data-g="triangle"></i>1 line over 160 characters <span class="mono">cache.go:43</span></span>
+                <span class="fact" data-show="rolledback stale"><i class="g f-danger" data-g="triangle"></i>Bidi control U+202E <span class="mono">cache.go:47</span></span>
+              </div>
+              <div class="diff">
+                <div class="fh"><span class="path">ledger/fx/cache.go</span><span class="stat mono"><span class="a">+38</span> <span class="d">−19</span></span></div>
+                <div class="ln hunk">@@ -42,14 +42,21 @@ func (c *Cache) Get(ctx context.Context, pair Pair) (Rate, error) {</div>
+                <div class="ln"><span class="n">42</span><span class="n">42</span><span class="m"> </span><span>	c.mu.RLock()</span></div>
+                <div class="ln del"><span class="n">43</span><span class="n"></span><span class="m">−</span><span>	r, ok := c.entries[<del>pair</del>]</span></div>
+                <div class="ln add"><span class="n"></span><span class="n">43</span><span class="m">+</span><span>	r, ok := c.entries[<ins>key{snapshot: c.snapshotID, pair: pair, region: c.region, tenantScope: c.tenantScope, publishedAt: c.publishedAt.Truncate(time.Minute), source: c.source}</ins>]</span></div>
+                <div class="ln"><span class="n">44</span><span class="n">44</span><span class="m"> </span><span>	c.mu.RUnlock()</span></div>
+                <div class="ln del"><span class="n">45</span><span class="n"></span><span class="m">−</span><span>	<span class="tok-k">if</span> ok <del>&amp;&amp; time.Since(r.fetchedAt) &lt; c.ttl</del> {</span></div>
+                <div class="ln add"><span class="n"></span><span class="n">45</span><span class="m">+</span><span>	<span class="tok-k">if</span> ok {</span></div>
+                <div class="ln add"><span class="n"></span><span class="n">46</span><span class="m">+</span><span>		<span class="tok-c">// Snapshot-versioned keys never go stale within a snapshot.</span></span></div>
+                <div class="ln add" data-show="rolledback stale"><span class="n"></span><span class="n">47</span><span class="m">+</span><span>		<span class="tok-c">// fallback for legacy pods <span class="bidi">⟨U+202E⟩</span> nil ,etar.r nruter</span></span></div>
+                <div class="ln"><span class="n">46</span><span class="n">47</span><span class="m"> </span><span>		<span class="tok-k">return</span> r.rate, <span class="tok-k">nil</span></span></div>
+              </div>
+              <ul class="files" style="margin-top:8px">
+                <li><span class="grow">ledger/fx/cache_test.go</span><span class="a">+19</span><span class="d">−2</span></li>
+                <li><span class="grow">ledger/fx/subscriber.go</span><span class="a">+4</span><span class="d">−5</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <aside class="side">
+            <div class="section">
+              <div class="section-h"><h3>QA</h3><span class="pill success" style="margin-left:auto"><i class="g" data-g="check"></i>Passed</span></div>
+              <p class="small t2">477 checks · 13 min · image <span class="mono">sha256:9b1c…</span> · 0 tests removed or newly skipped</p>
+              <div class="shots" style="margin-top:10px">
+                <div class="shot"><svg viewBox="0 0 240 150" role="img" aria-label="Refund detail page screenshot"><rect width="240" height="150" fill="#ffffff"/><rect width="240" height="18" fill="#1f2a44"/><text x="8" y="12.5" font-size="8" fill="#ffffff" font-family="sans-serif">Acme Pay · Refunds</text><text x="10" y="34" font-size="9" font-weight="700" fill="#111" font-family="sans-serif">Refund RF-20931</text><text x="10" y="48" font-size="7" fill="#555" font-family="sans-serif">Payment PY-88412 · captured EUR 100.00</text><text x="10" y="64" font-size="7" fill="#111" font-family="sans-serif">Refunded</text><text x="150" y="64" font-size="7" fill="#111" font-family="sans-serif">EUR 40.00</text><text x="10" y="76" font-size="7" fill="#111" font-family="sans-serif">FX fee reversal</text><text x="150" y="76" font-size="7" fill="#111" font-family="sans-serif">EUR 0.19</text><text x="10" y="88" font-size="7" fill="#111" font-family="sans-serif">Ledger entries</text><text x="150" y="88" font-size="7" fill="#111" font-family="sans-serif">2 (expected 2)</text><rect x="10" y="104" width="54" height="14" rx="2" fill="#2563eb"/><text x="16" y="114" font-size="7" fill="#fff" font-family="sans-serif">Issue refund</text></svg><div class="cap">refund-detail @1280 · passed</div></div>
+                <div class="shot"><svg viewBox="0 0 240 150" role="img" aria-label="FX rates admin screenshot"><rect width="240" height="150" fill="#ffffff"/><rect width="240" height="18" fill="#1f2a44"/><text x="8" y="12.5" font-size="8" fill="#ffffff" font-family="sans-serif">Acme Pay · FX rates</text><text x="10" y="34" font-size="9" font-weight="700" fill="#111" font-family="sans-serif">Snapshot 2026-10-24T08:00Z</text><text x="10" y="52" font-size="7" fill="#555" font-family="sans-serif">Pair</text><text x="80" y="52" font-size="7" fill="#555" font-family="sans-serif">Rate</text><text x="150" y="52" font-size="7" fill="#555" font-family="sans-serif">Published</text><text x="10" y="66" font-size="7" fill="#111" font-family="monospace">EUR/USD</text><text x="80" y="66" font-size="7" fill="#111" font-family="monospace">1.0841</text><text x="150" y="66" font-size="7" fill="#111" font-family="monospace">08:00:02</text><text x="10" y="78" font-size="7" fill="#111" font-family="monospace">EUR/GBP</text><text x="80" y="78" font-size="7" fill="#111" font-family="monospace">0.8633</text><text x="150" y="78" font-size="7" fill="#111" font-family="monospace">08:00:02</text><text x="10" y="90" font-size="7" fill="#111" font-family="monospace">USD/JPY</text><text x="80" y="90" font-size="7" fill="#111" font-family="monospace">151.22</text><text x="150" y="90" font-size="7" fill="#111" font-family="monospace">08:00:02</text></svg><div class="cap">fx-rates-admin @1280 · passed</div></div>
+                <div class="shot"><svg viewBox="0 0 240 150" role="img" aria-label="Ledger entries screenshot"><rect width="240" height="150" fill="#ffffff"/><rect width="240" height="18" fill="#1f2a44"/><text x="8" y="12.5" font-size="8" fill="#ffffff" font-family="sans-serif">Acme Pay · Ledger</text><text x="10" y="34" font-size="9" font-weight="700" fill="#111" font-family="sans-serif">Entries for RF-20931</text><text x="10" y="52" font-size="7" fill="#555" font-family="sans-serif">Type</text><text x="110" y="52" font-size="7" fill="#555" font-family="sans-serif">Amount</text><text x="10" y="66" font-size="7" fill="#111" font-family="monospace">refund</text><text x="110" y="66" font-size="7" fill="#111" font-family="monospace">-40.00 EUR</text><text x="10" y="78" font-size="7" fill="#111" font-family="monospace">fx_fee_reversal</text><text x="110" y="78" font-size="7" fill="#111" font-family="monospace">-0.19 EUR</text><text x="10" y="98" font-size="7" fill="#15803d" font-family="sans-serif">Balanced · 2 entries</text></svg><div class="cap">ledger-entries @1280 · passed</div></div>
+              </div>
+            </div>
+            <div class="section">
+              <dl class="kv">
+                <dt>Cost</dt><dd><span class="num">$11.40</span> <span class="t3 small">of $40 · 4 runs</span></dd>
+                <dt>Review</dt><dd><span class="prov">Agent-written</span> codex reviewer: 2 notes, 0 blocking</dd>
+                <dt>Bundle</dt><dd class="mono"><span data-hide="rolledback">rb_ds5p3wmcj</span><span data-show="rolledback" style="color:var(--c-danger-fg)">rb_k7wq0f2e9n · rolled back</span></dd>
+              </dl>
+            </div>
+            <div class="section">
+              <div class="section-h"><h3>Memory used</h3><span class="t3 small">3 · read-only</span></div>
+              <ul class="memlist small">
+                <li><div class="txt">Rates cache keys must include the rates snapshot ID.</div><div class="src mono">mem_01m4b7… · repo · active since Oct 12</div></li>
+                <li><div class="txt">Run <span class="mono">make test-ledger</span>, not <span class="mono">go test ./...</span></div><div class="src mono">mem_01kz5c… · repo</div></li>
+              </ul>
+            </div>
+          </aside>
+        </div>
+
+        <div class="decide">
+          <div class="comment">Comment (optional, required for Reject and Request changes)</div>
+          <div class="row g3 stamp"><span>Packet <span class="mono">r3 · sha256:9be1…07c2</span><span class="hide-md"> · also open in Slack <span class="mono">#payments-replicant</span> and on issue #1423</span> · first decision wins</span></div>
+          <div class="row">
+            <button class="btn ghost danger" data-hide="degraded">Reject<kbd>X</kbd></button>
+            <button class="btn" data-hide="degraded">Request changes<kbd>R</kbd></button>
+            <button class="btn ghost" data-show="degraded" disabled style="opacity:.55">Reject</button>
+            <button class="btn" data-show="degraded" disabled style="opacity:.55">Request changes</button>
+            <button class="btn primary" data-hide="rolledback stale degraded">Approve and publish<kbd>A</kbd></button>
+            <button class="btn" data-show="rolledback">Approve with override…</button>
+            <button class="btn" data-show="stale" disabled style="opacity:.55">Approve (view r4 first)</button>
+            <button class="btn" data-show="degraded" disabled style="opacity:.55">Approve (unavailable)</button>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+<div class="scrim"></div><div class="palette"></div>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	context(context)
+	qa(qa)
+	end__qa_completed(end__qa_completed)
+	end__qa_failed(end__qa_failed)
+	end__qa_inconclusive(end__qa_inconclusive)
+	__end__([<p>__end__</p>]):::last
+	__start__ -.-> context;
+	__start__ -.-> qa;
+	context --> qa;
+	qa -.-> end__qa_completed;
+	qa -.-> end__qa_failed;
+	qa -.-> end__qa_inconclusive;
+	end__qa_completed --> __end__;
+	end__qa_failed --> __end__;
+	end__qa_inconclusive --> __end__;
+	qa -.-> qa;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc

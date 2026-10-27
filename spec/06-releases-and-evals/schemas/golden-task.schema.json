@@ -1,0 +1,570 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/evals/golden-task/v1.json",
+  "title": "GoldenTask",
+  "description": "WS-06. One golden task (eval-harness.md section 2). Stored write-once at s3://<org>-replicant-<env>-eval/golden/<golden_task_id>/task.json (artifact type golden_task_snapshot family, eval bucket). The Langfuse dataset item mirrors 'statement' as input, 'reference' summary as expected_output, and 'labels' as metadata; it never contains hidden tests or the reference patch. A change to any field creates a new golden_task_id (tasks are immutable; lineage via supersedes).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "golden_task_id",
+    "source",
+    "workflow_type",
+    "codebase_type",
+    "repo",
+    "statement",
+    "scope",
+    "scoring",
+    "labels",
+    "provenance"
+  ],
+  "properties": {
+    "schema": {
+      "const": "replicant.golden-task/v1"
+    },
+    "golden_task_id": {
+      "type": "string",
+      "pattern": "^gtask_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "supersedes": {
+      "type": "string",
+      "pattern": "^gtask_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "historical_pr",
+            "replicant_success",
+            "replicant_failure",
+            "pr_review_thread",
+            "synthetic_mutation",
+            "synthetic_authored"
+          ]
+        },
+        "source_tenant_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+          "minLength": 3,
+          "maxLength": 32
+        },
+        "source_repo": {
+          "description": "<host>/<owner>/<name> of the original repository.",
+          "type": "string",
+          "maxLength": 455
+        },
+        "source_pr_number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "source_issue_url": {
+          "type": "string",
+          "format": "uri",
+          "maxLength": 2048
+        },
+        "source_job_id": {
+          "type": "string",
+          "pattern": "^job_[0-9a-hjkmnp-tv-z]{26}$"
+        },
+        "generator": {
+          "description": "For synthetic tasks: generator name and version (fix the generator, not the item).",
+          "type": "string",
+          "maxLength": 100
+        }
+      }
+    },
+    "workflow_type": {
+      "type": "string",
+      "enum": [
+        "bugfix",
+        "feature",
+        "api_change",
+        "docs",
+        "hotfix",
+        "maintenance",
+        "pr_repair",
+        "qa_only"
+      ]
+    },
+    "codebase_type": {
+      "description": "Matches the EnvironmentDefinition family used for coverage targets (eval-harness.md section 2.4).",
+      "type": "string",
+      "enum": [
+        "go-service",
+        "jvm-service",
+        "python-service",
+        "node-service",
+        "web-frontend",
+        "fullstack-web",
+        "rust-service",
+        "iac-terraform",
+        "docs-site",
+        "data-pipeline",
+        "mobile-lib",
+        "other"
+      ]
+    },
+    "repo": {
+      "description": "Where the sandbox fetches from: the eval Git server (Forgejo, provider gitea in C-RUNNER Repo), seeded from snapshot_key. The snapshot contains only history reachable from base_sha, with all other refs removed, so future commits (the real fix) cannot be fetched.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "host",
+        "owner",
+        "name",
+        "base_sha",
+        "snapshot_key",
+        "snapshot_sha256",
+        "environment"
+      ],
+      "properties": {
+        "provider": {
+          "const": "gitea"
+        },
+        "host": {
+          "description": "Eval Git server host: git.eval.<env>.replicant.internal in dev/staging/prod; the local Gitea host in local mode (eval-harness.md \u00a710).",
+          "type": "string",
+          "maxLength": 255,
+          "pattern": "^[a-z0-9.-]+(:[0-9]+)?$"
+        },
+        "owner": {
+          "description": "Gitea org of the snapshot: golden (cluster eval) or replicant-eval-golden (local mode, eval-harness.md §8, XD-W2-06-02).",
+          "enum": ["golden", "replicant-eval-golden"]
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^gtask-[0-9a-hjkmnp-tv-z]{26}$"
+        },
+        "base_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        },
+        "snapshot_key": {
+          "description": "Key in the eval bucket, e.g. golden/gtask_.../repo.bundle (git bundle).",
+          "type": "string",
+          "maxLength": 1024
+        },
+        "snapshot_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "environment": {
+          "description": "Environment definition selector used to build and run QA. Resolved through the bundle's codebase_bindings at run time; recorded here only to validate that the binding still applies.",
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^environment/[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+        }
+      }
+    },
+    "statement": {
+      "description": "What a requester would plausibly write (symptom, not investigation). Becomes JobRequest.intent. Untrusted text rules apply exactly as in production.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "body"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "body": {
+          "type": "string",
+          "maxLength": 32000
+        },
+        "attachments_keys": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        }
+      }
+    },
+    "pr_repair": {
+      "description": "Only for workflow_type pr_repair: the starting diff and scripted review rounds.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "initial_diff_key",
+        "review_rounds"
+      ],
+      "properties": {
+        "initial_diff_key": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "review_rounds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "comments"
+            ],
+            "properties": {
+              "comments": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 30,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "body"
+                  ],
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "maxLength": 1024
+                    },
+                    "line": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "body": {
+                      "type": "string",
+                      "maxLength": 8000
+                    },
+                    "expect_rule_key": {
+                      "description": "Feedback-triage topic key the comment should map to (memory evaluation).",
+                      "type": "string",
+                      "maxLength": 128
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allowed_paths"
+      ],
+      "properties": {
+        "allowed_paths": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "forbidden_paths": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "expected_risk_level_min": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "expected_gates": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "plan_approval",
+              "publish_approval",
+              "clarification",
+              "budget_extension"
+            ]
+          }
+        }
+      }
+    },
+    "scoring": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checks"
+      ],
+      "properties": {
+        "checks": {
+          "description": "Deterministic checks that apply (eval-harness.md section 4.1).",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "D1_terminal",
+              "D2_diff_applies",
+              "D3_build",
+              "D4_visible_tests",
+              "D5_hidden_tests",
+              "D6_qa_health",
+              "D7_contract_compat",
+              "D8_diff_size",
+              "D9_scope",
+              "D10_secret_scan",
+              "D11_gates",
+              "D12_lint",
+              "D13_resources",
+              "D14_test_tamper",
+              "D15_doc_assertions",
+              "D16_seeded_defects"
+            ]
+          }
+        },
+        "hidden_tests_key": {
+          "description": "Patch adding FAIL_TO_PASS tests; applied only in the scoring run, never staged into agent runs.",
+          "type": "string",
+          "maxLength": 1024
+        },
+        "fail_to_pass": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "pass_to_pass": {
+          "type": "array",
+          "maxItems": 5000,
+          "items": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "test_command_ref": {
+          "description": "Name of the QA test step in the environment definition (WS-05) used to run tests.",
+          "type": "string",
+          "maxLength": 128
+        },
+        "reference_patch_key": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "reference_stats": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "files_changed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "lines_changed": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "doc_assertions": {
+          "description": "For docs tasks: facts the final docs must contain or must not contain (regex, case-insensitive).",
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path_glob",
+              "pattern",
+              "must"
+            ],
+            "properties": {
+              "path_glob": {
+                "type": "string",
+                "maxLength": 512
+              },
+              "pattern": {
+                "type": "string",
+                "maxLength": 512
+              },
+              "must": {
+                "type": "string",
+                "enum": [
+                  "match",
+                  "not_match"
+                ]
+              }
+            }
+          }
+        },
+        "seeded_defects": {
+          "description": "For qa_only and reviewer tasks: defects the QA or reviewer must report.",
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "description"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]{1,40}$"
+              },
+              "description": {
+                "type": "string",
+                "maxLength": 2000
+              },
+              "locator": {
+                "type": "string",
+                "maxLength": 512
+              }
+            }
+          }
+        },
+        "rubrics": {
+          "description": "Judge rubrics that apply (eval-harness.md section 4.2).",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "plan_quality",
+              "diff_quality",
+              "pr_description",
+              "comment_addressal",
+              "review_usefulness",
+              "docs_quality"
+            ]
+          }
+        },
+        "flaky_tests_excluded": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "string",
+            "maxLength": 512
+          }
+        }
+      }
+    },
+    "gate_script": {
+      "description": "Scripted gate outcomes for evaluation mode (schemas/gate-script.schema.json). Absent = approve every approval gate; clarification answered with clarification_answer.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "plan_approval": {
+          "type": "string",
+          "enum": [
+            "approve",
+            "request_changes_once"
+          ]
+        },
+        "plan_change_request": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "clarification_answer": {
+          "type": "string",
+          "maxLength": 4000
+        }
+      }
+    },
+    "labels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "difficulty",
+        "verified_by"
+      ],
+      "properties": {
+        "difficulty": {
+          "type": "string",
+          "enum": [
+            "easy",
+            "medium",
+            "hard",
+            "unknown"
+          ]
+        },
+        "language": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "risk_tags": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "maxLength": 40
+          }
+        },
+        "verified_by": {
+          "description": "Curators who verified the task (two for gating-set membership).",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "items": {
+            "type": "string",
+            "pattern": "^usr_[0-9a-hjkmnp-tv-z]{26}$"
+          }
+        },
+        "ground_truth_origin": {
+          "type": "string",
+          "enum": [
+            "human_written",
+            "human_verified_model_output"
+          ]
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "created_at",
+        "created_by",
+        "data_classification"
+      ],
+      "properties": {
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "created_by": {
+          "type": "string",
+          "pattern": "^(usr_[0-9a-hjkmnp-tv-z]{26}|svc_[a-z][a-z0-9-]{2,40})$"
+        },
+        "data_classification": {
+          "type": "string",
+          "enum": [
+            "internal",
+            "confidential",
+            "restricted"
+          ]
+        },
+        "tenant_consent": {
+          "description": "Tenant admin consent record for using the tenant's repository content in the shared golden set (eval-harness.md section 2.6).",
+          "type": "string",
+          "pattern": "^aud_[0-9a-hjkmnp-tv-z]{26}$"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

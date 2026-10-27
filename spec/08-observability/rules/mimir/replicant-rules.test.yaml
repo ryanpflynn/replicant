@@ -1,0 +1,148 @@
+# promtool unit tests for replicant-rules.yaml. Run: promtool test rules replicant-rules.test.yaml
+rule_files:
+  - replicant-rules.yaml
+evaluation_interval: 1m
+tests:
+  # Control-plane fast burn: 2% 5xx for 70 minutes pages; 0.05% does not.
+  - interval: 1m
+    input_series:
+      - series: 'replicant_http_server_request_duration_seconds_count{service="control-plane-api",status_code="200"}'
+        values: '0+980x80'
+      - series: 'replicant_http_server_request_duration_seconds_count{service="control-plane-api",status_code="503"}'
+        values: '0+20x80'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: ReplicantControlPlaneAvailabilityFastBurn
+        exp_alerts:
+          - exp_labels: {severity: page, owner: ws-07, slo: control-plane-availability}
+            exp_annotations:
+              summary: "control-plane-api is burning its 99.9% availability budget 14.4x too fast"
+              description: "5xx ratio 2% over 1h. At this rate the 30-day budget is gone in about 2 days."
+              runbook_url: https://runbooks.replicant.internal/observability/control-plane-availability
+  - interval: 1m
+    input_series:
+      - series: 'replicant_http_server_request_duration_seconds_count{service="control-plane-api",status_code="200"}'
+        values: '0+9995x80'
+      - series: 'replicant_http_server_request_duration_seconds_count{service="control-plane-api",status_code="500"}'
+        values: '0+5x80'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: ReplicantControlPlaneAvailabilityFastBurn
+        exp_alerts: []
+
+  # Job failure rate: 5 of 12 failed in the last hour for payments/bugfix.
+  - interval: 1m
+    input_series:
+      - series: 'replicant_jobs_terminal_total{tenant="payments",workflow_type="bugfix",outcome="failed",release_cohort="default"}'
+        values: '0x10 0+0.0833x60'
+      - series: 'replicant_jobs_terminal_total{tenant="payments",workflow_type="bugfix",outcome="succeeded",release_cohort="default"}'
+        values: '0x10 0+0.1167x60'
+    alert_rule_test:
+      - eval_time: 75m
+        alertname: ReplicantJobFailureRateHigh
+        exp_alerts:
+          - exp_labels: {severity: page, owner: ws-01, tenant: payments, workflow_type: bugfix}
+            exp_annotations:
+              summary: "payments/bugfix: 41.65% of jobs failed in the last hour"
+              description: "Top failure reasons: replicant_runs_terminal_total by reason; job drilldown in the per-tenant dashboard."
+              releases_url: https://app.replicant.internal/releases?focus=failures
+              runbook_url: https://runbooks.replicant.internal/observability/job-failure-rate
+
+  # Stalled workflows reported by the reconciler.
+  - interval: 1m
+    input_series:
+      - series: 'replicant_jobs_stalled{tenant="payments"}'
+        values: '0 0 2x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ReplicantWorkflowsStalled
+        exp_alerts:
+          - exp_labels: {severity: page, owner: ws-01, tenant: payments}
+            exp_annotations:
+              summary: "2 job(s) in tenant payments are running with no progress for 30+ minutes"
+              description: "Reported by sys:projection-reconciler (status=running, no projection seq advance in 30 min, no open run). Open the job, then Temporal history (pending activities)."
+              runbook_url: https://runbooks.replicant.internal/observability/stalled-workflows
+
+  # Release attribution by worker version (XD-07-07): link carries the version.
+  - interval: 1m
+    input_series:
+      - series: 'replicant_jobs_terminal_total{tenant="payments",workflow_type="bugfix",outcome="failed",deployment_version="replicant-worker:b20261024-3f9a1c2e7d4b"}'
+        values: '0x10 0+0.2x60'
+      - series: 'replicant_jobs_terminal_total{tenant="payments",workflow_type="bugfix",outcome="succeeded",deployment_version="replicant-worker:b20261024-3f9a1c2e7d4b"}'
+        values: '0x10 0+0.2x60'
+    alert_rule_test:
+      - eval_time: 75m
+        alertname: ReplicantJobFailureRateByVersion
+        exp_alerts:
+          - exp_labels: {severity: page, owner: ws-06, deployment_version: "replicant-worker:b20261024-3f9a1c2e7d4b"}
+            exp_annotations:
+              summary: "Worker version replicant-worker:b20261024-3f9a1c2e7d4b fails 50% of its jobs"
+              description: "Open the releases page focused on failures to see the bundle behind this version and roll it back."
+              releases_url: "https://app.replicant.internal/releases?focus=failures&deployment_version=replicant-worker:b20261024-3f9a1c2e7d4b"
+              runbook_url: https://runbooks.replicant.internal/observability/release-rollback
+
+  # Pinned version without pollers.
+  - interval: 1m
+    input_series:
+      - series: 'replicant_worker_pinned_open_workflows{deployment_version="replicant-worker:b20261001-aaaaaaaaaaaa"}'
+        values: '12x20'
+      - series: 'temporal_num_pollers{deployment_version="replicant-worker:b20261024-3f9a1c2e7d4b",poller_type="workflow_task"}'
+        values: '4x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ReplicantPinnedVersionNoPollers
+        exp_alerts:
+          - exp_labels: {severity: page, owner: ws-01, deployment_version: "replicant-worker:b20261001-aaaaaaaaaaaa"}
+            exp_annotations:
+              summary: "Worker version replicant-worker:b20261001-aaaaaaaaaaaa has open pinned workflows and no pollers"
+              runbook_url: https://runbooks.replicant.internal/orchestration/pinned-version-no-pollers
+
+  # SecurityViolation pages.
+  - interval: 1m
+    input_series:
+      - series: 'replicant_controller_phase_transitions_total{phase="Failed",reason="SecurityViolation",isolation="kata-clh",workload_class="coding",tenant="payments"}'
+        values: '0 0 1 1 1'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ReplicantRunSecurityViolation
+        exp_alerts:
+          - exp_labels: {severity: page, owner: ws-09, tenant: payments}
+            exp_annotations:
+              summary: "A run in tenant payments was terminated by security automation (SecurityViolation)"
+              runbook_url: https://runbooks.replicant.internal/security/security-violation
+
+  # Release failure spike (XD-FIX-R1-5.1-release-alert): a candidate bundle failing at 50% against a ~5% default
+  # baseline fires after 15 min (the corrected group_left matching; WS-07's original form never fires).
+  - interval: 1m
+    input_series:
+      - series: 'replicant_jobs_terminal_total{bundle="rb_a",release_cohort="candidate",outcome="failed"}'
+        values: '0+1x120'
+      - series: 'replicant_jobs_terminal_total{bundle="rb_a",release_cohort="candidate",outcome="succeeded"}'
+        values: '0+1x120'
+      - series: 'replicant_jobs_terminal_total{bundle="rb_d",release_cohort="default",outcome="failed"}'
+        values: '0+1x120'
+      - series: 'replicant_jobs_terminal_total{bundle="rb_d",release_cohort="default",outcome="succeeded"}'
+        values: '0+20x120'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: ReplicantReleaseFailureSpike
+        exp_alerts:
+          - exp_labels: {severity: page, team: replicant-release, owner: ws-07, bundle: rb_a}
+            exp_annotations:
+              summary: "Bundle rb_a failure rate is more than twice the 7-day default baseline"
+              ui: "/releases?focus=failures&bundle=rb_a"
+              runbook_url: https://replicant.acme.example.com/docs/runbooks/release-failure-spike
+
+  # Tenant quota (XD-FIX-R1-055): any quota rejection in 15 min, sustained 15 min.
+  - interval: 1m
+    input_series:
+      - series: 'replicant_runner_runs_created_total{tenant="payments",workload_class="coding",isolation="kata-clh",outcome="quota_exceeded"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: ReplicantRunnerQuotaSaturation
+        exp_alerts:
+          - exp_labels: {severity: ticket, owner: ws-02, tenant: payments}
+            exp_annotations:
+              summary: "payments is hitting its concurrent-run quota (jobs show waiting_capacity)"
+              runbook_url: https://runbooks.replicant.internal/observability/capacity

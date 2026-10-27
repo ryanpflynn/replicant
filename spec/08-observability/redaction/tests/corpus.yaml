@@ -1,0 +1,120 @@
+# Redaction test corpus (WS-08). Ruleset redact-2026.10.1.
+#
+# Secrets are NOT stored literally: each {{generator}} placeholder is expanded at test time by
+# run_redaction_tests.py with a seeded RNG, so the repository never contains realistic credentials
+# (which would also trip GitHub push protection). Generators are defined in run_redaction_tests.py.
+#
+# expect:
+#   redacted: the placeholder value(s) must not survive in the output of the sink under test.
+#   unchanged: the line must come out byte-identical (false-positive guard).
+# sinks: which implementations must satisfy the case. "gitleaks" = Go detector (entrypoint, shipper,
+#   leak-scanner); "alloy" = loki.secretfilter; "pii" = the PII stage (entrypoint only, see pii-rules.yaml).
+schema: replicant.redaction-corpus/v1
+ruleset_version: redact-2026.10.1
+cases:
+  - id: github-pat-classic
+    input: 'git remote set-url origin https://x:{{ghp}}@github.com/acme/ledger-api.git'
+    expect: redacted
+    sinks: [gitleaks, alloy]
+  - id: github-installation-token
+    input: '{"tool":"Bash","output":"GH_TOKEN={{ghs}}"}'
+    expect: redacted
+    sinks: [gitleaks, alloy]
+  - id: aws-access-key-base32
+    input: 'export AWS_ACCESS_KEY_ID={{akia_b32}}'
+    expect: redacted
+    sinks: [gitleaks, alloy]
+  - id: aws-access-key-broad-alphabet
+    input: 'aws_access_key_id = {{akia_broad}}'
+    expect: redacted
+    sinks: [gitleaks, alloy]
+  - id: aws-secret-key-context
+    input: 'aws_secret_access_key={{aws_secret}}'
+    expect: redacted
+    sinks: [gitleaks, alloy]
+  - id: aws-session-token
+    input: 'AWS_SESSION_TOKEN={{aws_session}}'
+    expect: redacted
+    sinks: [gitleaks, alloy]
+  - id: run-token-jwt
+    input: 'curl -H "Authorization: Bearer {{jwt}}" https://memory-mcp.prod.replicant.internal/mcp'
+    expect: redacted
+    sinks: [gitleaks, alloy]
+  - id: bearer-opaque
+    input: 'Authorization: Bearer {{opaque40}}'
+    expect: redacted
+    sinks: [gitleaks, alloy]
+  - id: slack-bot-token
+    input: 'SLACK_BOT_TOKEN={{xoxb}}'
+    expect: redacted
+    sinks: [gitleaks, alloy]
+  - id: private-key-escaped-newlines
+    input: '{"output":"-----BEGIN RSA PRIVATE KEY-----\n{{pem_body}}\n-----END RSA PRIVATE KEY-----"}'
+    expect: redacted
+    sinks: [gitleaks, alloy]
+  - id: private-key-truncated
+    input: '{"output":"-----BEGIN OPENSSH PRIVATE KEY-----\n{{pem_body}}"}'
+    expect: redacted
+    sinks: [gitleaks, alloy]
+  - id: dsn-password
+    input: 'DATABASE_URL=postgres://ledger:{{password16}}@db.internal:5432/ledger'
+    expect: redacted
+    sinks: [gitleaks, alloy]
+  - id: password-assignment
+    input: 'spring.datasource.password={{password16}}'
+    expect: redacted
+    sinks: [gitleaks, alloy]
+  - id: presigned-url
+    input: 'https://acme-replicant-prod-artifacts.s3.amazonaws.com/x?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature={{hex64}}'
+    expect: redacted
+    sinks: [gitleaks, alloy]
+  - id: langfuse-secret
+    input: 'LANGFUSE_SECRET_KEY={{sk_lf}}'
+    expect: redacted
+    sinks: [gitleaks, alloy]
+  # ---- false-positive guards: replicant identifiers and digests must survive ----
+  - id: fp-replicant-ids
+    input: '{"job_id":"job_01m5p7x7r0bt69j0h0fbxepw90","run_id":"run_gj3h3ep3phjfs9e23v768zrca5","release_bundle_id":"rb_ds5p3wmcj4dag2e9a8ncp4py6k"}'
+    expect: unchanged
+    sinks: [gitleaks, alloy]
+  - id: fp-digest
+    input: 'image ghcr.io/acme/app@sha256:5d7f9b1a3c4e6d8f0b2a4c6e8d1f2b4a6c8e0d2f3b5a7c9e1d3f4b6a8c0e2d4f'
+    expect: unchanged
+    sinks: [gitleaks, alloy]
+  - id: fp-git-sha
+    input: 'HEAD is now at 8c1e4f2a9b7d3c6e5f0a1b2c3d4e5f6a7b8c9d0e fix proration rounding'
+    expect: unchanged
+    sinks: [gitleaks, alloy]
+  - id: fp-traceparent
+    input: 'traceparent: 00-fc0575170c8597ce9805552723c08d6e-a3c1e5f7092b4d6e-01'
+    expect: unchanged
+    sinks: [gitleaks, alloy]
+  - id: fp-go-test-output
+    input: 'ok  	github.com/acme-payments/ledger-api/internal/proration	0.412s	coverage: 87.1% of statements'
+    expect: unchanged
+    sinks: [gitleaks, alloy]
+  # ---- PII (entrypoint PII stage only; Alloy's secretfilter does not cover PII by design) ----
+  - id: pii-email
+    input: 'Reported-by: dana.whitfield@acme-payments.com'
+    expect: redacted
+    sinks: [pii]
+  - id: pii-card-luhn
+    input: 'card=4539578763621486 exp=12/29'
+    expect: redacted
+    sinks: [pii]
+  - id: pii-card-not-luhn
+    input: 'order_number=4539578763621487'
+    expect: unchanged
+    sinks: [pii]
+  - id: pii-us-ssn
+    input: 'ssn: 536-90-4399'
+    expect: redacted
+    sinks: [pii]
+  - id: pii-phone-e164
+    input: 'call +14155550173 for the on-call'
+    expect: redacted
+    sinks: [pii]
+  - id: pii-noreply-allowed
+    input: 'Co-Authored-By: replicant-bot <noreply@replicant.example.com>'
+    expect: unchanged
+    sinks: [pii]

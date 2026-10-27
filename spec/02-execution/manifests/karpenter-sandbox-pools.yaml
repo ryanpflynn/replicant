@@ -1,0 +1,200 @@
+# Karpenter NodePools for sandboxes (karpenter.sh/v1). On-demand only; startup taints keep pods off a node
+# until Cilium, the NRI plugin and the image warmer are ready. Every pool: expireAfter 72h and
+# terminationGracePeriod 9h (XD-FIX-R1-221); sandbox pods carry karpenter.sh/do-not-disrupt. Kata >= 4.3.0
+# (4.3.1 pinned in the AMI).
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: sbx-kata
+spec:
+  template:
+    metadata:
+      labels:
+        replicant.example.com/pool-runtime: kata
+        replicant.example.com/sandbox: "true"
+    spec:
+      nodeClassRef: {group: karpenter.k8s.aws, kind: EC2NodeClass, name: sbx-kata}
+      taints:
+        - {key: replicant.example.com/sandbox, value: "true", effect: NoSchedule}
+      startupTaints:
+        - {key: node.cilium.io/agent-not-ready, value: "true", effect: NoExecute}
+        - {key: replicant.example.com/workspace-nri-not-ready, value: "true", effect: NoSchedule}
+        - {key: replicant.example.com/images-not-warm, value: "true", effect: NoSchedule}
+      requirements:
+        - {key: karpenter.k8s.aws/instance-family, operator: In, values: [m8id, r8id]}
+        - {key: karpenter.k8s.aws/instance-size, operator: In, values: [24xlarge, 16xlarge]}
+        - {key: karpenter.sh/capacity-type, operator: In, values: [on-demand]}
+        - {key: kubernetes.io/arch, operator: In, values: [amd64]}
+      expireAfter: 72h                  # XD-FIX-R1-221: node rotation within 3 days (kernel and Kata patches)
+      terminationGracePeriod: 9h        # drain waits for do-not-disrupt sandbox pods (longest run budget)
+  weight: 10                      # default pool; Karpenter tries higher weights first (R1-276)
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 10m
+  limits:
+    cpu: "2000"          # 150 production + 90 eval concurrent runs + reserve ≈ 18 × 96 vCPU (XD-06-10)
+    memory: 8000Gi
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: sbx-kata-metal
+spec:
+  template:
+    metadata:
+      labels:
+        replicant.example.com/pool-runtime: kata
+        replicant.example.com/sandbox: "true"
+        replicant.example.com/metal: "true"
+    spec:
+      nodeClassRef: {group: karpenter.k8s.aws, kind: EC2NodeClass, name: sbx-kata-metal}   # same as sbx-kata without cpuOptions
+      taints:
+        - {key: replicant.example.com/sandbox, value: "true", effect: NoSchedule}
+      startupTaints:
+        - {key: node.cilium.io/agent-not-ready, value: "true", effect: NoExecute}
+        - {key: replicant.example.com/workspace-nri-not-ready, value: "true", effect: NoSchedule}
+        - {key: replicant.example.com/images-not-warm, value: "true", effect: NoSchedule}
+      requirements:
+        - {key: node.kubernetes.io/instance-type, operator: In, values: [m8id.metal-48xl]}
+        - {key: karpenter.sh/capacity-type, operator: In, values: [on-demand]}
+      expireAfter: 72h
+      terminationGracePeriod: 9h
+  weight: 1                       # fallback rule 1 is one change: set this weight to 20 (above sbx-kata's 10)
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 10m
+  limits:
+    cpu: "1600"                   # production + eval peak on metal (runtime-evaluation.md §9)
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: sbx-gvisor
+spec:
+  template:
+    metadata:
+      labels:
+        replicant.example.com/pool-runtime: gvisor
+        replicant.example.com/sandbox: "true"
+    spec:
+      nodeClassRef: {group: karpenter.k8s.aws, kind: EC2NodeClass, name: sbx-gvisor}       # Graviton/Intel NVMe families, no cpuOptions
+      taints:
+        - {key: replicant.example.com/sandbox, value: "true", effect: NoSchedule}
+      startupTaints:
+        - {key: node.cilium.io/agent-not-ready, value: "true", effect: NoExecute}
+        - {key: replicant.example.com/workspace-nri-not-ready, value: "true", effect: NoSchedule}
+      requirements:
+        - {key: karpenter.k8s.aws/instance-family, operator: In, values: [m8id, m6id]}
+        - {key: karpenter.sh/capacity-type, operator: In, values: [on-demand]}
+        - {key: kubernetes.io/arch, operator: In, values: [amd64]}   # environment images are amd64 (R1-277)
+      expireAfter: 72h
+      terminationGracePeriod: 9h
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 10m
+  limits:
+    cpu: "2000"                   # sized for production peak so a runtime override can move everything (R2-045)
+---
+# Lower-weight overflow for c8id shapes: memory-bound at about half the density (runtime-evaluation.md §9).
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: sbx-kata-c8id
+spec:
+  template:
+    metadata:
+      labels:
+        replicant.example.com/pool-runtime: kata
+        replicant.example.com/sandbox: "true"
+    spec:
+      nodeClassRef: {group: karpenter.k8s.aws, kind: EC2NodeClass, name: sbx-kata}
+      taints:
+        - {key: replicant.example.com/sandbox, value: "true", effect: NoSchedule}
+      startupTaints:
+        - {key: node.cilium.io/agent-not-ready, value: "true", effect: NoExecute}
+        - {key: replicant.example.com/workspace-nri-not-ready, value: "true", effect: NoSchedule}
+        - {key: replicant.example.com/images-not-warm, value: "true", effect: NoSchedule}
+      requirements:
+        - {key: karpenter.k8s.aws/instance-family, operator: In, values: [c8id]}
+        - {key: karpenter.k8s.aws/instance-size, operator: In, values: [24xlarge, 16xlarge]}
+        - {key: karpenter.sh/capacity-type, operator: In, values: [on-demand]}
+        - {key: kubernetes.io/arch, operator: In, values: [amd64]}
+      expireAfter: 72h                  # XD-FIX-R1-221: node rotation within 3 days (kernel and Kata patches)
+      terminationGracePeriod: 9h        # drain waits for do-not-disrupt sandbox pods (longest run budget)
+  weight: 5
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 10m
+  limits:
+    cpu: "768"
+---
+# Isolation-group template (XD-FIX-R1-220, WS-09 tenancy.md section 3.2): one NodePool per group whose
+# namespace label replicant.example.com/isolation-group is not shared-standard. Rendered by the platform
+# repo per group; shown for group iso-payments. Same as sbx-kata plus the group label and taint; the
+# controller adds the matching nodeSelector and toleration (controller.md section 4.1).
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: sbx-kata-iso-payments
+spec:
+  template:
+    metadata:
+      labels:
+        replicant.example.com/pool-runtime: kata
+        replicant.example.com/sandbox: "true"
+        replicant.example.com/isolation-group: iso-payments
+    spec:
+      nodeClassRef: {group: karpenter.k8s.aws, kind: EC2NodeClass, name: sbx-kata}
+      taints:
+        - {key: replicant.example.com/sandbox, value: "true", effect: NoSchedule}
+        - {key: replicant.example.com/isolation-group, value: iso-payments, effect: NoSchedule}
+      startupTaints:
+        - {key: node.cilium.io/agent-not-ready, value: "true", effect: NoExecute}
+        - {key: replicant.example.com/workspace-nri-not-ready, value: "true", effect: NoSchedule}
+        - {key: replicant.example.com/images-not-warm, value: "true", effect: NoSchedule}
+      requirements:
+        - {key: karpenter.k8s.aws/instance-family, operator: In, values: [m8id, r8id]}
+        - {key: karpenter.k8s.aws/instance-size, operator: In, values: [24xlarge, 16xlarge]}
+        - {key: karpenter.sh/capacity-type, operator: In, values: [on-demand]}
+        - {key: kubernetes.io/arch, operator: In, values: [amd64]}
+      expireAfter: 72h
+      terminationGracePeriod: 9h
+  weight: 10
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 10m
+  limits:
+    cpu: "384"                    # per-group cap, set from the tenant's max-active-runs at onboarding
+---
+# gVisor counterpart of the isolation-group template (R1V-058): an isolated tenant's run moved to gVisor by
+# runtime selection or a runtime override (XD-FIX-R2-045) must also find a node in its group.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: sbx-gvisor-iso-payments
+spec:
+  template:
+    metadata:
+      labels:
+        replicant.example.com/pool-runtime: gvisor
+        replicant.example.com/sandbox: "true"
+        replicant.example.com/isolation-group: iso-payments
+    spec:
+      nodeClassRef: {group: karpenter.k8s.aws, kind: EC2NodeClass, name: sbx-gvisor}
+      taints:
+        - {key: replicant.example.com/sandbox, value: "true", effect: NoSchedule}
+        - {key: replicant.example.com/isolation-group, value: iso-payments, effect: NoSchedule}
+      startupTaints:
+        - {key: node.cilium.io/agent-not-ready, value: "true", effect: NoExecute}
+        - {key: replicant.example.com/workspace-nri-not-ready, value: "true", effect: NoSchedule}
+      requirements:
+        - {key: karpenter.k8s.aws/instance-family, operator: In, values: [m8id, m6id]}
+        - {key: karpenter.sh/capacity-type, operator: In, values: [on-demand]}
+        - {key: kubernetes.io/arch, operator: In, values: [amd64]}
+      expireAfter: 72h
+      terminationGracePeriod: 9h
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 10m
+  limits:
+    cpu: "384"

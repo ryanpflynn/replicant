@@ -1,0 +1,83 @@
+# Dex v2.46.0: stands in for Okta OIDC (D-18). Static users carry a groups claim (storage.Password.Groups,
+# present in v2.46.0 source, checked 2026-10-24). Okta SCIM is emulated separately: `replicant dev seed`
+# pushes the same users and groups to identity-service /scim/v2 exactly as Okta would.
+# Every user's password is "replicant-local" (bcrypt cost 10). Local only.
+issuer: http://dex.replicant.localhost:5556/dex
+storage:
+  type: sqlite3
+  config:
+    file: /var/dex/dex.db
+web:
+  http: 0.0.0.0:5556
+telemetry:
+  http: 0.0.0.0:5558
+oauth2:
+  skipApprovalScreen: true
+  responseTypes: [code]
+  grantTypes:
+    - authorization_code
+    - refresh_token
+    - urn:ietf:params:oauth:grant-type:device_code
+    - password                     # local only: `replicant dev login <user>` (no browser); never in prod
+  passwordConnector: local
+expiry:
+  idTokens: 1h
+  signingKeys: 6h
+  refreshTokens:
+    validIfNotUsedFor: 24h
+    absoluteLifetime: 168h
+enablePasswordDB: true
+staticClients:
+  - id: replicant-web
+    name: Replicant control plane (local)
+    secretEnv: DEX_REPLICANT_WEB_SECRET
+    redirectURIs: [http://app.replicant.localhost:8400/auth/callback]
+  - id: replicant-cli
+    name: replicant CLI (device flow, local)
+    public: true
+    redirectURIs: [http://127.0.0.1:8765/callback, /device/callback]
+  - id: temporal-ui
+    name: Temporal UI (local)
+    secret: temporal-ui-local-secret
+    redirectURIs: [http://temporal.replicant.localhost:8233/auth/sso/callback]
+  - id: grafana
+    name: Grafana (local)
+    secret: grafana-local-secret
+    redirectURIs: [http://grafana.replicant.localhost:3001/login/generic_oauth]
+staticPasswords:
+  - email: alice@acme.test
+    hash: "$2a$10$Ln5HQSMZ/U/MVyNaKv.V/OKZTlcmU79PDtZGj97DfN5IGb8F53Wp2"
+    username: alice
+    name: Alice Engineer
+    userID: 00u1alicelocal0000001
+    groups: [payments-engineers]
+  - email: bob@acme.test
+    hash: "$2a$10$Ln5HQSMZ/U/MVyNaKv.V/OKZTlcmU79PDtZGj97DfN5IGb8F53Wp2"
+    username: bob
+    name: Bob Approver
+    userID: 00u1boblocal000000002
+    groups: [payments-engineers, payments-approvers]
+  - email: carol@acme.test
+    hash: "$2a$10$Ln5HQSMZ/U/MVyNaKv.V/OKZTlcmU79PDtZGj97DfN5IGb8F53Wp2"
+    username: carol
+    name: Carol Admin
+    userID: 00u1carollocal0000003
+    groups: [replicant-admins, replicant-operators]
+  - email: dave@acme.test
+    hash: "$2a$10$Ln5HQSMZ/U/MVyNaKv.V/OKZTlcmU79PDtZGj97DfN5IGb8F53Wp2"
+    username: dave
+    name: Dave Engineer
+    userID: 00u1davelocal00000004
+    groups: [payments-engineers]
+  - email: erin@acme.test
+    hash: "$2a$10$Ln5HQSMZ/U/MVyNaKv.V/OKZTlcmU79PDtZGj97DfN5IGb8F53Wp2"
+    username: erin
+    name: Erin Tenant-Admin
+    userID: 00u1erinlocal00000005
+    groups: [payments-engineers, payments-admins]
+  - email: grace@acme.test
+    hash: "$2a$10$Ln5HQSMZ/U/MVyNaKv.V/OKZTlcmU79PDtZGj97DfN5IGb8F53Wp2"
+    username: grace
+    name: Grace Platform
+    userID: 00u1gracelocal0000006
+    groups: [replicant-platform-admins, replicant-release-managers, replicant-operators]

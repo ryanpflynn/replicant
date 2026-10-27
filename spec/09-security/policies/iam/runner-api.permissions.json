@@ -1,0 +1,189 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SignRunTokensOnly",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Sign",
+        "kms:GetPublicKey",
+        "kms:DescribeKey"
+      ],
+      "Resource": "arn:aws:kms:us-east-1:222222222222:key/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/replicant-key-class": "run-token",
+          "kms:SigningAlgorithm": "ECDSA_SHA_256"
+        }
+      }
+    },
+    {
+      "Sid": "VendPerRunSandboxCredentials",
+      "Effect": "Allow",
+      "Action": [
+        "sts:AssumeRole",
+        "sts:TagSession",
+        "sts:SetSourceIdentity"
+      ],
+      "Resource": "arn:aws:iam::222222222222:role/replicant-prod-sandbox-artifacts",
+      "Condition": {
+        "StringLike": {
+          "aws:RequestTag/replicant-tenant": "?*",
+          "aws:RequestTag/replicant-job": "job_*",
+          "aws:RequestTag/replicant-run": "run_*",
+          "sts:SourceIdentity": "run_*"
+        },
+        "ForAllValues:StringEquals": {
+          "aws:TagKeys": [
+            "replicant-tenant",
+            "replicant-job",
+            "replicant-run"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "WriteSteeringInboxAndControlKeys",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/inbox/*",
+      "Condition": {
+        "StringEqualsIfExists": {
+          "s3:x-amz-server-side-encryption": "aws:kms",
+          "s3:RequestObjectTag/replicant-type": [
+            "steering_message",
+            "steering_control"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "ReadInputsManifestInboxAndExecutionEvidence",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/inputs/manifest.json",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/inbox/*",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/manifest.json",
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/agentrun_record/*"
+      ]
+    },
+    {
+      "Sid": "ListInboxPrefixOnly",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-artifacts",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": "tenants/*/jobs/*/runs/*/inbox/*"
+        }
+      }
+    },
+    {
+      "Sid": "ListTranscriptsRunPrefixForEvidenceCheck",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-transcripts",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": "tenants/*/jobs/*/runs/*"
+        }
+      }
+    },
+    {
+      "Sid": "ReadKillSwitchMirror",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-ops/kill-switches/v1/state.json"
+    },
+    {
+      "Sid": "WriteAndReadBackExecRevocationFeedOnly",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging",
+        "s3:GetObject"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-ops/exec-revocations/prod/*"
+    },
+    {
+      "Sid": "ReadRegistryBlobsAndBundlePointers",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-registry/blobs/sha256/*",
+        "arn:aws:s3:::acme-replicant-prod-registry/bundles/*"
+      ]
+    },
+    {
+      "Sid": "UseTenantAndRegistryKeysViaS3Only",
+      "Effect": "Allow",
+      "Action": [
+        "kms:GenerateDataKey",
+        "kms:Decrypt"
+      ],
+      "Resource": "arn:aws:kms:us-east-1:111111111111:key/*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "s3.us-east-1.amazonaws.com"
+        },
+        "StringLike": {
+          "aws:ResourceTag/replicant-key-class": [
+            "tenant",
+            "registry",
+            "ops"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "DenyDestructiveAndAdminActions",
+      "Effect": "Deny",
+      "Action": [
+        "s3:DeleteObject*",
+        "s3:PutBucket*",
+        "s3:PutObjectAcl",
+        "s3:BypassGovernanceRetention",
+        "iam:*",
+        "kms:CreateGrant",
+        "kms:PutKeyPolicy",
+        "kms:ScheduleKeyDeletion"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyDirectKmsDecrypt",
+      "Effect": "Deny",
+      "Action": [
+        "kms:Decrypt",
+        "kms:GenerateDataKey"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "kms:ViaService": "s3.us-east-1.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "ListExecRevocationFeed",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-ops",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": "exec-revocations/prod/*"
+        }
+      }
+    }
+  ]
+}

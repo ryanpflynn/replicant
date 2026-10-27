@@ -1,0 +1,80 @@
+# AgentDefinition: qa-runner (role qa). Referenced by WS-01 graphs (`agent: qa-runner`) and WS-05 stage-design.
+# With REPLICANT_ROLE=qa the entrypoint runs `replicant-qa run` (WS-05 harness) instead of a CLI; Claude Code is
+# launched only for advisory agent tasks (smoke-flow generation, failure diagnosis) through the same adapter.
+apiVersion: replicant.example.com/v1
+kind: AgentDefinition
+metadata:
+  name: qa-runner
+  scope:
+    level: global
+  owners:
+    - replicant-platform
+    - replicant-qa
+  description: >-
+    Model profile for the QA harness's agent sub-tasks (XD-05-19). Image cli-claude-code carries
+    replicant-entrypoint, replicant-agentd, replicant-qa, replicant-stubgen, replicant-redact, replicant-svc-wrap and
+    @replicant/qa-web. Tools: Read/Grep/Glob, Bash limited to replicant-qa agent-* subcommands, edits only under
+    /workspace/.qa/generated. No MCP, no web.
+  labels:
+    replicant.cli: claude-code
+spec:
+  roles: [qa]
+  workloadClass: qa_build
+  cli: claude-code
+  cliImage:
+    image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/cli-claude-code@sha256:7a9c1e3b5d7f9a0c2e4b6d8f0a1c3e5b7d9f2a4c6e8b0d1f3a5c7e9b2d4f6a8c
+    version: 2.1.310
+    entrypointVersion: 1.1.0
+  qaHarness:
+    version: 1.0.0
+    agentTasks: true
+  model:
+    primary: anthropic/claude-sonnet-5-5
+  prompts:
+    role:
+      ref: prompt/qa-agent-role@label:production
+      mode: append
+    constraints: prompt/replicant-constraints@label:production
+    task: prompt/qa-agent-task@label:production
+  tools:
+    read: true
+    edit: true
+    editPaths:
+      - /workspace/.qa/generated/**
+    shell:
+      mode: allowlist
+      allow:
+        - "/opt/replicant/bin/replicant-qa agent-*"
+    web:
+      fetch: false
+      search: false
+    subagents:
+      enabled: false
+  mcpServers: []
+  limits:
+    maxTurns: 40
+    maxWallSeconds: 2700
+    maxCostUsd: 3
+    startupSeconds: 300
+    finalizeSeconds: 600
+  gateway:
+    protocol: anthropic_messages
+  steering:
+    live: false
+  session:
+    capture: never
+    resumable: false
+  outputContract:
+    roleResultSchema: replicant.role-result.qa/v1
+    structuredResult: file
+    outputs:
+      diff_bundle: forbidden
+      handoff: forbidden
+      plan: forbidden
+      review_report: forbidden
+      session_state: forbidden
+      workspace_archive: forbidden
+      memory_candidates: forbidden
+    workspaceIntegrity: detect
+  claudeCode:
+    repoInstructionFiles: ignore

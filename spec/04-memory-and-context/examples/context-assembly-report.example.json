@@ -1,0 +1,77 @@
+{
+  "schema": "replicant.context-assembly-report/v1",
+  "job_id": "job_01m5p7x7r0bt69j0h0fbxepw90",
+  "run_id": "run_gj3h3ep3phjfs9e23v768zrca5",
+  "role": "implementer",
+  "model": "anthropic/claude-sonnet-5-5",
+  "context_window": 1000000,
+  "tokenizer": "anthropic:count_tokens:claude-sonnet-5-5",
+  "token_count_method": "exact_endpoint",
+  "budget_profile": "context-default@2",
+  "sections": [
+    {
+      "section": "role_prompt",
+      "slot": "system_append",
+      "budget_tokens": 8000,
+      "used_tokens": 3105,
+      "source_tokens": 3105,
+      "action": "fit"
+    },
+    {
+      "section": "constraints",
+      "slot": "system_append",
+      "budget_tokens": 4000,
+      "used_tokens": 612,
+      "source_tokens": 612,
+      "action": "fit"
+    },
+    {
+      "section": "memory",
+      "slot": "system_append",
+      "budget_tokens": 8000,
+      "used_tokens": 512,
+      "source_tokens": 512,
+      "action": "fit",
+      "artifact_key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/inputs/memory-injection.json",
+      "sha256": "812621d39f0237692cad89dcf904d4c999958146c1e9f59311f538b46d9751da"
+    },
+    {
+      "section": "briefing",
+      "slot": "input_file",
+      "budget_tokens": 12000,
+      "used_tokens": 1430,
+      "source_tokens": 1430,
+      "action": "fit"
+    },
+    {
+      "section": "working_memory",
+      "slot": "first_user_message",
+      "budget_tokens": 10000,
+      "used_tokens": 1820,
+      "source_tokens": 1820,
+      "action": "fit"
+    },
+    {
+      "section": "task",
+      "slot": "first_user_message",
+      "budget_tokens": 16000,
+      "used_tokens": 2240,
+      "source_tokens": 2240,
+      "action": "fit"
+    },
+    {
+      "section": "steering",
+      "slot": "first_user_message",
+      "budget_tokens": 4000,
+      "used_tokens": 0,
+      "source_tokens": 0,
+      "action": "fit"
+    }
+  ],
+  "totals": {
+    "injected_tokens": 9719,
+    "reserved_headroom_tokens": 160000,
+    "headroom_ratio": 0.976,
+    "cli_overhead_tokens_estimate": 14500
+  }
+}

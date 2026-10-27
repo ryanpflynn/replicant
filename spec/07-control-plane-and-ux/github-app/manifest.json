@@ -1,0 +1,39 @@
+{
+  "name": "Acme Replicant",
+  "url": "https://replicant.acme.example.com",
+  "description": "Turns labelled issues and /replicant commands into reviewed pull requests. Publishes only after human approval of the exact diff, replies to review comments, and posts QA check runs. Never approves its own pull requests.",
+  "hook_attributes": {
+    "url": "https://hooks.replicant.acme.example.com/github/webhook",
+    "active": true
+  },
+  "redirect_url": "https://replicant.acme.example.com/admin/github-app/manifest/callback",
+  "callback_urls": [
+    "https://replicant.acme.example.com/v1/identity/links/github/callback"
+  ],
+  "setup_url": "https://replicant.acme.example.com/admin/github-app/installed",
+  "setup_on_update": true,
+  "request_oauth_on_install": false,
+  "public": false,
+  "default_permissions": {
+    "metadata": "read",
+    "contents": "write",
+    "issues": "write",
+    "pull_requests": "write",
+    "checks": "write",
+    "members": "read"
+  },
+  "default_events": [
+    "issues",
+    "issue_comment",
+    "pull_request",
+    "pull_request_review",
+    "pull_request_review_comment",
+    "pull_request_review_thread",
+    "check_run",
+    "check_suite",
+    "repository",
+    "membership",
+    "organization",
+    "push"
+  ]
+}

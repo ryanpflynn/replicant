@@ -1,0 +1,83 @@
+{
+  "Version": "2012-10-17",
+  "Id": "replicant-prod-ops",
+  "Statement": [
+    {
+      "Sid": "MetadataForAccount",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::111111111111:root"
+      },
+      "Action": [
+        "kms:DescribeKey",
+        "kms:GetKeyPolicy",
+        "kms:ListResourceTags"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AdminWithoutUse",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::111111111111:role/replicant-prod-platform-deployer"
+      },
+      "Action": [
+        "kms:Create*",
+        "kms:Describe*",
+        "kms:Enable*",
+        "kms:List*",
+        "kms:Put*",
+        "kms:Update*",
+        "kms:Disable*",
+        "kms:Get*",
+        "kms:TagResource",
+        "kms:UntagResource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "WriterEncryptsViaS3",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": [
+          "arn:aws:iam::111111111111:role/replicant-prod-control-plane-api",
+          "arn:aws:iam::111111111111:role/replicant-prod-killswitch-operator",
+          "arn:aws:iam::222222222222:role/replicant-prod-runner-api"
+        ]
+      },
+      "Action": [
+        "kms:GenerateDataKey",
+        "kms:Decrypt"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "s3.us-east-1.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "ReadersDecryptViaS3",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": [
+          "arn:aws:iam::111111111111:role/replicant-prod-replicant-worker",
+          "arn:aws:iam::111111111111:role/replicant-prod-publisher-worker",
+          "arn:aws:iam::111111111111:role/replicant-prod-eval-worker",
+          "arn:aws:iam::111111111111:role/replicant-prod-control-plane-api",
+          "arn:aws:iam::111111111111:role/replicant-prod-github-integration",
+          "arn:aws:iam::111111111111:role/replicant-prod-slack-integration",
+          "arn:aws:iam::111111111111:role/replicant-prod-jira-integration",
+          "arn:aws:iam::222222222222:role/replicant-prod-runner-api"
+        ]
+      },
+      "Action": "kms:Decrypt",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "s3.us-east-1.amazonaws.com"
+        }
+      }
+    }
+  ]
+}

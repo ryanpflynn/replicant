@@ -1,0 +1,191 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadOriginalsAndLegalHoldStatus",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectVersion",
+        "s3:GetObjectTagging",
+        "s3:GetObjectLegalHold",
+        "s3:GetObjectRetention"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*",
+        "arn:aws:s3:::acme-replicant-prod-transcripts/tenants/*/jobs/*",
+        "arn:aws:s3:::acme-replicant-prod-session/tenants/*/jobs/*",
+        "arn:aws:s3:::acme-replicant-prod-artifacts-us-west-2/tenants/*/jobs/*",
+        "arn:aws:s3:::acme-replicant-prod-transcripts-us-west-2/tenants/*/jobs/*"
+      ]
+    },
+    {
+      "Sid": "ListVersionsUnderJobPrefixes",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucketVersions",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts",
+        "arn:aws:s3:::acme-replicant-prod-transcripts",
+        "arn:aws:s3:::acme-replicant-prod-session",
+        "arn:aws:s3:::acme-replicant-prod-artifacts-us-west-2",
+        "arn:aws:s3:::acme-replicant-prod-transcripts-us-west-2"
+      ],
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": [
+            "tenants/*/jobs/*"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "WriteRedactedSupersedingObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*",
+        "arn:aws:s3:::acme-replicant-prod-transcripts/tenants/*/jobs/*",
+        "arn:aws:s3:::acme-replicant-prod-session/tenants/*/jobs/*"
+      ]
+    },
+    {
+      "Sid": "LegalBucketHoldStatusAndUnheldDeletes",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectVersion",
+        "s3:GetObjectLegalHold",
+        "s3:ListBucketVersions",
+        "s3:DeleteObjectVersion",
+        "s3:PutObject",
+        "s3:PutObjectTagging"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-legal",
+        "arn:aws:s3:::acme-replicant-prod-legal/*"
+      ]
+    },
+    {
+      "Sid": "SupersedingObjectsWriteOnce",
+      "Effect": "Deny",
+      "Action": "s3:PutObject",
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts/*",
+        "arn:aws:s3:::acme-replicant-prod-transcripts/*",
+        "arn:aws:s3:::acme-replicant-prod-session/*"
+      ],
+      "Condition": {
+        "Null": {
+          "s3:if-none-match": "true"
+        },
+        "Bool": {
+          "s3:ObjectCreationOperation": "true"
+        }
+      }
+    },
+    {
+      "Sid": "DeleteAllVersionsOfOriginalsPrimaryAndDr",
+      "Effect": "Allow",
+      "Action": [
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*",
+        "arn:aws:s3:::acme-replicant-prod-transcripts/tenants/*/jobs/*",
+        "arn:aws:s3:::acme-replicant-prod-session/tenants/*/jobs/*",
+        "arn:aws:s3:::acme-replicant-prod-artifacts-us-west-2/tenants/*/jobs/*",
+        "arn:aws:s3:::acme-replicant-prod-transcripts-us-west-2/tenants/*/jobs/*"
+      ]
+    },
+    {
+      "Sid": "WritePurgeRecords",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-audit/tenants/*/jobs/*/purges/*"
+    },
+    {
+      "Sid": "NoGovernanceBypassNoLegalHoldChanges",
+      "Effect": "Deny",
+      "Action": [
+        "s3:BypassGovernanceRetention",
+        "s3:PutObjectLegalHold",
+        "s3:PutObjectRetention"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "TenantAndAuditKeysViaS3",
+      "Effect": "Allow",
+      "Action": [
+        "kms:GenerateDataKey",
+        "kms:Decrypt"
+      ],
+      "Resource": [
+        "arn:aws:kms:us-east-1:111111111111:key/*",
+        "arn:aws:kms:us-west-2:111111111111:key/*"
+      ],
+      "Condition": {
+        "StringLike": {
+          "kms:ViaService": [
+            "s3.us-east-1.amazonaws.com",
+            "s3.us-west-2.amazonaws.com"
+          ]
+        },
+        "ForAnyValue:StringEquals": {
+          "aws:ResourceTag/replicant-key-class": [
+            "tenant",
+            "audit"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "WriteDeletionLedgerEntryFirst",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-audit/org/deletion-ledger/*"
+    },
+    {
+      "Sid": "LedgerEntriesWriteOnce",
+      "Effect": "Deny",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-audit/org/deletion-ledger/*",
+      "Condition": {
+        "Null": {
+          "s3:if-none-match": "true"
+        },
+        "Bool": {
+          "s3:ObjectCreationOperation": "true"
+        }
+      }
+    },
+    {
+      "Sid": "TemporalPayloadCodec",
+      "Effect": "Allow",
+      "Action": [
+        "kms:GenerateDataKey",
+        "kms:Decrypt"
+      ],
+      "Resource": "arn:aws:kms:us-east-1:111111111111:key/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/replicant-key-class": "tenant",
+          "kms:EncryptionContext:replicant:purpose": "temporal-payload"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "EncodeSignalPayloadsOnly",
+      "Effect": "Allow",
+      "Action": "kms:GenerateDataKey",
+      "Resource": "arn:aws:kms:us-east-1:111111111111:key/*",
+      "Condition": {
+        "StringEquals": {
+          "kms:EncryptionContext:replicant:purpose": "temporal-payload"
+        },
+        "StringLike": {
+          "aws:ResourceTag/replicant-key-class": "tenant"
+        },
+        "Null": {
+          "kms:EncryptionContext:replicant:tenant": "false"
+        }
+      }
+    },
+    {
+      "Sid": "NeverDecryptNeverS3",
+      "Effect": "Deny",
+      "NotAction": "kms:GenerateDataKey",
+      "Resource": "*"
+    }
+  ]
+}

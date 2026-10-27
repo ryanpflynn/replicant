@@ -1,0 +1,2033 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/kinds/environment-definition/qa/v1.json",
+  "title": "EnvironmentDefinition spec.qa (replicant.env-qa/v1)",
+  "description": "WS-05. The `qa` section of an EnvironmentDefinition spec (C-DEF section 2: EnvironmentDefinition spec owner WS-03, QA section WS-05). WS-03's kind schema (spec/03-agents-and-tools/schemas/environment-definition.schema.json) requires only the discriminator `schema: replicant.env-qa/v1`; this schema validates the rest. It references, and does not duplicate, WS-03 fields: spec.services[] (sidecar services; QA uses those whose forRoles contain qa), spec.bootstrap.steps (run by the QA harness as its install stage), spec.profileByRole.qa (resource profile of the agent container), spec.networkProfile.qa_build, spec.isolationHint.qa_build. Behavioral configuration (ADR-013): pinned through the Release Bundle. No secret values (C-DEF section 2). Paths are repo-relative unless they start with /replicant/ or /workspace/.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "enabled",
+    "appKind",
+    "timeouts",
+    "steps"
+  ],
+  "properties": {
+    "schema": {
+      "const": "replicant.env-qa/v1"
+    },
+    "enabled": {
+      "description": "false: the QA node records verdict 'not_applicable' without starting an AgentRun (allowed only for docs-only bindings; the router may not route code diffs to a binding with qa disabled).",
+      "type": "boolean"
+    },
+    "appKind": {
+      "description": "server: a long-running process that must become healthy and stay healthy. batch: a process that must run to completion and produce verified outputs. library: no app to start (build and tests only). web: a server with a browser UI (enables the web section).",
+      "type": "string",
+      "enum": [
+        "server",
+        "web",
+        "batch",
+        "library"
+      ]
+    },
+    "timeouts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "totalSeconds"
+      ],
+      "properties": {
+        "totalSeconds": {
+          "description": "Harness budget; becomes RunSpec.timeouts.active_deadline_seconds. The harness stops starting new stages at totalSeconds - reserveSeconds so it can always write a report.",
+          "type": "integer",
+          "minimum": 300,
+          "maximum": 14400
+        },
+        "reserveSeconds": {
+          "description": "Time reserved at the end for teardown, report writing, and evidence capture.",
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 900,
+          "default": 180
+        },
+        "startupSeconds": {
+          "description": "RunSpec.timeouts.startup_seconds for QA runs.",
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 1800,
+          "default": 300
+        },
+        "finalizeSeconds": {
+          "description": "RunSpec.timeouts.finalize_seconds (traces and screenshots can be large).",
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 1800,
+          "default": 600
+        }
+      }
+    },
+    "steps": {
+      "description": "Deterministic command stages, executed in this order: install (spec.bootstrap.steps when useBootstrap, then steps.install), unit, integration, build. Each list runs sequentially with bash -euo pipefail -c, as uid 10001 in /workspace/repo/<workdir>.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "useBootstrap": {
+          "description": "Run spec.bootstrap.steps (WS-03) as the first part of the install stage. The harness runs them itself for role qa so that failures become classified checks; spec.bootstrap.forRoles must therefore not include qa (lint L15).",
+          "type": "boolean",
+          "default": true
+        },
+        "install": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "$ref": "#/$defs/commandStep"
+          },
+          "description": "Extra install steps after the bootstrap steps."
+        },
+        "unit": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/testStep"
+          }
+        },
+        "integration": {
+          "description": "Runs after services are healthy and seeds are applied.",
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/testStep"
+          }
+        },
+        "build": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "$ref": "#/$defs/commandStep"
+          }
+        }
+      }
+    },
+    "imageBuild": {
+      "$ref": "#/$defs/imageBuild"
+    },
+    "stubs": {
+      "description": "Contract-based stubs of downstream services, generated from contracts extracted by WS-04's ecosystem indexer and staged into the run's inputs by activity qa.stage_contract_stubs. Rendered as sidecars running the named stub server.",
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "$ref": "#/$defs/stub"
+      }
+    },
+    "seed": {
+      "description": "Data seeding after services are ready and before integration tests and app start. Synthetic data only (never copies of production data).",
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "$ref": "#/$defs/seedStep"
+      }
+    },
+    "app": {
+      "$ref": "#/$defs/app"
+    },
+    "web": {
+      "$ref": "#/$defs/web"
+    },
+    "flake": {
+      "$ref": "#/$defs/flake"
+    },
+    "agent": {
+      "$ref": "#/$defs/agent"
+    },
+    "variants": {
+      "description": "Per-workflow-type reductions. A variant can only skip optional stages or tighten budgets; it cannot disable unit tests, build, or health for code-changing workflow types (linted at publish).",
+      "type": "object",
+      "additionalProperties": false,
+      "propertyNames": {
+        "enum": [
+          "bugfix",
+          "feature",
+          "api_change",
+          "docs",
+          "hotfix",
+          "maintenance",
+          "pr_repair",
+          "qa_only"
+        ]
+      },
+      "patternProperties": {
+        "^[a-z_]+$": {
+          "$ref": "#/$defs/variant"
+        }
+      }
+    },
+    "env": {
+      "description": "Extra non-secret environment variables for every QA stage (merged over spec.env from WS-03's section).",
+      "$ref": "#/$defs/envMap"
+    },
+    "serviceOptions": {
+      "description": "QA-only options for services declared in spec.services[] (WS-03) whose forRoles contain qa (default forRoles is [qa]). Names must match (lint L16).",
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "$ref": "#/$defs/serviceOption"
+      }
+    },
+    "contractCompat": {
+      "description": "Run the compatibility checks listed in the job briefing's compat_checks (WS-04 ecosystem-context.md section 7: buf breaking, oasdiff breaking, graphql-inspector diff, asyncapi diff) against the base tree, and report them as stage contract_compat (XD-04-06).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "blockOnBreaking": {
+          "description": "A breaking change to a contract with consumers is a blocking check (rule K1). Default true, but forced false when the qa_run node passes run input contract_compat: report_only, which every graph does (XD-FIX-R1-120): the graph's contract_check node then applies the workflow-type policy from role_result.contract_compat. Risk is raised by WS-07 rules in either case.",
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "privacy": {
+      "description": "Data handling for QA evidence (WS-08 session-capture.md section 5.6, WS-09 G-14). realData: the app under test is seeded with anything other than synthetic data; screenshots are then Restricted (otherwise Internal). traceDomSnapshots: include DOM snapshots in Playwright traces; allowed only for tenants whose QA data classification is internal or lower (lint L17). Traces and videos are Restricted regardless.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "realData": {
+          "type": "boolean",
+          "default": false
+        },
+        "traceDomSnapshots": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    }
+  },
+  "$defs": {
+    "name": {
+      "type": "string",
+      "maxLength": 63,
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+    },
+    "stepId": {
+      "type": "string",
+      "maxLength": 40,
+      "pattern": "^[a-z][a-z0-9_]{0,39}$"
+    },
+    "relPath": {
+      "description": "Repo-relative path, or an absolute path under /workspace/.qa/ (QA scratch on the workspace volume) or /replicant/inputs/qa/ (staged inputs). No '..' segments.",
+      "type": "string",
+      "maxLength": 512,
+      "pattern": "^(?!.*(^|/)\\.\\.(/|$))((/workspace/\\.qa/|/replicant/inputs/qa/)[A-Za-z0-9._@/-]+|[A-Za-z0-9._@-][A-Za-z0-9._@/-]*)$"
+    },
+    "imageRef": {
+      "description": "OCI image pinned by digest (same grammar as WS-03 common image_by_digest; tags rejected), pulled through the ECR pull-through mirror (D-21).",
+      "type": "string",
+      "maxLength": 512,
+      "pattern": "^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$"
+    },
+    "quantityCpu": {
+      "type": "string",
+      "pattern": "^[0-9]+(\\.[0-9]+)?m?$",
+      "maxLength": 16
+    },
+    "quantityBytes": {
+      "type": "string",
+      "pattern": "^[0-9]+(Ki|Mi|Gi)$",
+      "maxLength": 16
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1024,
+      "maximum": 65535
+    },
+    "envMap": {
+      "description": "Non-secret environment variables (WS-03 common env_map: protected names such as REPLICANT_*, AWS_*, OTEL_*, HTTP(S)_PROXY are rejected). The harness starts repo code with the definition env plus these.",
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/env_map"
+    },
+    "commandStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "run"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/stepId"
+        },
+        "run": {
+          "description": "Shell command (bash -euo pipefail -c).",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "workdir": {
+          "$ref": "#/$defs/relPath"
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 7200,
+          "default": 900
+        },
+        "env": {
+          "$ref": "#/$defs/envMap"
+        },
+        "required": {
+          "description": "false: failure is a warning, not a blocking check.",
+          "type": "boolean",
+          "default": true
+        },
+        "alsoOnBase": {
+          "description": "Run on the base worktree too when a base pass is needed (default true for build steps).",
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "testStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "run",
+        "report"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/stepId"
+        },
+        "run": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "workdir": {
+          "$ref": "#/$defs/relPath"
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 7200,
+          "default": 1800
+        },
+        "env": {
+          "$ref": "#/$defs/envMap"
+        },
+        "report": {
+          "description": "Where the step writes machine-readable results. Every format is normalized to JUnit XML (artifact junit_xml).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "format",
+            "path"
+          ],
+          "properties": {
+            "format": {
+              "type": "string",
+              "enum": [
+                "junit",
+                "go-test-json",
+                "playwright-json"
+              ]
+            },
+            "path": {
+              "$ref": "#/$defs/relPath"
+            }
+          }
+        },
+        "rerun": {
+          "description": "How the harness re-executes individual failed tests (flake protocol, failure-feedback.md section 4). {tests} is replaced with the framework-specific selector list built from the failed test IDs.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "command"
+          ],
+          "properties": {
+            "command": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4000
+            },
+            "selectorStyle": {
+              "type": "string",
+              "enum": [
+                "go-run-regex",
+                "pytest-nodeid",
+                "jest-name-pattern",
+                "junit5-method",
+                "playwright-grep"
+              ]
+            }
+          }
+        },
+        "required": {
+          "type": "boolean",
+          "default": true
+        },
+        "listCommand": {
+          "description": "Lists test IDs without running them (for example `go test -list . ./...`, `pytest --collect-only -q`, `npx vitest list`, `npx playwright test --list`). Run on the change and base trees to build the test inventory (R2-006). Output is normalized to test_id (failure-feedback.md section 3.2).",
+          "type": "string",
+          "maxLength": 4000
+        }
+      }
+    },
+    "probe": {
+      "description": "Readiness/health probe. Executed by the harness (not by kubelet), so failures produce structured evidence.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "http",
+            "grpc",
+            "tcp",
+            "exec",
+            "log"
+          ]
+        },
+        "port": {
+          "$ref": "#/$defs/port"
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 1024,
+          "pattern": "^/"
+        },
+        "scheme": {
+          "type": "string",
+          "enum": [
+            "http",
+            "https"
+          ],
+          "default": "http"
+        },
+        "expectStatus": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10,
+          "items": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 599
+          }
+        },
+        "expectBody": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "contains": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "jsonPath": {
+              "description": "RFC 9535 JSONPath.",
+              "type": "string",
+              "maxLength": 512
+            },
+            "equals": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            }
+          }
+        },
+        "grpcService": {
+          "description": "grpc.health.v1.Health/Check service name; empty string = overall server health.",
+          "type": "string",
+          "maxLength": 256
+        },
+        "command": {
+          "description": "exec probe: argv executed in the main container.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        },
+        "logPattern": {
+          "description": "log probe: RE2 regex matched against the target's captured stdout+stderr.",
+          "type": "string",
+          "maxLength": 1024
+        },
+        "intervalSeconds": {
+          "type": "number",
+          "minimum": 0.2,
+          "maximum": 60,
+          "default": 2
+        },
+        "timeoutSeconds": {
+          "type": "number",
+          "minimum": 0.2,
+          "maximum": 60,
+          "default": 2
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "http",
+                  "grpc",
+                  "tcp"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "port"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "http"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "path"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "exec"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "command"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "log"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "logPattern"
+            ]
+          }
+        }
+      ]
+    },
+    "resources": {
+      "description": "Requests and limits for a QA-declared container (stub, builder). WS-09's sandbox admission policy requires memory and ephemeral-storage limits on every container (R1-114).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requests",
+        "limits"
+      ],
+      "properties": {
+        "requests": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cpu",
+            "memory"
+          ],
+          "properties": {
+            "cpu": {
+              "$ref": "#/$defs/quantityCpu"
+            },
+            "memory": {
+              "$ref": "#/$defs/quantityBytes"
+            },
+            "ephemeralStorage": {
+              "$ref": "#/$defs/quantityBytes"
+            }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cpu",
+            "memory",
+            "ephemeralStorage"
+          ],
+          "properties": {
+            "cpu": {
+              "$ref": "#/$defs/quantityCpu"
+            },
+            "memory": {
+              "$ref": "#/$defs/quantityBytes"
+            },
+            "ephemeralStorage": {
+              "$ref": "#/$defs/quantityBytes"
+            }
+          }
+        }
+      }
+    },
+    "stub": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kind",
+        "server",
+        "image",
+        "contract",
+        "port"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/name"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "openapi",
+            "grpc",
+            "graphql"
+          ]
+        },
+        "server": {
+          "description": "Stub server implementation (replicant-maintained images in the qa tools set): prism for OpenAPI (@stoplight/prism-cli 5.16.0), gripmock for gRPC (bavix/gripmock v3.23.4), wiremock for GraphQL and hand-written mappings (WireMock 3.13.2).",
+          "type": "string",
+          "enum": [
+            "prism",
+            "gripmock",
+            "wiremock"
+          ]
+        },
+        "contract": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "service",
+            "name",
+            "version"
+          ],
+          "properties": {
+            "service": {
+              "description": "Catalog service name (WS-04 ecosystem catalog).",
+              "type": "string",
+              "maxLength": 200
+            },
+            "name": {
+              "description": "Contract name within the service (e.g. 'pricing.v1' or 'openapi').",
+              "type": "string",
+              "maxLength": 200
+            },
+            "version": {
+              "description": "Which extracted contract revision to stub. deployed_prod: the revision WS-04 records as deployed to production; default_branch: head of the provider's default branch; pinned: an exact contract digest.",
+              "type": "string",
+              "enum": [
+                "deployed_prod",
+                "default_branch",
+                "pinned"
+              ]
+            },
+            "digest": {
+              "$ref": "#/$defs/digestHex"
+            }
+          },
+          "if": {
+            "properties": {
+              "version": {
+                "const": "pinned"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "digest"
+            ]
+          }
+        },
+        "port": {
+          "$ref": "#/$defs/port"
+        },
+        "fixtures": {
+          "description": "Repo path or /qa path with extra stub mappings (Prism examples override, gripmock stub JSON, WireMock mappings). Fixtures win over generated examples.",
+          "$ref": "#/$defs/relPath"
+        },
+        "mode": {
+          "description": "static: return documented examples only (deterministic, default). dynamic: schema-valid generated data (Prism -d); seeded, but still less deterministic.",
+          "type": "string",
+          "enum": [
+            "static",
+            "dynamic"
+          ],
+          "default": "static"
+        },
+        "resources": {
+          "$ref": "#/$defs/resources"
+        },
+        "image": {
+          "description": "Replicant-maintained stub server image (qa-stub-prism, qa-stub-gripmock, qa-stub-wiremock) by digest.",
+          "$ref": "#/$defs/imageRef"
+        }
+      }
+    },
+    "digestHex": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "seedStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "run"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/stepId"
+        },
+        "run": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "workdir": {
+          "$ref": "#/$defs/relPath"
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 1800,
+          "default": 300
+        },
+        "env": {
+          "$ref": "#/$defs/envMap"
+        },
+        "fixtures": {
+          "description": "Fixture files (repo path or /qa/fixtures staged from the config repo).",
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/relPath"
+          }
+        }
+      }
+    },
+    "healthSpec": {
+      "description": "Declarative health criteria (health.md). The app is healthy when every readiness check succeeds within startupTimeoutSeconds, then the stability window passes with no failure pattern, no restart, and every smoke request satisfied.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "startupTimeoutSeconds"
+      ],
+      "properties": {
+        "startupTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 1800
+        },
+        "readiness": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10,
+          "items": {
+            "$ref": "#/$defs/namedProbe"
+          }
+        },
+        "stability": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "windowSeconds"
+          ],
+          "properties": {
+            "windowSeconds": {
+              "description": "After readiness, re-run readiness probes every probeIntervalSeconds for this long; all must pass.",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 600
+            },
+            "probeIntervalSeconds": {
+              "type": "number",
+              "minimum": 0.5,
+              "maximum": 30,
+              "default": 5
+            },
+            "maxRestarts": {
+              "description": "Process restarts tolerated during the window. The harness never restarts the app itself; this counts self-supervised restarts (e.g. a supervisor inside the app) reported through a log probe.",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 3,
+              "default": 0
+            },
+            "maxRssGrowthPercent": {
+              "description": "Fail if resident memory grows more than this over the window (leak or runaway). Omit to disable.",
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 1000
+            }
+          }
+        },
+        "failurePatterns": {
+          "description": "RE2 regexes over app stdout+stderr from start to teardown. Any match fails health (stage health) and is recorded with 20 lines of context.",
+          "type": "array",
+          "maxItems": 30,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "pattern"
+            ],
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "fail",
+                  "warn"
+                ],
+                "default": "fail"
+              },
+              "ignoreBefore": {
+                "description": "Ignore matches before readiness (e.g. expected connection-refused retries during startup).",
+                "type": "string",
+                "enum": [
+                  "start",
+                  "ready"
+                ],
+                "default": "start"
+              }
+            }
+          }
+        },
+        "smoke": {
+          "type": "array",
+          "maxItems": 30,
+          "items": {
+            "$ref": "#/$defs/smokeRequest"
+          }
+        },
+        "completion": {
+          "$ref": "#/$defs/completion"
+        }
+      }
+    },
+    "namedProbe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "probe"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/stepId"
+        },
+        "probe": {
+          "$ref": "#/$defs/probe"
+        },
+        "successThreshold": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "default": 1
+        }
+      }
+    },
+    "smokeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "type"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/stepId"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "http",
+            "grpc",
+            "exec"
+          ]
+        },
+        "http": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "method",
+            "port",
+            "path",
+            "expectStatus"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "GET",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE",
+                "HEAD"
+              ]
+            },
+            "port": {
+              "$ref": "#/$defs/port"
+            },
+            "path": {
+              "type": "string",
+              "pattern": "^/",
+              "maxLength": 1024
+            },
+            "headers": {
+              "type": "object",
+              "maxProperties": 20,
+              "additionalProperties": {
+                "type": "string",
+                "maxLength": 1024
+              }
+            },
+            "body": {
+              "description": "Request body (JSON or text).",
+              "type": "string",
+              "maxLength": 65536
+            },
+            "expectStatus": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 10,
+              "items": {
+                "type": "integer",
+                "minimum": 100,
+                "maximum": 599
+              }
+            },
+            "expectJson": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "$ref": "#/$defs/jsonAssertion"
+              }
+            },
+            "maxLatencyMs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60000
+            }
+          }
+        },
+        "grpc": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "port",
+            "method"
+          ],
+          "properties": {
+            "port": {
+              "$ref": "#/$defs/port"
+            },
+            "method": {
+              "description": "Fully qualified 'package.Service/Method'. The harness uses server reflection if enabled, else descriptorSet.",
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_.]*/[A-Za-z_][A-Za-z0-9_]*$",
+              "maxLength": 512
+            },
+            "descriptorSet": {
+              "$ref": "#/$defs/relPath"
+            },
+            "requestJson": {
+              "type": "string",
+              "maxLength": 65536
+            },
+            "metadata": {
+              "type": "object",
+              "maxProperties": 20,
+              "additionalProperties": {
+                "type": "string",
+                "maxLength": 1024
+              }
+            },
+            "expectCode": {
+              "description": "gRPC status code name.",
+              "type": "string",
+              "enum": [
+                "OK",
+                "INVALID_ARGUMENT",
+                "NOT_FOUND",
+                "ALREADY_EXISTS",
+                "PERMISSION_DENIED",
+                "UNAUTHENTICATED",
+                "FAILED_PRECONDITION"
+              ],
+              "default": "OK"
+            },
+            "expectJson": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "$ref": "#/$defs/jsonAssertion"
+              }
+            },
+            "maxLatencyMs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60000
+            }
+          }
+        },
+        "exec": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "command"
+          ],
+          "properties": {
+            "command": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "items": {
+                "type": "string",
+                "maxLength": 2048
+              }
+            },
+            "expectExitCode": {
+              "type": "integer",
+              "default": 0
+            },
+            "expectStdoutPattern": {
+              "type": "string",
+              "maxLength": 1024
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "http"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "http"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "grpc"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "grpc"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "exec"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "exec"
+            ]
+          }
+        }
+      ]
+    },
+    "jsonAssertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jsonPath"
+      ],
+      "properties": {
+        "jsonPath": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "equals": {
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "exists": {
+          "type": "boolean"
+        },
+        "matches": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "minLength": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "completion": {
+      "description": "batch apps only: the run must exit with expectExitCode within maxRuntimeSeconds, then every output assertion must hold.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxRuntimeSeconds"
+      ],
+      "properties": {
+        "expectExitCode": {
+          "type": "integer",
+          "default": 0
+        },
+        "maxRuntimeSeconds": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 7200
+        },
+        "outputs": {
+          "type": "array",
+          "maxItems": 30,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "type"
+            ],
+            "properties": {
+              "name": {
+                "$ref": "#/$defs/stepId"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "file_exists",
+                  "exec",
+                  "sql"
+                ]
+              },
+              "path": {
+                "$ref": "#/$defs/relPath"
+              },
+              "minBytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "command": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 32,
+                "items": {
+                  "type": "string",
+                  "maxLength": 2048
+                }
+              },
+              "service": {
+                "description": "sql: the service (postgres/mysql) to query.",
+                "$ref": "#/$defs/name"
+              },
+              "query": {
+                "description": "sql: a single read-only SELECT executed in a READ ONLY transaction.",
+                "type": "string",
+                "maxLength": 8000,
+                "pattern": "^\\s*(?i:select|with)\\b"
+              },
+              "expectRows": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "min": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "max": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "equalsScalar": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                }
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "type": {
+                      "const": "file_exists"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "path"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "type": {
+                      "const": "exec"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "command"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "type": {
+                      "const": "sql"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "service",
+                    "query",
+                    "expectRows"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "app": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "health"
+      ],
+      "properties": {
+        "start": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "command"
+          ],
+          "properties": {
+            "mode": {
+              "description": "process: run the command in the agent container. (image mode, which ran the built image with Podman, is withdrawn for v1 with Testcontainers support: ADR-05-002.)",
+              "type": "string",
+              "enum": [
+                "process"
+              ]
+            },
+            "command": {
+              "type": "string",
+              "maxLength": 4000
+            },
+            "workdir": {
+              "$ref": "#/$defs/relPath"
+            },
+            "env": {
+              "$ref": "#/$defs/envMap"
+            },
+            "ports": {
+              "type": "array",
+              "maxItems": 4,
+              "items": {
+                "$ref": "#/$defs/port"
+              }
+            }
+          }
+        },
+        "health": {
+          "$ref": "#/$defs/healthSpec"
+        },
+        "stop": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "signal": {
+              "type": "string",
+              "enum": [
+                "SIGTERM",
+                "SIGINT"
+              ],
+              "default": "SIGTERM"
+            },
+            "graceSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 120,
+              "default": 20
+            },
+            "expectCleanExit": {
+              "description": "Treat a non-zero exit after the stop signal as a warning check (graceful shutdown regression).",
+              "type": "boolean",
+              "default": true
+            }
+          }
+        }
+      }
+    },
+    "web": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baseUrl",
+        "playwright"
+      ],
+      "properties": {
+        "baseUrl": {
+          "type": "string",
+          "pattern": "^http://(127\\.0\\.0\\.1|localhost):[0-9]{4,5}(/.*)?$",
+          "maxLength": 256
+        },
+        "playwright": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "browsers"
+          ],
+          "properties": {
+            "version": {
+              "description": "Playwright version whose browsers are baked into the image (PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright). Must equal the repo's @playwright/test lockfile version when repoTests are enabled; a mismatch is an environment-definition issue.",
+              "type": "string",
+              "pattern": "^1\\.[0-9]{2,3}\\.[0-9]+$"
+            },
+            "browsers": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 3,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "enum": [
+                  "chromium",
+                  "firefox",
+                  "webkit"
+                ]
+              }
+            },
+            "workers": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8,
+              "default": 2
+            },
+            "browsersPath": {
+              "description": "PLAYWRIGHT_BROWSERS_PATH baked into spec.image (WS-03 image cache of kind image).",
+              "type": "string",
+              "pattern": "^/[A-Za-z0-9._/-]+$",
+              "default": "/opt/ms-playwright"
+            }
+          }
+        },
+        "repoTests": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "configPath": {
+              "$ref": "#/$defs/relPath"
+            },
+            "projects": {
+              "type": "array",
+              "maxItems": 10,
+              "items": {
+                "type": "string",
+                "maxLength": 100
+              }
+            },
+            "grepInvert": {
+              "description": "Playwright --grep-invert pattern for tests that need real external systems.",
+              "type": "string",
+              "maxLength": 512
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 60,
+              "maximum": 7200,
+              "default": 1800
+            }
+          }
+        },
+        "smokeFlows": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "routes": {
+              "description": "Deterministic route crawl: each route is loaded, checked for HTTP status < 400, no uncaught page errors, no console errors matching consoleErrorPatterns, screenshot, axe scan.",
+              "type": "array",
+              "maxItems": 50,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "path"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "pattern": "^/",
+                    "maxLength": 1024
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 100
+                  },
+                  "waitFor": {
+                    "description": "Playwright locator (getByRole/getByTestId syntax in the replicant DSL) that must become visible.",
+                    "type": "string",
+                    "maxLength": 512
+                  },
+                  "auth": {
+                    "description": "Name of a storageState produced by the login fixture.",
+                    "type": "string",
+                    "maxLength": 63
+                  }
+                }
+              }
+            },
+            "login": {
+              "description": "How smoke flows obtain an authenticated session against the local app (synthetic seeded user).",
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "steps"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "maxLength": 63
+                },
+                "steps": {
+                  "$ref": "#/$defs/relPath"
+                }
+              }
+            },
+            "consoleErrorPatterns": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "string",
+                "maxLength": 512
+              }
+            },
+            "generated": {
+              "description": "Agent-generated flows derived from the plan's acceptance criteria (ADR-05-004).",
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "enabled"
+              ],
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "maxFlows": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10,
+                  "default": 5
+                },
+                "maxStepsPerFlow": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 30,
+                  "default": 12
+                }
+              }
+            }
+          }
+        },
+        "viewports": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "width",
+              "height"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]{0,20}$"
+              },
+              "width": {
+                "type": "integer",
+                "minimum": 320,
+                "maximum": 3840
+              },
+              "height": {
+                "type": "integer",
+                "minimum": 320,
+                "maximum": 2160
+              }
+            }
+          }
+        },
+        "masks": {
+          "description": "Locators masked in every screenshot (WS-08 section 5.6). Defaults always added: input[type=password], input[type=email], [autocomplete*=cc-], [data-replicant-mask].",
+          "type": "array",
+          "maxItems": 30,
+          "items": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "a11y": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "tags": {
+              "type": "array",
+              "maxItems": 10,
+              "items": {
+                "type": "string",
+                "enum": [
+                  "wcag2a",
+                  "wcag2aa",
+                  "wcag21a",
+                  "wcag21aa",
+                  "wcag22aa",
+                  "best-practice"
+                ]
+              },
+              "default": [
+                "wcag2a",
+                "wcag2aa",
+                "wcag21a",
+                "wcag21aa",
+                "wcag22aa"
+              ]
+            },
+            "failOn": {
+              "description": "new_serious: block only on violations of impact serious/critical that are absent on the base build (delta). new_any: any new violation blocks. never: report only.",
+              "type": "string",
+              "enum": [
+                "new_serious",
+                "new_any",
+                "never"
+              ],
+              "default": "new_serious"
+            },
+            "disableRules": {
+              "type": "array",
+              "maxItems": 30,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+$"
+              }
+            },
+            "exclude": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "string",
+                "maxLength": 512
+              }
+            }
+          }
+        },
+        "visual": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "whenPathsChanged": {
+              "description": "Glob list; the base pass for visual comparison runs only if the diff touches one of these. Empty = always.",
+              "type": "array",
+              "maxItems": 30,
+              "items": {
+                "type": "string",
+                "maxLength": 256
+              }
+            },
+            "threshold": {
+              "description": "Per-pixel color threshold (Playwright/pixelmatch semantics, 0..1).",
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.2
+            },
+            "maxDiffPixelRatio": {
+              "description": "Ratio of differing pixels above which a page is reported as changed.",
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.002
+            },
+            "blocking": {
+              "description": "false (default): visual changes are reported for the approver, never block. true: an unexplained change (route not listed in the plan's expected UI changes) blocks.",
+              "type": "boolean",
+              "default": false
+            },
+            "stylePath": {
+              "description": "CSS injected before screenshots to hide volatile content (timestamps, carousels).",
+              "$ref": "#/$defs/relPath"
+            }
+          }
+        },
+        "artifacts": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "trace": {
+              "type": "string",
+              "enum": [
+                "off",
+                "retain-on-failure",
+                "on"
+              ],
+              "default": "retain-on-failure"
+            },
+            "video": {
+              "type": "string",
+              "enum": [
+                "off",
+                "retain-on-failure"
+              ],
+              "default": "off"
+            },
+            "screenshot": {
+              "type": "string",
+              "enum": [
+                "only-on-failure",
+                "on"
+              ],
+              "default": "only-on-failure"
+            }
+          }
+        }
+      }
+    },
+    "imageBuild": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "builder": {
+          "description": "buildkit: BuildKit v0.34.1 rootless daemon (rootlesskit buildkitd --oci-worker-no-process-sandbox) in a native sidecar named `builder` (the only security exception WS-02 renders, Kata qa_build only); the harness drives it with buildctl over a unix socket. buildah: buildah 1.43 in the same `builder` sidecar, driven through its socket-less CLI wrapper. See ADR-05-003 for the exact securityContext.",
+          "type": "string",
+          "enum": [
+            "buildkit",
+            "buildah"
+          ],
+          "default": "buildkit"
+        },
+        "context": {
+          "$ref": "#/$defs/relPath"
+        },
+        "dockerfile": {
+          "$ref": "#/$defs/relPath"
+        },
+        "target": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "linux/amd64",
+            "linux/arm64"
+          ]
+        },
+        "buildArgs": {
+          "type": "object",
+          "maxProperties": 30,
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        },
+        "sbom": {
+          "description": "Generate SPDX 2.3 JSON with syft 1.55 (oci-archive: source).",
+          "type": "boolean",
+          "default": true
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 3600,
+          "default": 1200
+        },
+        "cacheBudget": {
+          "$ref": "#/$defs/quantityBytes"
+        },
+        "builderImage": {
+          "description": "Image of the builder sidecar (for example the Replicant build of moby/buildkit:v0.34.1-rootless) by digest.",
+          "$ref": "#/$defs/imageRef"
+        },
+        "builderResources": {
+          "$ref": "#/$defs/resources"
+        },
+        "secretScan": {
+          "description": "Scan the built image filesystem for secrets (gitleaks rule set pinned in the QA tools) and emit secret_scan_report (CCR-09-05). Findings are blocking checks (rule S1).",
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "if": {
+        "properties": {
+          "enabled": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "context",
+          "dockerfile",
+          "builderImage",
+          "builderResources"
+        ]
+      }
+    },
+    "flake": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "changeReruns": {
+          "description": "Re-executions of each failed test on the change (head) worktree.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4,
+          "default": 2
+        },
+        "baseReruns": {
+          "description": "Executions of each failed test on the base worktree.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5,
+          "default": 3
+        },
+        "maxFailedTestsForReruns": {
+          "description": "Above this many failed tests, skip per-test reruns (likely a systematic failure) and run one base pass of the whole step.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "default": 25
+        },
+        "newFlakeBlocks": {
+          "description": "A test that fails intermittently on the change but is stable on base and in history (cause flaky_new) blocks.",
+          "type": "boolean",
+          "default": true
+        },
+        "quarantine": {
+          "description": "Human-curated known-flaky tests (behavioral, so pinned in the bundle). Failures are reported, never blocking. Each entry needs an owner and expiry; expired entries are ignored and flagged by the linter.",
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "testId",
+              "owner",
+              "expires"
+            ],
+            "properties": {
+              "testId": {
+                "description": "Normalized test ID (failure-feedback.md section 3.2).",
+                "type": "string",
+                "maxLength": 512
+              },
+              "owner": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "issue": {
+                "type": "string",
+                "format": "uri",
+                "maxLength": 1024
+              },
+              "expires": {
+                "type": "string",
+                "format": "date"
+              }
+            }
+          }
+        }
+      }
+    },
+    "agent": {
+      "description": "Agent-driven QA tasks (ADR-05-004). The agent definition used is the QA graph node's (WS-01 node config); this section only enables tasks and caps them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "tasks": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 3,
+          "items": {
+            "type": "string",
+            "enum": [
+              "generate_smoke_flows",
+              "diagnose_failures",
+              "repair_harness_config"
+            ]
+          }
+        },
+        "maxCostUsd": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 50,
+          "default": 4
+        },
+        "maxWallSeconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 1800,
+          "default": 600
+        }
+      }
+    },
+    "variant": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "skip": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 10,
+          "items": {
+            "type": "string",
+            "enum": [
+              "integration",
+              "imageBuild",
+              "web.repoTests",
+              "web.smokeFlows.generated",
+              "web.visual",
+              "web.a11y",
+              "agent"
+            ]
+          }
+        },
+        "totalSeconds": {
+          "type": "integer",
+          "minimum": 300,
+          "maximum": 14400
+        }
+      }
+    },
+    "serviceOption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,30}$"
+        },
+        "wrapLogs": {
+          "description": "The service's command runs under /opt/replicant/bin/replicant-svc-wrap (from the tools volume; QA services start after prepare, WS-02 controller.md section 4.2a). It tees stdout/stderr to /var/log/qa-services/<name>.log (qa-svc-logs emptyDir, 1Gi), forwards signals, and propagates the exit status; the log becomes QA evidence (health_log). A wrapped service uses a replicant/svc-<name> image; an unwrapped one may use mirror/<upstream path> (XD-05-20 ruling). Requires spec.services[].command.",
+          "type": "boolean",
+          "default": true
+        },
+        "readinessTimeoutSeconds": {
+          "description": "How long the harness waits for the service's readiness (spec.services[].readiness) before failing check services:<name>.",
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 600,
+          "default": 120
+        },
+        "resetBetweenPasses": {
+          "type": "string",
+          "enum": [
+            "none",
+            "command"
+          ],
+          "default": "none"
+        },
+        "resetCommand": {
+          "description": "Run in the agent container before switching between change and base trees.",
+          "type": "string",
+          "maxLength": 4000
+        }
+      },
+      "if": {
+        "properties": {
+          "resetBetweenPasses": {
+            "const": "command"
+          }
+        },
+        "required": [
+          "resetBetweenPasses"
+        ]
+      },
+      "then": {
+        "required": [
+          "resetCommand"
+        ]
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "appKind": {
+            "enum": [
+              "server",
+              "web",
+              "batch"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "app"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "appKind": {
+            "enum": [
+              "server",
+              "web"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "app": {
+            "properties": {
+              "health": {
+                "required": [
+                  "readiness"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "appKind": {
+            "const": "web"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "web"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "appKind": {
+            "const": "batch"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "app": {
+            "properties": {
+              "health": {
+                "required": [
+                  "completion"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+apiVersion: replicant.example.com/v1
+kind: Policy
+metadata:
+  name: approval-channels
+  scope: {level: global}
+  owners: [replicant-platform]
+spec:
+  policyType: approval_channels
+  routes:
+    - match: {gate_kind_in: [plan_approval, publish_approval], risk_at_least: high}
+      channels: [ui, slack, github, cli]
+      slack: {post_to: [approval_channel, dm_eligible], max_dm_recipients: 5}
+      github: {issue_commands: true}
+    - match: {gate_kind_in: [plan_approval, publish_approval], risk_at_most: medium}
+      channels: [ui, slack, github, cli]
+      slack: {post_to: [approval_channel]}
+      github: {issue_commands: true}
+    - match: {gate_kind_in: [clarification, budget_extension, bundle_migration]}
+      channels: [ui, slack, cli]
+      slack: {post_to: [dm_eligible]}
+  digest: {low_risk_digest: true, times: ["09:30", "15:30"]}

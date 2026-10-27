@@ -1,0 +1,16 @@
+{
+  "verdict": "pass_with_warnings",
+  "reason_code": "non_blocking_findings",
+  "oscillation": false,
+  "env_signature_transient": false,
+  "agentrun_exit_class": "pass_with_warnings",
+  "risk_floor_hint": "medium",
+  "classified_report_uri": "s3://acme-replicant-prod-artifacts/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/steps/qa.c0.n2/qa_report/classified.json",
+  "blocking": 0,
+  "test_inventory_delta": {
+    "tests_removed": 0,
+    "tests_skipped_added": 1,
+    "deleted_or_skipped": true
+  },
+  "history_available": true
+}

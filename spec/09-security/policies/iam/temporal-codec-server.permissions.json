@@ -1,0 +1,24 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DecryptTemporalPayloadDataKeysOnly",
+      "Effect": "Allow",
+      "Action": ["kms:Decrypt"],
+      "Resource": "arn:aws:kms:us-east-1:111111111111:key/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/replicant-key-class": "tenant",
+          "kms:EncryptionContext:replicant:purpose": "temporal-payload"
+        },
+        "Null": { "kms:EncryptionContext:replicant:tenant": "false" }
+      }
+    },
+    {
+      "Sid": "NoEncryptNoS3NoSecrets",
+      "Effect": "Deny",
+      "NotAction": ["kms:Decrypt", "kms:DescribeKey"],
+      "Resource": "*"
+    }
+  ]
+}

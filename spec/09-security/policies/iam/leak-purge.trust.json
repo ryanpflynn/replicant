@@ -1,0 +1,27 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "EksPodIdentityOnly",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "pods.eks.amazonaws.com"
+      },
+      "Action": [
+        "sts:AssumeRole",
+        "sts:TagSession"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:SourceAccount": "111111111111",
+          "aws:RequestTag/eks-cluster-name": "fct-prod-core",
+          "aws:RequestTag/kubernetes-namespace": "replicant-workers",
+          "aws:RequestTag/kubernetes-service-account": "leak-purge-worker"
+        },
+        "ArnEquals": {
+          "aws:SourceArn": "arn:aws:eks:us-east-1:111111111111:cluster/fct-prod-core"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,136 @@
+# Replicant redaction ruleset, secret-detection part (WS-08).
+# Ruleset version: redact-2026.10.1  (recorded in every run manifest as redaction.ruleset_version)
+#
+# Consumers (all load this exact file, delivered as described in session-capture.md section 5):
+#   1. Sandbox entrypoint and shipper (Go, github.com/zricethezav/gitleaks/v8 detect.NewDetector) - primary redaction.
+#   2. Grafana Alloy loki.secretfilter (gitleaks_config argument) - second pass on every log line in both clusters.
+#   3. leak-scanner (Go, same library) - post-hoc scan of S3 transcripts, Loki and Langfuse.
+#
+# [extend] useDefault = true keeps the upstream gitleaks default rules (222 rules in gitleaks v8.30.1).
+# Replicant rules below add detection the defaults miss (verified 2026-10-24 with Alloy v1.21.2: the default
+# config did not redact a run-token-shaped JWT, a bearer header, or an AWS key outside the base32 alphabet).
+title = "replicant redaction ruleset redact-2026.10.1"
+
+[extend]
+useDefault = true
+
+# ---------------------------------------------------------------------------
+# Replicant-issued credentials
+# ---------------------------------------------------------------------------
+
+[[rules]]
+id = "replicant-jwt"
+description = "Any compact JWS/JWT (replicant run tokens, Okta tokens, projected SA tokens)"
+regex = '''\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}'''
+keywords = ["eyj"]
+
+[[rules]]
+id = "http-bearer-token"
+description = "Authorization: Bearer <credential> in headers, curl commands, or logs"
+regex = '''(?i)\bbearer\s+([A-Za-z0-9._~+/=-]{20,})'''
+secretGroup = 1
+entropy = 3.0
+keywords = ["bearer"]
+
+[[rules]]
+id = "http-basic-credential"
+description = "Authorization: Basic <base64(user:pass)>"
+regex = '''(?i)\bbasic\s+([A-Za-z0-9+/]{16,}={0,2})'''
+secretGroup = 1
+entropy = 3.0
+keywords = ["basic"]
+
+[[rules]]
+id = "url-userinfo-password"
+description = "Credentials embedded in a URL (https://user:pass@host, git remotes, registry URLs)"
+regex = '''[a-zA-Z][a-zA-Z0-9+.-]{1,20}://[^/\s:@'"]{1,64}:([^/\s:@'"]{6,128})@[A-Za-z0-9.-]+'''
+secretGroup = 1
+keywords = ["://"]
+
+[[rules]]
+id = "aws-access-key-id-broad"
+description = "AWS access key ID (AKIA/ASIA), broader alphabet than the upstream rule"
+regex = '''\b((?:AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16})\b'''
+secretGroup = 1
+keywords = ["akia", "asia", "abia", "acca"]
+
+[[rules]]
+id = "aws-secret-access-key-context"
+description = "AWS secret access key next to a key-name hint"
+regex = '''(?i)(?:aws_secret_access_key|secretaccesskey|aws_secret|SecretAccessKey)["'\s:=]{1,6}([A-Za-z0-9/+]{40})\b'''
+secretGroup = 1
+keywords = ["secret"]
+
+[[rules]]
+id = "aws-session-token-context"
+description = "AWS STS session token (Runner-vended sandbox credentials)"
+regex = '''(?i)(?:aws_session_token|sessiontoken|x-amz-security-token)["'\s:=]{1,6}([A-Za-z0-9/+=%]{100,})'''
+secretGroup = 1
+keywords = ["token"]
+
+[[rules]]
+id = "s3-presigned-signature"
+description = "Presigned S3 URL signature (control-plane presigned GETs, 15-minute validity)"
+regex = '''(?i)X-Amz-Signature=([0-9a-f]{64})'''
+secretGroup = 1
+keywords = ["x-amz-signature"]
+
+[[rules]]
+id = "langfuse-secret-key"
+description = "Langfuse project secret key"
+regex = '''\bsk-lf-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b'''
+keywords = ["sk-lf-"]
+
+[[rules]]
+id = "github-installation-token"
+description = "GitHub App installation token (ghs_) and user-to-server token (ghu_); never present in sandboxes by design (ADR-011) but scanned"
+regex = '''\bgh[su]_[0-9A-Za-z]{36,}\b'''
+keywords = ["ghs_", "ghu_"]
+
+[[rules]]
+id = "anthropic-api-key"
+description = "Anthropic API key (v0 source-side copy of the upstream rule; the passthrough gateway holds one)"
+regex = '''\bsk-ant-(?:api|admin)\d{2}-[A-Za-z0-9_-]{80,}'''
+keywords = ["sk-ant-"]
+
+[[rules]]
+id = "github-pat"
+description = "GitHub personal/OAuth/user tokens (v0 source-side copy of the upstream rules)"
+regex = '''\b(?:gh[pour]_[0-9A-Za-z]{36,}|github_pat_[0-9A-Za-z_]{80,})\b'''
+keywords = ["ghp_", "gho_", "ghu_", "ghr_", "github_pat_"]
+
+[[rules]]
+id = "pem-private-key-header"
+description = "Start of a PEM private key even when the body is truncated or split across events"
+regex = '''-----BEGIN[ A-Z0-9_-]{0,100}PRIVATE KEY(?: BLOCK)?-----[A-Za-z0-9+/=\s\\n]{0,1000}'''
+keywords = ["private key"]
+
+[[rules]]
+id = "password-assignment"
+description = "password/passwd/pwd assignments in config files, env dumps and command lines"
+regex = '''(?i)\b(?:password|passwd|pwd|db_pass|pgpassword|mysql_pwd)\b["'\s]{0,3}[:=]["'\s]{0,3}([^\s"'`;,]{8,128})'''
+secretGroup = 1
+entropy = 2.5
+keywords = ["pass", "pwd"]
+
+[[rules]]
+id = "connection-string-password"
+description = "Passwords inside DSNs: postgres://u:p@, mongodb+srv://u:p@, amqp://u:p@, redis://:p@"
+regex = '''(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|amqps?|redis|rediss)://[^:\s/@]*:([^@\s/]{4,128})@'''
+secretGroup = 1
+keywords = ["://"]
+
+# ---------------------------------------------------------------------------
+# Global allowlist: replicant identifiers and digests are high-entropy but not secrets.
+# ---------------------------------------------------------------------------
+[[allowlists]]
+description = "replicant IDs, digests, git SHAs, UUIDs, trace context"
+regexTarget = "match"
+regexes = [
+  '''^(?:job|run|gate|dec|msg|act|ntc|rb|mem|msnap|usr|jrq|aud|eval|gtask|rtk|tko|leak)_[0-9a-hjkmnp-tv-z]{26}$''',
+  '''^ar-[0-9a-hjkmnp-tv-z]{26}$''',
+  '''^sha256:[0-9a-f]{64}$''',
+  '''^[0-9a-f]{40}$''',
+  '''^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$''',
+  '''^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$''',
+]

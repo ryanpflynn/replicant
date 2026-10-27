@@ -1,0 +1,14 @@
+// Replicant Go workspace (Go 1.26). Build and test Go inside docker.io/library/golang:1.26 (host Go is 1.20).
+// Register a module with a `use` line (path relative to this file), e.g. `use ./go` or `use ./dev/sample-repos/x`.
+go 1.26.0
+
+use (
+	./go/internal/runner
+	./go/cmd/runner-local
+	./go/cmd/repo-mirror
+	./go/cmd/replicant-entrypoint
+	./go/cmd/replicant-agentd
+	./go/cmd/sandbox-sidecars
+	./go/cmd/replicant-qa
+	./go/cmd/replicant-gateway-shim
+)

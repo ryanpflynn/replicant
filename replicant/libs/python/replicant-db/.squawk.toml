@@ -1,0 +1,12 @@
+# squawk configuration for rendered replicant migrations (CI step "lint", schema-management.md §5).
+# squawk 2.70.0 [verified: https://squawkhq.com/docs/cli, 2026-10-24]
+pg_version = "17.0"
+# Alembic wraps every revision in its own transaction (transaction_per_migration=True), so a
+# failed revision rolls back completely and IF [NOT] EXISTS adds nothing. Statements inside
+# autocommit_block() (CREATE INDEX CONCURRENTLY, batched data) are not covered by that, so
+# tools/lint_migrations.py separately requires IF [NOT] EXISTS there.
+excluded_rules = ["prefer-robust-stmts"]
+# Opt-in rules Replicant wants on top of the defaults.
+included_rules = ["require-table-schema"]
+# Alembic's offline render emits its own BEGIN/COMMIT per revision.
+assume_in_transaction = false

@@ -1,0 +1,60 @@
+{
+ "definition": {
+  "document": {
+   "apiVersion": "replicant.example.com/v1",
+   "kind": "EnvironmentDefinition",
+   "metadata": {
+    "name": "go-service",
+    "scope": {
+     "level": "global"
+    },
+    "owners": [
+     "replicant-platform"
+    ],
+    "description": "Ünïcode é ✓"
+   },
+   "spec": {
+    "image": {
+     "resolved": {
+      "image": "localhost/replicant/env-go-service:dev"
+     }
+    },
+    "resourceProfiles": {
+     "default": {
+      "cpu": "2",
+      "memory": "2Gi"
+     }
+    },
+    "repo": {
+     "fetchDepth": 50
+    }
+   }
+  },
+  "digest": "sha256:5f5717858940f329fa827edb9f12f1177e26f834f6cfd64b6622e21c4e8e762c",
+  "blob_key": "blobs/sha256/5f5717858940f329fa827edb9f12f1177e26f834f6cfd64b6622e21c4e8e762c.json",
+  "body_utf8": "{\"apiVersion\":\"replicant.example.com/v1\",\"kind\":\"EnvironmentDefinition\",\"metadata\":{\"description\":\"Ünïcode é ✓\",\"name\":\"go-service\",\"owners\":[\"replicant-platform\"],\"scope\":{\"level\":\"global\"}},\"spec\":{\"image\":{\"resolved\":{\"image\":\"localhost/replicant/env-go-service:dev\"}},\"repo\":{\"fetchDepth\":50},\"resourceProfiles\":{\"default\":{\"cpu\":\"2\",\"memory\":\"2Gi\"}}}}"
+ },
+ "bundle": {
+  "spec": {
+   "worker_deployment": {
+    "deployment_name": "replicant-worker",
+    "build_id": "b20261024-000000000000",
+    "image_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+   },
+   "environments": [
+    {
+     "ref": "environment/go-service@1",
+     "digest": "sha256:5f5717858940f329fa827edb9f12f1177e26f834f6cfd64b6622e21c4e8e762c"
+    }
+   ],
+   "agents": [],
+   "lineage": {}
+  },
+  "release_bundle_id": "rb_ztvwqxafycj8tgzsp3tkhb1nzb",
+  "digest": "sha256:feb7cbf54ff3248d43f9b0f538ac35fada4f24485aa5cdf7366a140ab1a863c8",
+  "blob_key": "blobs/sha256/feb7cbf54ff3248d43f9b0f538ac35fada4f24485aa5cdf7366a140ab1a863c8.json",
+  "body_utf8": "{\"agents\":[],\"environments\":[{\"digest\":\"sha256:5f5717858940f329fa827edb9f12f1177e26f834f6cfd64b6622e21c4e8e762c\",\"ref\":\"environment/go-service@1\"}],\"lineage\":{},\"worker_deployment\":{\"build_id\":\"b20261024-000000000000\",\"deployment_name\":\"replicant-worker\",\"image_digest\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\"}}",
+  "pointer_key": "bundles/rb_ztvwqxafycj8tgzsp3tkhb1nzb.json",
+  "pointer_body_utf8": "{\"digest\":\"sha256:feb7cbf54ff3248d43f9b0f538ac35fada4f24485aa5cdf7366a140ab1a863c8\",\"release_bundle_id\":\"rb_ztvwqxafycj8tgzsp3tkhb1nzb\"}"
+ }
+}

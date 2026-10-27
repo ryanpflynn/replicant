@@ -1,0 +1,1546 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/qa/qa-report/v1.json",
+  "title": "QA report (artifact type qa_report)",
+  "description": "WS-05. Full structured result of one QA AgentRun. Written by the in-sandbox harness to <artifacts prefix>qa_report/report.json (report_stage 'sandbox': evidence plus provisional classification). Activity qa.classify (replicant-worker) writes a second document with report_stage 'classified' to tenants/<t>/jobs/<j>/steps/qa.c<cycle>.n<ordinal>/qa_report/classified.json, adding history-informed classification and the routing decision. Every free-text field is untrusted (it can contain repo-controlled strings) and is redacted before upload (C-ART: qa_report redaction 'required'). Max size 16 MiB (C-ART).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "report_stage",
+    "tenant_id",
+    "job_id",
+    "run_id",
+    "context",
+    "subject",
+    "runtime",
+    "timing",
+    "verdict",
+    "stages",
+    "checks",
+    "classification_summary"
+  ],
+  "properties": {
+    "schema": {
+      "const": "replicant.qa-report/v1"
+    },
+    "report_stage": {
+      "type": "string",
+      "enum": [
+        "sandbox",
+        "classified"
+      ]
+    },
+    "tenant_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+      "minLength": 3,
+      "maxLength": 32
+    },
+    "job_id": {
+      "type": "string",
+      "pattern": "^job_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^run_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node_key",
+        "cycle",
+        "ordinal",
+        "workflow_type",
+        "trigger"
+      ],
+      "properties": {
+        "node_key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,40}$"
+        },
+        "cycle": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "workflow_type": {
+          "type": "string",
+          "enum": [
+            "bugfix",
+            "feature",
+            "api_change",
+            "docs",
+            "hotfix",
+            "maintenance",
+            "pr_repair",
+            "qa_only"
+          ]
+        },
+        "trigger": {
+          "description": "Why this QA run exists. initial: first QA of the cycle. after_fix: re-QA after an implementer fix for QA findings. env_retry: re-run after an environment failure. rebase_reverify: re-QA after rebasing onto a moved base (D-19).",
+          "type": "string",
+          "enum": [
+            "initial",
+            "after_fix",
+            "env_retry",
+            "rebase_reverify"
+          ]
+        },
+        "previous_qa_run_id": {
+          "type": "string",
+          "pattern": "^run_[0-9a-hjkmnp-tv-z]{26}$"
+        },
+        "variant": {
+          "type": "string",
+          "maxLength": 32
+        }
+      }
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repo",
+        "base_sha",
+        "diff_bundle",
+        "environment_definition",
+        "release_bundle_id"
+      ],
+      "properties": {
+        "repo": {
+          "type": "string",
+          "description": "<host>/<owner>/<name>",
+          "maxLength": 455
+        },
+        "base_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        },
+        "head_tree_sha": {
+          "description": "git write-tree of the checkout after applying the diff: identifies exactly what was tested.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        },
+        "diff_bundle": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "key",
+            "sha256"
+          ],
+          "properties": {
+            "key": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256hex"
+            },
+            "files_changed": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "environment_definition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version",
+            "digest"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "maxLength": 63
+            },
+            "version": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "digest": {
+              "$ref": "#/$defs/digest"
+            }
+          }
+        },
+        "release_bundle_id": {
+          "type": "string",
+          "pattern": "^rb_[0-9a-hjkmnp-tv-z]{26}$"
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "isolation",
+        "harness_version"
+      ],
+      "properties": {
+        "isolation": {
+          "type": "string",
+          "enum": [
+            "gvisor",
+            "kata-fc",
+            "kata-clh",
+            "local-docker",
+            "local-podman"
+          ]
+        },
+        "harness_version": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "qa_image": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "playwright_version": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "browser_versions": {
+          "type": "object",
+          "maxProperties": 3,
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 64
+          }
+        },
+        "cpu_limit": {
+          "type": "string",
+          "maxLength": 16
+        },
+        "memory_limit": {
+          "type": "string",
+          "maxLength": 16
+        },
+        "workspace_limit": {
+          "type": "string",
+          "maxLength": 16
+        },
+        "peak_workspace_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "peak_memory_bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "started_at",
+        "finished_at",
+        "wall_seconds"
+      ],
+      "properties": {
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "wall_seconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "budget_seconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "budget_exhausted": {
+          "type": "boolean"
+        }
+      }
+    },
+    "verdict": {
+      "$ref": "#/$defs/verdict"
+    },
+    "stages": {
+      "type": "array",
+      "maxItems": 40,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "stage",
+          "status"
+        ],
+        "properties": {
+          "stage": {
+            "$ref": "#/$defs/stage"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed",
+              "warning",
+              "skipped",
+              "not_run",
+              "error"
+            ]
+          },
+          "variant": {
+            "type": "string",
+            "enum": [
+              "change",
+              "base"
+            ]
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "duration_seconds": {
+            "type": "number",
+            "minimum": 0
+          },
+          "checks_total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "checks_failed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "skip_reason": {
+            "type": "string",
+            "enum": [
+              "not_configured",
+              "variant_skip",
+              "budget_exhausted",
+              "upstream_failed",
+              "not_applicable",
+              "paths_unchanged",
+              "runtime_unsupported"
+            ]
+          },
+          "log": {
+            "$ref": "#/$defs/artifactRef"
+          }
+        }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "maxItems": 20000,
+      "items": {
+        "$ref": "#/$defs/check"
+      }
+    },
+    "services": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "kind",
+          "status"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 63
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "service",
+              "stub",
+              "builder"
+            ]
+          },
+          "image": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "contract": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "service": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "digest": {
+                "$ref": "#/$defs/digest"
+              },
+              "resolved_from": {
+                "type": "string",
+                "enum": [
+                  "deployed_prod",
+                  "default_branch",
+                  "pinned"
+                ]
+              }
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "failed",
+              "not_started"
+            ]
+          },
+          "ready_after_seconds": {
+            "type": "number",
+            "minimum": 0
+          },
+          "failure_signature": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "log": {
+            "$ref": "#/$defs/artifactRef"
+          }
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "builder",
+        "digest"
+      ],
+      "properties": {
+        "builder": {
+          "type": "string",
+          "enum": [
+            "buildkit",
+            "buildah"
+          ]
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "config_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "platform": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "base_images": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "metadata": {
+          "$ref": "#/$defs/artifactRef"
+        },
+        "sbom": {
+          "$ref": "#/$defs/artifactRef"
+        }
+      }
+    },
+    "base_pass": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "performed"
+      ],
+      "properties": {
+        "performed": {
+          "type": "boolean"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "targeted_tests",
+            "build",
+            "app",
+            "web_baseline",
+            "full"
+          ]
+        },
+        "reasons": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "type": "string",
+            "enum": [
+              "failed_tests",
+              "failed_build",
+              "failed_app_start",
+              "failed_health",
+              "visual_baseline",
+              "a11y_baseline",
+              "generated_flow_validation"
+            ]
+          }
+        },
+        "duration_seconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "reused_from_run_id": {
+          "description": "Baseline web captures staged from an earlier QA run of the same job with the same base_sha and environment digest.",
+          "type": "string",
+          "pattern": "^run_[0-9a-hjkmnp-tv-z]{26}$"
+        }
+      }
+    },
+    "web": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "routes_checked": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "flows_repo": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "flows_generated": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "screenshots": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "a11y": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "violations_change": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "violations_base": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "new_by_impact": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "minor": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "moderate": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "serious": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "critical": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "fixed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "report": {
+              "$ref": "#/$defs/artifactRef"
+            }
+          }
+        },
+        "visual": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "pages_compared": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "pages_changed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "pages_changed_unexpected": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "used"
+      ],
+      "properties": {
+        "used": {
+          "type": "boolean"
+        },
+        "tasks": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "task",
+              "outcome"
+            ],
+            "properties": {
+              "task": {
+                "type": "string",
+                "enum": [
+                  "generate_smoke_flows",
+                  "diagnose_failures",
+                  "repair_harness_config"
+                ]
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "completed",
+                  "failed",
+                  "skipped_budget",
+                  "skipped_not_needed",
+                  "timed_out"
+                ]
+              },
+              "wall_seconds": {
+                "type": "number",
+                "minimum": 0
+              },
+              "cost_usd_reported": {
+                "type": "number",
+                "minimum": 0
+              },
+              "flows_generated": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "flows_rejected_by_lint": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "output": {
+                "$ref": "#/$defs/artifactRef"
+              }
+            }
+          }
+        }
+      }
+    },
+    "classification_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "blocking",
+        "by_cause"
+      ],
+      "properties": {
+        "blocking": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "by_cause": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "flaky_new": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "flaky_known": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "pre_existing": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "environment": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "test_defect": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "unknown": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "routing": {
+      "$ref": "#/$defs/routing",
+      "description": "Deprecated: kept for reports written before 2026-10-24 wave-1 fixes. New reports do not carry it (R1-118)."
+    },
+    "history_snapshot": {
+      "description": "classified stage only: which history the classifier read (operational data, recorded per ADR-013).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "as_of",
+        "lookback_days",
+        "available"
+      ],
+      "properties": {
+        "source": {
+          "const": "postgres:qa.test_stats_30d"
+        },
+        "as_of": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "lookback_days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 180
+        },
+        "available": {
+          "description": "false when the history store was unavailable; classification then used in-run evidence only.",
+          "type": "boolean"
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{1,63}$"
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 1000
+          }
+        }
+      }
+    },
+    "redaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ruleset_version"
+      ],
+      "properties": {
+        "ruleset_version": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "findings_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "contract_compat": {
+      "description": "XD-04-06: results of the briefing's compat_checks against the base tree.",
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "contract",
+          "tool",
+          "breaking"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "protobuf",
+              "openapi",
+              "graphql",
+              "asyncapi",
+              "jsonschema"
+            ]
+          },
+          "contract": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "tool": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "breaking": {
+            "type": "boolean"
+          },
+          "changes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "consumers": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          "report": {
+            "$ref": "#/$defs/artifactRef"
+          },
+          "revision_warning": {
+            "description": "XD-FIX-R1-104: context-mcp answered 409 revision_unavailable and qa.stage_contract_stubs fell back to default_branch.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "requested_revision",
+              "used_revision"
+            ],
+            "properties": {
+              "requested_revision": {
+                "type": "string",
+                "maxLength": 80
+              },
+              "used_revision": {
+                "const": "default_branch"
+              }
+            }
+          }
+        }
+      }
+    },
+    "secret_scan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scanned",
+        "findings"
+      ],
+      "properties": {
+        "scanned": {
+          "type": "string",
+          "enum": [
+            "image",
+            "none"
+          ]
+        },
+        "findings": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "report": {
+          "$ref": "#/$defs/artifactRef"
+        }
+      }
+    },
+    "classification_facts": {
+      "description": "classified stage only: facts the qa_run node's route_after_qa needs (R1-118). The routing decision itself is computed in the node with workflow counters and recorded as the node's exports and in the projection; it is never written here.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verdict",
+        "reason_code",
+        "oscillation",
+        "env_signature_transient",
+        "agentrun_exit_class"
+      ],
+      "properties": {
+        "verdict": {
+          "$ref": "#/$defs/verdict/properties/value"
+        },
+        "reason_code": {
+          "$ref": "#/$defs/verdict/properties/reason_code"
+        },
+        "oscillation": {
+          "type": "boolean"
+        },
+        "env_signature_transient": {
+          "type": "boolean"
+        },
+        "first_env_signature": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "agentrun_exit_class": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "pass_with_warnings",
+            "fail",
+            "inconclusive_other",
+            "not_applicable",
+            "environment_setup",
+            "environment_services"
+          ],
+          "description": "Harness exit class (WS-03 cli-invocation.md section 4.10; orchestrator ruling on R1V-023): pass, pass_with_warnings, fail, inconclusive_other, not_applicable → entrypoint exit 0; environment_setup (prepare, install, build tooling) → 44; environment_services (services, stubs, seed) → 45 (EnvironmentSetupFailed, run_result still written, verdict inconclusive)."
+        },
+        "risk_floor_hint": {
+          "description": "QA's own minimum risk from the verdict alone (pass low, pass_with_warnings medium, fail medium, inconclusive high); the node may raise it (fix budget exhausted → critical).",
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "feedback_key": {
+          "description": "Present whenever the verdict is fail: steps/qa.c<c>.n<o>/qa_report/feedback.json. Staged into the implementer's inputs only if the node decides fix_loop.",
+          "type": "string",
+          "maxLength": 1024
+        }
+      }
+    },
+    "test_inventory": {
+      "description": "R2-006: test IDs on the change (head) tree compared with base_sha, plus a static scan of the diff. Feeds the risk predicate deleted_or_skipped_tests (WS-07 risk rules) and the packet's 'Δ vs base' line. Computed even when tests fail.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "base_count",
+        "head_count",
+        "tests_removed",
+        "tests_skipped_added",
+        "deleted_or_skipped"
+      ],
+      "properties": {
+        "method": {
+          "description": "listed: both trees enumerated with each step's listCommand; junit: head from JUnit, base from listCommand; static: listCommand unavailable, only the diff scan applies.",
+          "type": "string",
+          "enum": [
+            "listed",
+            "junit",
+            "static"
+          ]
+        },
+        "base_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "head_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tests_removed": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "tests_removed_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tests_skipped_added": {
+          "description": "Tests present on both trees that are skipped on head but not on base (JUnit <skipped/>, Playwright skipped status, or a new skip marker).",
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "tests_skipped_added_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deleted_test_files": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        },
+        "skip_markers_added": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file",
+              "line",
+              "marker"
+            ],
+            "properties": {
+              "file": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "line": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "marker": {
+                "type": "string",
+                "enum": [
+                  "t.Skip",
+                  "t.SkipNow",
+                  "pytest.mark.skip",
+                  "pytest.mark.skipif",
+                  "pytest.skip",
+                  "unittest.skip",
+                  "it.skip",
+                  "describe.skip",
+                  "test.skip",
+                  "xit",
+                  "xdescribe",
+                  "test.fixme",
+                  "@Disabled",
+                  "@Ignore",
+                  "#[ignore]"
+                ]
+              }
+            }
+          }
+        },
+        "deleted_or_skipped": {
+          "description": "true iff tests_removed_total + tests_skipped_added_total + len(deleted_test_files) + len(skip_markers_added) > 0. The verifier (WS-01) recomputes the static part from the diff when QA did not run.",
+          "type": "boolean"
+        }
+      }
+    },
+    "checkpoints": {
+      "description": "R2-033: stage results persisted during the run (streamed, see stage-design.md section 4.7) and which stages this run reused from an earlier attempt of the same node.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "written": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reused": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "stage",
+              "from_run_id",
+              "inputs_digest"
+            ],
+            "properties": {
+              "stage": {
+                "$ref": "#/$defs/stage"
+              },
+              "from_run_id": {
+                "type": "string",
+                "pattern": "^run_[0-9a-hjkmnp-tv-z]{26}$"
+              },
+              "inputs_digest": {
+                "$ref": "#/$defs/digest"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "report_stage": {
+            "const": "classified"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "history_snapshot",
+          "classification_facts"
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "sha256hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "stage": {
+      "type": "string",
+      "enum": [
+        "prepare",
+        "install",
+        "unit",
+        "integration",
+        "build",
+        "image_build",
+        "sbom",
+        "secret_scan",
+        "services",
+        "stubs",
+        "seed",
+        "app_start",
+        "health",
+        "smoke",
+        "routes",
+        "e2e_repo",
+        "e2e_generated",
+        "contract_compat",
+        "a11y",
+        "visual",
+        "shutdown",
+        "agent"
+      ]
+    },
+    "artifactRef": {
+      "description": "Logical artifact reference (C-ART section 3). Keys are bucket-relative.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "bucket_class",
+        "key"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "qa_report",
+            "junit_xml",
+            "build_log",
+            "health_log",
+            "screenshot",
+            "playwright_trace",
+            "video",
+            "a11y_report",
+            "sbom",
+            "image_metadata",
+            "sandbox_log",
+            "qa_generated_flow",
+            "secret_scan_report"
+          ]
+        },
+        "bucket_class": {
+          "type": "string",
+          "enum": [
+            "artifacts",
+            "transcripts"
+          ]
+        },
+        "key": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 256
+        }
+      }
+    },
+    "verdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "reason_code"
+      ],
+      "properties": {
+        "value": {
+          "description": "pass: every required check passed. pass_with_warnings: no blocking failure, but non-blocking findings exist (known flakes, pre-existing failures, a11y/visual notes, test defects in generated flows). fail: at least one blocking check. inconclusive: a required stage could not run for environment reasons, so QA cannot vouch for the change. not_applicable: QA disabled for this binding (docs).",
+          "type": "string",
+          "enum": [
+            "pass",
+            "pass_with_warnings",
+            "fail",
+            "inconclusive",
+            "not_applicable"
+          ]
+        },
+        "reason_code": {
+          "type": "string",
+          "enum": [
+            "all_passed",
+            "non_blocking_findings",
+            "regression",
+            "new_flake",
+            "build_broken",
+            "app_unhealthy",
+            "a11y_regression",
+            "visual_unexpected",
+            "environment_failure",
+            "budget_exhausted",
+            "unsupported_runtime",
+            "qa_disabled",
+            "unknown_failure",
+            "contract_breaking",
+            "secret_in_image"
+          ]
+        },
+        "summary_text": {
+          "description": "Replicant-generated one-liner from structured data (never model text).",
+          "type": "string",
+          "maxLength": 300
+        }
+      }
+    },
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "variant",
+        "n",
+        "status"
+      ],
+      "properties": {
+        "variant": {
+          "type": "string",
+          "enum": [
+            "change",
+            "base"
+          ]
+        },
+        "n": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "passed",
+            "failed",
+            "error",
+            "timed_out",
+            "skipped"
+          ]
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "stage",
+        "test_id",
+        "status",
+        "attempts",
+        "blocking"
+      ],
+      "properties": {
+        "stage": {
+          "$ref": "#/$defs/stage"
+        },
+        "test_id": {
+          "description": "Normalized, stable identity (failure-feedback.md section 3.2), e.g. 'go:github.com/acme-payments/ledger-api/internal/ledger.TestApplyRefund/partial_eur', 'pw:e2e/checkout.spec.ts::checkout > applies coupon [chromium]', 'health:readiness/grpc-health', 'step:build/go_build'.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "step_id": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "status": {
+          "description": "Final status after the flake protocol. flaky = failed at least once and passed at least once on the change.",
+          "type": "string",
+          "enum": [
+            "passed",
+            "failed",
+            "flaky",
+            "skipped",
+            "error",
+            "not_run"
+          ]
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "attempts": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "$ref": "#/$defs/attempt"
+          }
+        },
+        "classification": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cause",
+            "rule",
+            "confidence"
+          ],
+          "properties": {
+            "cause": {
+              "type": "string",
+              "enum": [
+                "none",
+                "code",
+                "flaky_new",
+                "flaky_known",
+                "pre_existing",
+                "environment",
+                "test_defect",
+                "unknown"
+              ]
+            },
+            "rule": {
+              "description": "ID of the deterministic rule that fired (failure-feedback.md section 3.4), e.g. 'C1'.",
+              "type": "string",
+              "pattern": "^[A-Z][0-9]{1,2}[a-z]?$"
+            },
+            "confidence": {
+              "type": "string",
+              "enum": [
+                "high",
+                "medium",
+                "low"
+              ]
+            },
+            "escalated_by_agent": {
+              "description": "The diagnosis agent raised this check's severity (it may only raise, never lower).",
+              "type": "boolean"
+            },
+            "env_signature": {
+              "description": "Matched environment signature ID (failure-feedback.md section 3.3), e.g. 'mirror_5xx'.",
+              "type": "string",
+              "maxLength": 64
+            }
+          }
+        },
+        "blocking": {
+          "type": "boolean"
+        },
+        "history": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "runs": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "failures": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "flaky_runs": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "quarantined": {
+              "type": "boolean"
+            }
+          }
+        },
+        "failure": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "message": {
+              "type": "string",
+              "maxLength": 4000
+            },
+            "stack_excerpt": {
+              "type": "string",
+              "maxLength": 8000
+            },
+            "file": {
+              "description": "Repo-relative file path of the top in-repo stack frame, when resolvable.",
+              "type": "string",
+              "maxLength": 1024
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "in_diff": {
+              "description": "file is touched by the diff bundle.",
+              "type": "boolean"
+            },
+            "log_excerpt": {
+              "description": "Last up to 200 lines (redacted) around the failure.",
+              "type": "string",
+              "maxLength": 16000
+            },
+            "aria_snapshot": {
+              "description": "Playwright page.ariaSnapshot() YAML at failure time (web checks), truncated.",
+              "type": "string",
+              "maxLength": 16000
+            },
+            "expected": {
+              "type": "string",
+              "maxLength": 2000
+            },
+            "actual": {
+              "type": "string",
+              "maxLength": 2000
+            }
+          }
+        },
+        "a11y": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "rule_id": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "impact": {
+              "type": "string",
+              "enum": [
+                "minor",
+                "moderate",
+                "serious",
+                "critical"
+              ]
+            },
+            "targets": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "string",
+                "maxLength": 512
+              }
+            },
+            "on_base": {
+              "type": "boolean"
+            }
+          }
+        },
+        "visual": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "viewport": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "diff_pixel_ratio": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "expected_by_plan": {
+              "type": "boolean"
+            }
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "maxItems": 30,
+          "items": {
+            "$ref": "#/$defs/artifactRef"
+          }
+        }
+      }
+    },
+    "routing": {
+      "description": "classified stage only. The graph's QA routing function consumes this (stage-design.md section 5).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision",
+        "reason"
+      ],
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": [
+            "proceed",
+            "fix_loop",
+            "retry_qa",
+            "operator_and_gate",
+            "gate_with_failure",
+            "fail_job"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "feedback_key": {
+          "description": "Key of the QA feedback packet staged for the next implementer run (qa_report type, name feedback.json, in this step prefix).",
+          "type": "string",
+          "maxLength": 1024
+        },
+        "risk_floor": {
+          "description": "Minimum risk level QA imposes (it can only raise risk, D-19).",
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "operator_alert": {
+          "type": "string",
+          "enum": [
+            "none",
+            "environment_definition",
+            "qa_infrastructure",
+            "flake_budget"
+          ]
+        },
+        "user_notice": {
+          "type": "string",
+          "enum": [
+            "none",
+            "pre_existing_failures",
+            "qa_inconclusive",
+            "qa_failing_after_repairs"
+          ]
+        }
+      }
+    }
+  }
+}

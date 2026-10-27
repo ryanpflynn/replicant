@@ -1,0 +1,21 @@
+apiVersion: replicant.example.com/v1
+kind: Policy
+metadata:
+  name: risk-rules
+  scope: {level: tenant, tenant_id: payments}
+  owners: [payments-leads]
+spec:
+  policyType: risk_rules
+  default_level: low
+  never_publish_paths: [".github/workflows/**", ".github/actions/**"]
+  ci_executed_paths: ["tools/ci/**", "ledger/testdata/fixtures.sh"]
+  rules:
+    - id: path.money_movement
+      description: Ledger, settlement, refund or payout code
+      level: high
+      when: {paths_any: ["ledger/**", "settlement/**", "refunds/**", "payouts/**"]}
+      evidence_template: "changed {path} matches {glob}"
+    - id: codeowners.ledger_core
+      description: Paths owned by ledger-core
+      level: high
+      when: {codeowners_any: ["@acme-payments/ledger-core"]}

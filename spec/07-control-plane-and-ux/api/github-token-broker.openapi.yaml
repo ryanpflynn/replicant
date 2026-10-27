@@ -1,0 +1,185 @@
+openapi: 3.1.1
+info:
+  title: github-token-broker
+  version: 1.0.0
+  summary: Sole holder of the GitHub App private key (ADR-011 as amended by CCR-09-06). Internal only.
+  description: |
+    Owner WS-07 (WS-09 reviews). Signs App JWTs with KMS (`kms:Sign`, RSASSA_PKCS1_V1_5_SHA_256; WS-09 ADR-004)
+    and mints installation tokens restricted by repository and permission for allow-listed callers.
+    Caller identity: Kubernetes projected ServiceAccount token, audience `github-token-broker`
+    (core callers), or the exec-cluster OIDC issuer for `repo-mirror`. Every mint and every refusal is
+    audited. No caller may request `workflows`, `administration`, `secrets`, or `actions`.
+servers:
+  - url: http://github-token-broker.replicant-integrations.svc:8080
+security:
+  - serviceAccount: []
+paths:
+  /v1/installation-tokens:
+    post:
+      operationId: mintInstallationToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/TokenRequest"}
+      responses:
+        "200":
+          description: Token (cached per caller, installation, repos, permissions until 10 min before expiry)
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TokenResponse"}
+        "403":
+          description: Caller not allowed this permission/repo shape (caller policy, github-app.md §9.2)
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/TokenBrokerProblem"}
+        "404":
+          description: Installation or repository not available to the App
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/TokenBrokerProblem"}
+        "429":
+          description: Rate limited by GitHub; retry after
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/TokenBrokerProblem"}
+  /v1/app/hook-deliveries:list:
+    post:
+      operationId: listHookDeliveries
+      description: "github-integration reconciler only. Proxies GET /app/hook/deliveries (JWT)."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                cursor: {type: string}
+                per_page: {type: integer, minimum: 1, maximum: 100, default: 100}
+                status: {type: string, enum: [success, failure]}
+      responses:
+        "200":
+          description: Page of deliveries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  next_cursor: {type: [string, "null"]}
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: {type: integer}
+                        guid: {type: string}
+                        delivered_at: {type: string, format: date-time}
+                        redelivery: {type: boolean}
+                        status: {type: string}
+                        status_code: {type: integer}
+                        event: {type: string}
+                        action: {type: [string, "null"]}
+                        installation_id: {type: [integer, "null"]}
+                        repository_id: {type: [integer, "null"]}
+  /v1/app/hook-deliveries/{delivery_id}:get:
+    parameters:
+      - {name: delivery_id, in: path, required: true, schema: {type: integer}}
+    post:
+      operationId: getHookDelivery
+      description: "Proxies GET /app/hook/deliveries/{delivery_id} including request headers and payload."
+      responses:
+        "200":
+          description: Delivery
+          content:
+            application/json:
+              schema: {type: object}
+  /v1/app/hook-deliveries/{delivery_id}:redeliver:
+    parameters:
+      - {name: delivery_id, in: path, required: true, schema: {type: integer}}
+    post:
+      operationId: redeliverHookDelivery
+      description: "Proxies POST /app/hook/deliveries/{delivery_id}/attempts."
+      responses:
+        "202": {description: Redelivery requested}
+  /v1/app/hook-config:
+    patch:
+      operationId: patchHookConfig
+      description: "Dev registration only (refused unless REPLICANT_GITHUB_APP_REGISTRATION=dev). Proxies PATCH /app/hook/config."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                url: {type: string, format: uri}
+                secret: {type: string}
+      responses:
+        "200": {description: Updated}
+        "403": {description: Not a dev registration}
+  /v1/app/installations:
+    get:
+      operationId: listInstallations
+      description: "github-integration installation sync. Proxies GET /app/installations."
+      responses:
+        "200":
+          description: Installations
+          content:
+            application/json:
+              schema: {type: array, items: {type: object}}
+  /healthz:
+    get:
+      operationId: healthz
+      security: []
+      responses:
+        "200": {description: ok}
+components:
+  securitySchemes:
+    serviceAccount:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Permission:
+      type: string
+      enum: [read, write]
+    TokenRequest:
+      type: object
+      additionalProperties: false
+      required: [installation_id, permissions, purpose]
+      properties:
+        installation_id: {type: integer, minimum: 1}
+        repository_ids: {type: array, maxItems: 500, items: {type: integer, minimum: 1}}
+        permissions:
+          type: object
+          additionalProperties: false
+          minProperties: 1
+          properties:
+            contents: {$ref: "#/components/schemas/Permission"}
+            metadata: {const: read}
+            issues: {$ref: "#/components/schemas/Permission"}
+            pull_requests: {$ref: "#/components/schemas/Permission"}
+            checks: {$ref: "#/components/schemas/Permission"}
+            members: {const: read}
+        purpose: {type: string, pattern: "^[a-z][a-z0-9_.]{2,80}$", examples: [publisher.publish, github.post_reply, identity.repo_permission, mirror.fetch, zoekt.index]}
+        job_id: {type: string, pattern: "^job_[0-9a-hjkmnp-tv-z]{26}$"}
+        activity_id: {type: string, maxLength: 120}
+    TokenResponse:
+      type: object
+      required: [token, expires_at, permissions, repository_ids]
+      properties:
+        token: {type: string}
+        expires_at: {type: string, format: date-time}
+        permissions: {type: object}
+        repository_ids: {type: array, items: {type: integer}}
+        cached: {type: boolean}
+    TokenBrokerProblem:
+      type: object
+      required: [title, status, code]
+      properties:
+        title: {type: string}
+        status: {type: integer}
+        code: {type: string, enum: [caller_not_allowed, permission_not_allowed, too_many_repos, installation_unavailable, repo_unavailable, github_rate_limited, kms_error]}
+        audit_id: {type: string}

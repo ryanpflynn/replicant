@@ -1,0 +1,60 @@
+# Policy codebase_bindings (global base): maps repositories to environments and agents.
+apiVersion: replicant.example.com/v1
+kind: Policy
+metadata:
+  name: codebase-bindings
+  scope:
+    level: global
+  owners:
+    - replicant-platform
+spec:
+  policyType: codebase_bindings
+  bindings:
+    - name: web-storefront
+      priority: 500
+      match:
+        repoIds: [R_kgDOL7q2Zg]
+      environment: environment/nextjs-app
+      agents:
+        implementer: agent/implementer-claude
+        repair: agent/implementer-claude
+        reviewer: agent/reviewer-codex
+      resourceProfiles:
+        qa: qa
+      repoInstructions: quote_as_context
+      dataClassification: internal
+    - name: nextjs-apps
+      priority: 100
+      match:
+        catalog:
+          frameworks: [nextjs]
+      environment: environment/nextjs-app
+      repoInstructions: quote_as_context
+    - name: payments-go
+      priority: 200
+      match:
+        repos: ["github.com/acme-payments/*"]
+      environment: environment/go-service
+      agents:
+        reviewer: agent/reviewer-codex
+      graphModifiers:                       # WS-01 graphModifier shape (01-orchestration/extensibility.md section 5)
+        - op: insertBefore
+          anchor: implement
+          node:
+            key: license_scan
+            type: license_policy_scan
+            phase: pre_checks
+            config:
+              deny: [AGPL-3.0-only, SSPL-1.0, BUSL-1.1]
+              failOn: deny
+              ecosystems: [go]
+          branches:
+            - {when: "nodes['license_scan'].outcome == 'violations'", to: "end:policy_violation"}
+        - op: requireGateWhen
+          target: publish_gate
+          when: "diff.touches('migrations/**')"
+      repoInstructions: ignore
+      dataClassification: confidential
+  default:
+    environment: environment/generic
+    repoInstructions: quote_as_context

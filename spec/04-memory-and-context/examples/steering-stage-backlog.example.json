@@ -1,0 +1,20 @@
+{
+  "input": {
+    "job_id": "job_01m5p7x7r0bt69j0h0fbxepw90",
+    "node_key": "implement",
+    "cycle": 1,
+    "ordinal": 1,
+    "message_ids": ["msg_01m5p7x7r0bt69j0h0fbxepw91"],
+    "messages": [
+      {
+        "message_id": "msg_01m5p7x7r0bt69j0h0fbxepw91",
+        "text": "Keep the retry budget at 3; do not change the public client signature.",
+        "author": "usr_01m5p7x7r0bt69j0h0fbxepw92",
+        "sent_at": "2026-10-24T14:05:00Z"
+      }
+    ]
+  },
+  "result": {
+    "keys": ["tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/steps/implement.c1.n1/steering_message/msg_01m5p7x7r0bt69j0h0fbxepw91.json"]
+  }
+}

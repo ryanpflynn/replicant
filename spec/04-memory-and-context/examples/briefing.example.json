@@ -1,0 +1,140 @@
+{
+  "schema": "replicant.briefing/v1",
+  "job_id": "job_01m5p7x7r0bt69j0h0fbxepw90",
+  "tenant_id": "payments",
+  "generated_at": "2026-10-24T08:00:41Z",
+  "generator": "briefing-gen@1.0.0",
+  "graph_seq": 4182,
+  "input_digest": "sha256:911645322534bb2d1d732d5e46f2579b245f0e357ea6684265da36d3112669d1",
+  "target": {
+    "repo": "github.com/acme-payments/ledger-api",
+    "repo_id": "R_kgDOK2a9Xw",
+    "base_sha": "8c1e4f2a9b7d3c6e5f0a1b2c3d4e5f6a7b8c9d0e",
+    "predicted_paths": [
+      "internal/billing/proration.go"
+    ]
+  },
+  "sections": {
+    "service": {
+      "services": [
+        {
+          "service_ref": "component:default/ledger-api",
+          "name": "ledger-api",
+          "kind": "service",
+          "system_ref": "system:default/payments-core",
+          "lifecycle": "production",
+          "tier": 1,
+          "description_untrusted": "Double-entry ledger and invoicing API.",
+          "path_prefix": ""
+        }
+      ]
+    },
+    "contracts_touched": [
+      {
+        "contract_ref": "protobuf:R_kgDOK2a9Xw:proto/ledger/v1/ledger.proto",
+        "kind": "protobuf",
+        "path": "proto/ledger/v1/ledger.proto",
+        "digest": "sha256:f3b158423db3640114660411d7d68468822b2a266bd77018e7767435f43446b3",
+        "reason": "service_provides",
+        "elements_at_risk": []
+      }
+    ],
+    "consumers": [
+      {
+        "service_ref": "component:default/billing-worker",
+        "tenant_id": "payments",
+        "depth": 1,
+        "edge_kinds": [
+          "calls_runtime",
+          "consumes_api"
+        ],
+        "via": [
+          "ledger.v1.LedgerService/PostEntry"
+        ],
+        "calls_per_min": 812.4,
+        "confidence": 0.95,
+        "owner_group": "payments-billing",
+        "call_sites_visible": 3
+      },
+      {
+        "service_ref": "component:default/checkout-web",
+        "tenant_id": "checkout",
+        "depth": 2,
+        "edge_kinds": [
+          "consumes_api"
+        ],
+        "via": [],
+        "confidence": 0.8,
+        "owner_group": "checkout-web",
+        "call_sites_visible": 0
+      }
+    ],
+    "blast_radius": {
+      "direct_consumers": 1,
+      "transitive_consumers": 2,
+      "tenants_affected": 2,
+      "max_consumer_tier": 1,
+      "runtime_calls_per_min": 812.4,
+      "level": "medium"
+    },
+    "owners": [
+      {
+        "pattern": "/internal/billing/",
+        "owners": [
+          "@acme-payments/billing"
+        ],
+        "matched_paths": [
+          "internal/billing/proration.go"
+        ]
+      }
+    ],
+    "recent_incidents": [],
+    "constraints": [
+      {
+        "id": "contract.ledger_v1.wire_compat",
+        "text": "proto package ledger.v1 is called by billing-worker (812 calls/min): changes must pass buf breaking (WIRE_JSON) against main.",
+        "source": "contract_consumers"
+      }
+    ],
+    "compat_checks": [
+      {
+        "tool": "buf_breaking",
+        "contract_ref": "protobuf:R_kgDOK2a9Xw:proto/ledger/v1/ledger.proto",
+        "argv": [
+          "buf",
+          "breaking",
+          "proto",
+          "--against",
+          ".git#branch=main,subdir=proto",
+          "--error-format",
+          "json"
+        ],
+        "fail_on": "breaking"
+      }
+    ],
+    "code_search_hints": [
+      {
+        "purpose": "Other proration call sites",
+        "zoekt_query": "repo:^github\\.com/acme-payments/ sym:ProrateUpgrade lang:go"
+      }
+    ]
+  },
+  "freshness": {
+    "backstage-main": {
+      "last_success_at": "2026-10-24T07:45:00Z",
+      "stale": false,
+      "max_staleness": "PT6H"
+    },
+    "tempo-service-graph": {
+      "last_success_at": "2026-10-24T07:00:00Z",
+      "stale": false,
+      "max_staleness": "PT24H"
+    },
+    "repo-scan": {
+      "last_success_at": "2026-10-24T06:12:00Z",
+      "stale": false,
+      "max_staleness": "PT24H"
+    }
+  },
+  "omitted_sections": []
+}

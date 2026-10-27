@@ -1,0 +1,251 @@
+# Rendered by agentrun-controller for a QA run (role qa, workload class qa_build, replicant-kata-clh) of
+# WS-05's Go gRPC ledger example (05-qa/examples/env-go-grpc-ledger-api.yaml): Postgres and Kafka services,
+# one contract stub, and the rootless BuildKit builder. Rules: controller.md section 4.2a (XD-05-01, R1-045,
+# XD-05-20, XD-W2-05-03): every QA sidecar after prepare; wrapped services use replicant/svc-<name> images and
+# /opt/replicant/bin/replicant-svc-wrap from the tools volume; stubs use replicant/qa-stub-<server>.
+# Token custody as in sandbox-pod.example.yaml: per-audience tokens only in replicant-agentd (QA grants list
+# only runner-sandbox and repo-mirror, XD-05-15). No subPath anywhere. Digests are illustrative.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ar-chxtsxqzcpds1fc1c4dvw9e4em
+  namespace: sbx-payments
+  labels:
+    app.kubernetes.io/managed-by: agentrun-controller
+    replicant.example.com/tenant: payments
+    replicant.example.com/job-id: job_01m5p7x7r0bt69j0h0fbxepw90
+    replicant.example.com/run-id: run_chxtsxqzcpds1fc1c4dvw9e4em
+    replicant.example.com/role: qa
+    replicant.example.com/workload-class: qa_build
+    replicant.example.com/isolation: kata-clh
+    replicant.example.com/bundle: rb_ds5p3wmcj4dag2e9a8ncp4py6k
+    replicant.example.com/network-profile: qa-with-mirror
+    replicant.example.com/workflow-type: bugfix
+    replicant.example.com/acting-for: usr_01knk8dfr0fvjc7v0b9vhvkzbp
+    replicant.example.com/workspace-enforcement: guestBlockDevice
+    replicant.example.com/workspace-bytes: "42949672960"
+  annotations:
+    karpenter.sh/do-not-disrupt: "true"
+    kubectl.kubernetes.io/default-container: agent
+    replicant.example.com/cancel-reason: none
+  ownerReferences:
+    - {apiVersion: replicant.example.com/v1alpha1, kind: AgentRun, name: ar-chxtsxqzcpds1fc1c4dvw9e4em, uid: 0c2e4f6a-8b1d-4e3f-9a5b-7c9d1e3f5a7b, controller: true, blockOwnerDeletion: true}
+  finalizers: [replicant.example.com/pod-status]
+spec:
+  runtimeClassName: replicant-kata-clh
+  priorityClassName: replicant-run-normal
+  serviceAccountName: sbx-runner
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  shareProcessNamespace: false
+  restartPolicy: Never
+  activeDeadlineSeconds: 4200
+  terminationGracePeriodSeconds: 315
+  dnsConfig:
+    options: [{name: ndots, value: "1"}]
+    searches: []
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10002
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile: {type: RuntimeDefault}
+  volumes:
+    - {name: workspace, emptyDir: {sizeLimit: 43Gi}}            # 40Gi hard limit + H (3Gi); service data lives here too
+    - {name: home, emptyDir: {sizeLimit: 2Gi}}
+    - {name: tools, emptyDir: {sizeLimit: 1Gi}}
+    - {name: managed, emptyDir: {sizeLimit: 16Mi}}
+    - {name: inputs, emptyDir: {sizeLimit: 2Gi}}
+    - {name: out, emptyDir: {sizeLimit: 5Gi}}
+    - {name: spool, emptyDir: {sizeLimit: 2Gi}}
+    - {name: ipc, emptyDir: {medium: Memory, sizeLimit: 1Mi}}
+    - {name: uploader-ipc, emptyDir: {medium: Memory, sizeLimit: 1Mi}}
+    - {name: agentd-state, emptyDir: {medium: Memory, sizeLimit: 4Mi}}
+    - {name: qa-svc-logs, emptyDir: {sizeLimit: 1Gi}}
+    - {name: qa-buildkit-run, emptyDir: {medium: Memory, sizeLimit: 64Mi}}
+    - {name: run-tokens, secret: {secretName: ar-chxtsxqzcpds1fc1c4dvw9e4em-creds, defaultMode: 0400}}
+    - {name: config, configMap: {name: ar-chxtsxqzcpds1fc1c4dvw9e4em-config, defaultMode: 0444}}
+    - {name: replicant-ca, configMap: {name: replicant-ca-bundle, defaultMode: 0444}}
+    - {name: prompt, emptyDir: {medium: Memory, sizeLimit: 4Mi}}   # agent only; joined system prompt, never uploaded (XD-W2-03-01)
+    - name: podinfo
+      downwardAPI:
+        items: [{path: annotations, fieldRef: {fieldPath: metadata.annotations}}]
+  initContainers:
+    - name: workspace-guard
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/sandbox-utils@sha256:7a1c3e5b9d2f4a6c8e0b1d3f5a7c9e2b4d6f8a0c3e5b7d9f1a2c4e6b8d0f3a5c
+      args: ["guard", "--path=/workspace", "--limit-bytes=42949672960", "--tolerance=0.01"]
+      securityContext: &restricted
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: {drop: ["ALL"]}
+      resources:
+        requests: {cpu: 50m, memory: 32Mi, ephemeral-storage: 16Mi}
+        limits: {cpu: 200m, memory: 64Mi, ephemeral-storage: 16Mi}
+      volumeMounts: [{name: workspace, mountPath: /workspace}]
+    - name: replicant-agentd
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/cli-claude-code@sha256:2b4d6f8a0c1e3b5d7f9a2c4e6b8d0f1a3c5e7b9d2f4a6c8e0b1d3f5a7c9e2b4d
+      restartPolicy: Always
+      command: ["/opt/replicant/bin/replicant-agentd"]
+      args: ["--config=/etc/replicant/bootstrap.json"]
+      env:
+        - {name: REPLICANT_RUN_TOKEN_SEED_DIR, value: /run/replicant/token-seed}
+        - {name: REPLICANT_RUN_TOKEN_DIR, value: /run/replicant/tokens}
+        - {name: REPLICANT_UPLOADER_SOCKET, value: /run/replicant/uploader-ipc/agentd.sock}
+      securityContext: {<<: *restricted, runAsUser: 10000, runAsGroup: 10000}
+      startupProbe: {httpGet: {host: 127.0.0.1, path: /readyz, port: 7800}, periodSeconds: 1, failureThreshold: 30}
+      resources:
+        requests: {cpu: 100m, memory: 96Mi, ephemeral-storage: 16Mi}
+        limits: {cpu: "1", memory: 256Mi, ephemeral-storage: 16Mi}
+      volumeMounts:
+        - {name: run-tokens, mountPath: /run/replicant/token-seed, readOnly: true}
+        - {name: agentd-state, mountPath: /run/replicant/tokens}
+        - {name: ipc, mountPath: /run/replicant/ipc}
+        - {name: uploader-ipc, mountPath: /run/replicant/uploader-ipc}
+        - {name: config, mountPath: /etc/replicant, readOnly: true}
+    - name: watchdog
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/sandbox-utils@sha256:7a1c3e5b9d2f4a6c8e0b1d3f5a7c9e2b4d6f8a0c3e5b7d9f1a2c4e6b8d0f3a5c
+      restartPolicy: Always
+      args: ["watchdog", "--path=/workspace", "--limit-bytes=42949672960", "--warn=0.85", "--stop=0.98", "--interval=2s", "--status-dir=/run/replicant/ipc/status"]
+      securityContext: {<<: *restricted, runAsUser: 10003, runAsGroup: 10003}
+      resources:
+        requests: {cpu: 20m, memory: 32Mi, ephemeral-storage: 16Mi}
+        limits: {cpu: 200m, memory: 64Mi, ephemeral-storage: 16Mi}
+      volumeMounts:
+        - {name: workspace, mountPath: /workspace, readOnly: true}
+        - {name: ipc, mountPath: /run/replicant/ipc}
+    - name: prepare
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/cli-claude-code@sha256:2b4d6f8a0c1e3b5d7f9a2c4e6b8d0f1a3c5e7b9d2f4a6c8e0b1d3f5a7c9e2b4d
+      command: ["/opt/replicant/bin/replicant-entrypoint", "prepare"]
+      securityContext: *restricted
+      resources:
+        requests: {cpu: "1", memory: 1Gi, ephemeral-storage: 64Mi}
+        limits: {cpu: "2", memory: 2Gi, ephemeral-storage: 64Mi}
+      volumeMounts:
+        - {name: tools, mountPath: /replicant/tools-dest}
+        - {name: inputs, mountPath: /replicant/inputs}
+        - {name: managed, mountPath: /replicant/managed}
+        - {name: home, mountPath: /home/agent}
+        - {name: workspace, mountPath: /workspace}
+        - {name: ipc, mountPath: /run/replicant/ipc}
+        - {name: config, mountPath: /etc/replicant, readOnly: true}
+    # Services: native sidecars without startupProbe (the harness checks readiness, XD-05-14); after
+    # prepare, because replicant-svc-wrap comes from the tools volume that prepare fills (XD-W2-05-03).
+    - name: svc-postgres
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/svc-postgres@sha256:5c7e9a1b3d5f7a9c1e3b5d7f9a2c4e6b8d0f2a4c6e8b1d3f5a7c9e0b2d4f6a8c
+      restartPolicy: Always
+      command: ["/opt/replicant/bin/replicant-svc-wrap", "--name", "postgres", "--log", "/var/log/qa-services/postgres.log", "--", "docker-entrypoint.sh", "postgres", "-c", "listen_addresses=127.0.0.1", "-c", "shared_buffers=128MB", "-c", "max_connections=60"]
+      env:
+        - {name: PGDATA, value: /workspace/.services/postgres}
+        - {name: POSTGRES_HOST_AUTH_METHOD, value: trust}
+      securityContext: {runAsNonRoot: true, runAsUser: 999, runAsGroup: 999, allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: {drop: ["ALL"]}}   # written out, no merge override (R1V-100)
+      resources:
+        requests: {cpu: 500m, memory: 512Mi, ephemeral-storage: 256Mi}
+        limits: {cpu: "1", memory: 1Gi, ephemeral-storage: 1Gi}
+      volumeMounts:
+        - {name: workspace, mountPath: /workspace}
+        - {name: tools, mountPath: /opt/replicant, readOnly: true}
+        - {name: qa-svc-logs, mountPath: /var/log/qa-services}
+    - name: svc-kafka
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/svc-kafka@sha256:6d8f0a2c4e6b8d1f3a5c7e9b0d2f4a6c8e1b3d5f7a9c0e2b4d6f8a1c3e5b7d9f
+      restartPolicy: Always
+      command: ["/opt/replicant/bin/replicant-svc-wrap", "--name", "kafka", "--log", "/var/log/qa-services/kafka.log", "--", "/etc/kafka/docker/run"]
+      env:
+        - {name: KAFKA_HEAP_OPTS, value: "-Xms768m -Xmx768m"}
+        - {name: KAFKA_LOG_DIRS, value: /workspace/.services/kafka}
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: {drop: ["ALL"]}}
+      resources:
+        requests: {cpu: 500m, memory: 1Gi, ephemeral-storage: 256Mi}
+        limits: {cpu: 1500m, memory: 1536Mi, ephemeral-storage: 1Gi}
+      volumeMounts:
+        - {name: workspace, mountPath: /workspace}
+        - {name: tools, mountPath: /opt/replicant, readOnly: true}
+        - {name: qa-svc-logs, mountPath: /var/log/qa-services}
+    - name: stub-fx-rates                         # contract stub; after prepare; inputs and workspace read-only
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/qa-stub-gripmock@sha256:7e9a1c3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c
+      restartPolicy: Always
+      args: ["--stub=/replicant/inputs/stubs/fx-rates", "/replicant/inputs/stubs/fx-rates/fx_rates.proto"]
+      securityContext: *restricted
+      resources:
+        requests: {cpu: 100m, memory: 64Mi, ephemeral-storage: 64Mi}
+        limits: {cpu: 250m, memory: 128Mi, ephemeral-storage: 256Mi}
+      volumeMounts:
+        - {name: inputs, mountPath: /replicant/inputs, readOnly: true}
+        - {name: workspace, mountPath: /workspace, readOnly: true}
+    - name: builder                               # the only security exception: Kata qa_build only (WS-05 XD-05-16)
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/buildkit-rootless@sha256:8f0b2d4a6c8e1f3b5d7a9c2e4f6b8d0a1c3e5f7b9d2a4c6e8f0b1d3a5c7e9f2b
+      restartPolicy: Always
+      args: ["--oci-worker-no-process-sandbox", "--addr", "unix:///run/buildkit/buildkitd.sock", "--root", "/workspace/.buildkit"]
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        allowPrivilegeEscalation: true            # newuidmap/newgidmap (orchestrator decision)
+        readOnlyRootFilesystem: true
+        capabilities: {drop: ["ALL"], add: ["SETUID", "SETGID"]}
+        seccompProfile: {type: Unconfined}
+        appArmorProfile: {type: Unconfined}
+      resources:
+        requests: {cpu: "1", memory: 1Gi, ephemeral-storage: 256Mi}
+        limits: {cpu: "4", memory: 4Gi, ephemeral-storage: 1Gi}
+      volumeMounts:
+        - {name: workspace, mountPath: /workspace}
+        - {name: qa-buildkit-run, mountPath: /run/buildkit}
+  containers:
+    - name: agent                                 # runs replicant-qa through the WS-03 entrypoint (XD-05-17)
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/env-go-service@sha256:1c2e4a6b8d0f1e3a5c7b9d1f3e5a7c9b0d2f4e6a8c1b3d5f7e9a0c2b4d6f8e1a
+      command: ["/opt/replicant/bin/replicant-entrypoint", "run"]
+      workingDir: /workspace/repo
+      env:
+        - {name: REPLICANT_ROLE, value: qa}
+        - {name: REPLICANT_RUN_ID, value: run_chxtsxqzcpds1fc1c4dvw9e4em}
+        - {name: REPLICANT_WORKFLOW_TYPE, value: bugfix}
+        - {name: REPLICANT_WORKFLOW_ID, value: job_01m5p7x7r0bt69j0h0fbxepw90}
+        - {name: REPLICANT_LOGICAL_ACTIVITY_ID, value: qa.c0.n1.run}
+        - {name: REPLICANT_WORKSPACE_DIR, value: /workspace}
+        - {name: REPLICANT_WORKSPACE_LIMIT_BYTES, value: "42949672960"}
+        - {name: DATABASE_URL, value: "postgres://postgres@127.0.0.1:5432/postgres?sslmode=disable"}
+        - {name: KAFKA_BROKERS, value: "127.0.0.1:9092"}
+        - {name: BUILDKIT_HOST, value: "unix:///run/buildkit/buildkitd.sock"}
+        - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "https://otel-sandbox.prod.replicant.internal:4318"}
+        - {name: OTEL_EXPORTER_OTLP_CERTIFICATE, value: /etc/replicant-ca/ca.crt}
+      securityContext: *restricted
+      startupProbe:
+        exec: {command: ["test", "-f", "/run/replicant/ipc/status/agent-started"]}
+        periodSeconds: 1
+        failureThreshold: 300
+      terminationMessagePath: /dev/termination-log
+      terminationMessagePolicy: FallbackToLogsOnError
+      resources:                                  # profileByRole.qa (WS-05 dependencies.md section 7) + margin
+        requests: {cpu: "3", memory: 6Gi, ephemeral-storage: 30Gi}
+        limits: {cpu: "6", memory: 10Gi, ephemeral-storage: 56Gi}
+      volumeMounts:
+        - {name: workspace, mountPath: /workspace}
+        - {name: tools, mountPath: /opt/replicant, readOnly: true}
+        - {name: managed, mountPath: /etc/replicant, readOnly: true}
+        - {name: inputs, mountPath: /replicant/inputs, readOnly: true}
+        - {name: home, mountPath: /home/agent}
+        - {name: out, mountPath: /replicant/out}
+        - {name: spool, mountPath: /replicant/spool}
+        - {name: ipc, mountPath: /run/replicant/ipc}
+        - {name: qa-svc-logs, mountPath: /var/log/qa-services, readOnly: true}
+        - {name: qa-buildkit-run, mountPath: /run/buildkit}
+        - {name: podinfo, mountPath: /etc/podinfo, readOnly: true}
+        - {name: prompt, mountPath: /run/replicant/prompt}
+        - {name: replicant-ca, mountPath: /etc/replicant-ca, readOnly: true}
+    - name: uploader
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/sandbox-uploader@sha256:9e1a3c5b7d9f0e2a4c6b8d0f2e4a6c8b0d1f3e5a7c9b2d4f6e8a0c3b5d7f9e2a
+      args: ["--config=/etc/replicant/bootstrap.json", "--credentials-socket=/run/replicant/uploader-ipc/agentd.sock"]
+      securityContext: {<<: *restricted, runAsUser: 10003, runAsGroup: 10003}
+      resources:
+        requests: {cpu: 200m, memory: 256Mi, ephemeral-storage: 64Mi}
+        limits: {cpu: "1", memory: 512Mi, ephemeral-storage: 64Mi}
+      volumeMounts:
+        - {name: out, mountPath: /replicant/out, readOnly: true}
+        - {name: spool, mountPath: /replicant/spool, readOnly: true}
+        - {name: ipc, mountPath: /run/replicant/ipc}
+        - {name: uploader-ipc, mountPath: /run/replicant/uploader-ipc}
+        - {name: qa-svc-logs, mountPath: /var/log/qa-services, readOnly: true}
+        - {name: config, mountPath: /etc/replicant, readOnly: true}
+        - {name: replicant-ca, mountPath: /etc/replicant-ca, readOnly: true}

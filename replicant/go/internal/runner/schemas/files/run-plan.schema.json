@@ -1,0 +1,442 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/runtime/run-plan/v1.json",
+  "title": "Run plan (inputs/run-plan.json)",
+  "description": "Owner: WS-03. Written once by the replicant-worker activity agents.build_run_plan (logical activity <node>.c<cycle>.n<ordinal>.plan) to <artifacts prefix>inputs/run-plan.json (If-None-Match: *) and listed by context.stage_inputs in the run inputs manifest as the single `run_plan` object. Holds the verified agent definition spec, the effective per-run values computed by the workflow, rendered prompt sources, and the environment's workspace steps.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "run_id",
+    "role",
+    "agent",
+    "effective",
+    "prompts",
+    "workspace",
+    "environment"
+  ],
+  "properties": {
+    "schema": {
+      "const": "replicant.run-plan/v1"
+    },
+    "run_id": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/run_id"
+    },
+    "role": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/run_role"
+    },
+    "agent": {
+      "description": "AgentDefinition.spec, copied verbatim from the digest-verified registry document.",
+      "$ref": "https://schemas.replicant.example.com/kinds/agent-definition/v1.json#/$defs/spec"
+    },
+    "effective": {
+      "description": "Values computed by the workflow for THIS run. The entrypoint uses these, not the agent limits, where both exist.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "budget_usd",
+        "max_turns",
+        "active_deadline_seconds",
+        "steering_live",
+        "models",
+        "audiences",
+        "scopes"
+      ],
+      "properties": {
+        "budget_usd": {
+          "description": "= RunSpec.limits.max_cost_usd = run token budget_usd.",
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "job_budget_remaining_usd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "max_turns": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Cumulative turn budget for the WHOLE run (R2-043). Enforced by the entrypoint from agentd-counted turns across every stream-json result, including turns started by steering messages; --max-turns is only a per-message backstop."
+        },
+        "active_deadline_seconds": {
+          "type": "integer",
+          "minimum": 60
+        },
+        "finalize_seconds": {
+          "type": "integer",
+          "minimum": 30
+        },
+        "steering_live": {
+          "description": "steering.live AND RunSpec.steering.enabled.",
+          "type": "boolean"
+        },
+        "models": {
+          "description": "Models this run may call (primary, fallbacks, small, subagent), all within the tenant allowlist.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/gateway_model_id"
+          }
+        },
+        "resume_session": {
+          "description": "Name of the restore_session object to resume, if any.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,40}$"
+        },
+        "audiences": {
+          "description": "Run-token audiences the grant requests (RunSpec run_grant.audiences); agentd opens only the loopback routes of these audiences.",
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "ai-gateway",
+              "memory-mcp",
+              "context-mcp",
+              "repo-mirror",
+              "runner-sandbox"
+            ]
+          }
+        },
+        "deterministic": {
+          "description": "Replay mode (XD-11-09): fixed GIT_AUTHOR_DATE/GIT_COMMITTER_DATE from the job's received_at, fixed session UUID, no wall-clock text in prompts.",
+          "type": "boolean",
+          "default": false
+        },
+        "git_identity_date": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "experiment": {
+          "description": "Langfuse experiment attributes for eval-case jobs (XD-06-05). When present, the entrypoint, agentd and the shim set langfuse.experiment.id, .name, .dataset.id, .item.id, .item.root_observation_id, .item.version on every span they emit for this run.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "dataset_id",
+            "item_id"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "name": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "dataset_id": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "item_id": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "item_root_observation_id": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "item_version": {
+              "type": "string",
+              "maxLength": 64
+            }
+          }
+        },
+        "scopes": {
+          "description": "C-RUNNER RunGrantClaims.scopes, derived from the agent's MCP servers and role; copied unchanged into RunSpec and the run grant (XD-FIX-R1-014).",
+          "type": "array",
+          "uniqueItems": true,
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "enum": [
+              "gateway:invoke",
+              "memory:read",
+              "memory:search",
+              "context:read",
+              "code_search:read",
+              "repo:fetch",
+              "inbox:read",
+              "credentials:aws"
+            ]
+          }
+        },
+        "network_profile": {
+          "description": "RunSpec network_profile chosen by build_run_plan.",
+          "type": "string",
+          "maxLength": 63,
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "budget_account": {
+          "description": "Budget account of an eval, harness, shadow, or proposer job (gateway.md section 6.7).",
+          "type": "string",
+          "pattern": "^fgw:(eval|pipeline|proposal):[A-Za-z0-9_.:-]{1,120}$"
+        }
+      }
+    },
+    "prompts": {
+      "description": "Prompt texts rendered by agents.build_run_plan from the bundle's pinned Langfuse versions (404-only escrow fallback, C-DEF section 6). context.stage_inputs composes system-append.md (role, constraints; the memory block is staged separately as memory-injection.json and joined by the entrypoint on tmpfs, XD-W2-04-01) and first-message.md (task template filled with the task packet, handoff, reviewer feedback, steering backlog) from these; the entrypoint uses the composed files and uses `finalize` directly.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "task_template"
+      ],
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/prompt_text"
+        },
+        "constraints": {
+          "$ref": "#/$defs/prompt_text"
+        },
+        "task_template": {
+          "$ref": "#/$defs/prompt_text"
+        },
+        "finalize": {
+          "$ref": "#/$defs/prompt_text"
+        }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repo_path",
+        "base_sha"
+      ],
+      "properties": {
+        "repo_path": {
+          "const": "/workspace/repo"
+        },
+        "base_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        },
+        "branch_name": {
+          "description": "Local branch the agent works on (never pushed from the sandbox, D-21).",
+          "type": "string",
+          "maxLength": 200,
+          "pattern": "^replicant/[A-Za-z0-9._/-]+$"
+        },
+        "additional_repos": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "repo_id",
+              "path",
+              "base_sha"
+            ],
+            "properties": {
+              "repo_id": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "path": {
+                "type": "string",
+                "pattern": "^/workspace/context/[a-z0-9][a-z0-9._-]{0,62}$"
+              },
+              "base_sha": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+              }
+            }
+          }
+        },
+        "protect_tracked_files": {
+          "description": "Tripwire for read-only roles: tracked files are made read-only (chmod a-w) after checkout. Detection is by integrity hashing, not by this.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "environment": {
+      "description": "The subset of EnvironmentDefinition.spec the entrypoint needs, already filtered for the role.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "codebase_type",
+        "bootstrap_steps",
+        "env",
+        "package_mirrors",
+        "caches",
+        "services"
+      ],
+      "properties": {
+        "codebase_type": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "bootstrap_steps": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "https://schemas.replicant.example.com/kinds/environment-definition/v1.json#/$defs/step"
+          }
+        },
+        "env": {
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/env_map"
+        },
+        "package_mirrors": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "type": "string"
+          }
+        },
+        "caches": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "https://schemas.replicant.example.com/kinds/environment-definition/v1.json#/$defs/cache"
+          }
+        },
+        "services": {
+          "description": "Services the entrypoint must wait for (readiness) before bootstrap; the controller runs them.",
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "ports"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 31
+              },
+              "ports": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 1024,
+                  "maximum": 65535
+                }
+              },
+              "seed": {
+                "$ref": "https://schemas.replicant.example.com/kinds/environment-definition/v1.json#/$defs/step"
+              }
+            }
+          }
+        }
+      }
+    },
+    "repo_instructions": {
+      "type": "string",
+      "enum": [
+        "ignore",
+        "quote_as_context",
+        "trusted_load"
+      ],
+      "default": "quote_as_context"
+    }
+  },
+  "$defs": {
+    "prompt_text": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "sha256"
+      ],
+      "properties": {
+        "text": {
+          "type": "string",
+          "maxLength": 262144
+        },
+        "sha256": {
+          "description": "sha256 of text (UTF-8). The entrypoint verifies it.",
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/sha256_hex"
+        },
+        "langfuse": {
+          "description": "Source prompt version (from the bundle), for the Langfuse prompt link on spans.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "version": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    },
+    "session_header": {
+      "description": "replicant-session.json, the first member of every cli_session_state tar (adopted from WS-04 working-memory.md section 4.3; R1-068).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cli",
+        "cli_version",
+        "cli_image_digest",
+        "session_id",
+        "workspace_path",
+        "base_sha",
+        "head_tree_sha",
+        "created_at",
+        "size_bytes",
+        "run_id",
+        "cycle"
+      ],
+      "properties": {
+        "cli": {
+          "type": "string",
+          "enum": [
+            "claude-code",
+            "codex"
+          ]
+        },
+        "cli_version": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "cli_image_digest": {
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/digest"
+        },
+        "session_id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "workspace_path": {
+          "const": "/workspace/repo"
+        },
+        "base_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        },
+        "head_tree_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        },
+        "created_at": {
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/timestamp"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 268435456
+        },
+        "run_id": {
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/run_id"
+        },
+        "cycle": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

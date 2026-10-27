@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/orchestration/router-decision/v1.json",
+  "title": "RouterDecision (WS-01)",
+  "description": "Result of the router prologue (router.md). Recorded in workflow history (activity results), in JobState.exports['router'], and projected (timeline job.routed). No free text produced by a model is stored here: the LLM contributes only a selection among `candidates` and a confidence (G-24).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "workflow_type", "method", "rules_fired", "graph"],
+  "properties": {
+    "schema": {"const": "replicant.router-decision/v1"},
+    "workflow_type": {"enum": ["bugfix", "feature", "api_change", "docs", "hotfix", "maintenance", "pr_repair", "qa_only"]},
+    "requested_type": {"enum": ["auto", "bugfix", "feature", "api_change", "docs", "hotfix", "maintenance", "pr_repair", "qa_only"]},
+    "method": {"enum": ["rule", "requested", "escalated", "llm", "clarified", "fallback"]},
+    "rules_fired": {"type": "array", "maxItems": 20, "items": {"type": "string", "pattern": "^[a-z][a-z0-9-.]{1,63}$"}},
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "candidates": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+    "clarification_gate_ids": {"type": "array", "maxItems": 3, "items": {"type": "string", "pattern": "^gate_[0-9a-hjkmnp-tv-z]{26}$"}},
+    "escalated_from": {"enum": ["docs", "qa_only", "maintenance", "bugfix"]},
+    "graph": {"type": "object", "additionalProperties": false, "required": ["ref", "digest"], "properties": {
+      "ref": {"type": "string", "pattern": "^graph/[a-z][a-z0-9-]*@[1-9][0-9]*$"},
+      "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+      "composed_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+      "modifiers_applied": {"type": "array", "items": {"type": "string", "maxLength": 200}}}},
+    "targets": {"type": "array", "maxItems": 200, "items": {"type": "object", "additionalProperties": false, "required": ["repo", "base_ref", "base_sha"],
+      "properties": {"repo": {"type": "string", "maxLength": 455}, "base_ref": {"type": "string", "maxLength": 255},
+                     "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"}}}}
+  }
+}

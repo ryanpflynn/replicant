@@ -1,0 +1,62 @@
+# WS-10 · One-time (idempotent) database bootstrap (postgres.md §2). Argo CD PreSync wave -2 of the
+# replicant-control Application. Runs ddl/00-bootstrap.sql as the RDS-managed master user. The master
+# secret is NEVER a Kubernetes Secret: the pod's Pod Identity role may call
+# secretsmanager:GetSecretValue on that single secret ARN, and the script fetches it at runtime.
+# The ConfigMap name carries the SQL's hash, so the Job (BeforeHookCreation) re-runs only when the SQL changes.
+# Validated: YAML parse + kubeconform (Kubernetes 1.36 schemas), 2026-10-24.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: replicant-db-bootstrap
+  namespace: replicant-control
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 600
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: replicant-db-bootstrap   # Pod Identity -> replicant-prod-db-bootstrap (GetSecretValue on the master secret only)
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: bootstrap
+          image: 111111111111.dkr.ecr.us-east-1.amazonaws.com/replicant/db-tools@sha256:8b2d4f6a8c0e1b3d5f7a9c2e4b6d8f0a1c3e5b7d9f2a4c6e8b0d1f3a5c7e9b2d   # psql 17 + aws cli v2
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              SECRET_JSON="$(aws secretsmanager get-secret-value --secret-id "$MASTER_SECRET_ARN" --query SecretString --output text)"
+              export PGUSER="$(printf '%s' "$SECRET_JSON" | jq -r .username)"
+              export PGPASSWORD="$(printf '%s' "$SECRET_JSON" | jq -r .password)"
+              unset SECRET_JSON
+              psql "host=$DB_HOST port=5432 dbname=replicant sslmode=verify-full sslrootcert=/etc/ssl/rds/global-bundle.pem" \
+                   -v ON_ERROR_STOP=1 -f /sql/00-bootstrap.sql
+          env:
+            - name: DB_HOST
+              value: replicant-prod.cluster-c9xk2mzq4lab.us-east-1.rds.amazonaws.com
+            - name: MASTER_SECRET_ARN
+              value: arn:aws:secretsmanager:us-east-1:111111111111:secret:rds!cluster-7qj4xkzb-2mnv-4plr-9c3w-d6yhe1a8b2c4-AbCdEf
+            - name: AWS_REGION
+              value: us-east-1
+          volumeMounts:
+            - {name: sql, mountPath: /sql, readOnly: true}
+            - {name: rds-ca, mountPath: /etc/ssl/rds, readOnly: true}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+      volumes:
+        - name: sql
+          configMap:
+            name: replicant-db-bootstrap-sql-3c9f1e2a   # hash suffix of ddl/00-bootstrap.sql
+        - name: rds-ca
+          configMap:
+            name: rds-ca-global-bundle

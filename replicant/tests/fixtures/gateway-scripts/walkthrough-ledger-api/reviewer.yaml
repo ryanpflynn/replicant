@@ -1,0 +1,15 @@
+# replicant.gateway-script/v1: the canned ledger-api reviewer for the M1 walkthrough (approves the implementer's fix).
+# Selected by stub key reviewer.c<cycle>.n<ordinal> (falls back to "reviewer"), or the default set + role.
+schema: replicant.gateway-script/v1
+name: walkthrough-ledger-api-reviewer
+protocol: anthropic_messages
+finish: "Review complete: approve."
+turns:
+  - respond:
+      text: "I'll read the changed function."
+      tool_use: {name: Read, input: {file_path: "${cwd}/internal/ledger/ledger.go"}}
+      usage: {input_tokens: 8000, output_tokens: 40}
+  - respond:
+      text: "The change prorates the FX fee reversal with the existing helper and keeps the full-refund case intact."
+      structured_output_from: reviewer.agent_report.json
+      usage: {input_tokens: 9000, output_tokens: 220}

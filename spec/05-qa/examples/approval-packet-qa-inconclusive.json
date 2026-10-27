@@ -1,0 +1,85 @@
+{
+  "schema": "replicant.approval-packet.qa/v1",
+  "verdict": "inconclusive",
+  "reason_code": "environment_failure",
+  "decision": "operator_and_gate",
+  "summary": "QA could not run integration tests: Kafka did not become ready in 120 s (environment); unit tests passed",
+  "run_id": "run_ata247zxh0zx4y24bdv2vns95e",
+  "classified_report": {
+    "bucket_class": "artifacts",
+    "key": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/steps/qa.c0.n2/qa_report/classified.json",
+    "sha256": "a9082f8a0ec4930a6972a2cfcd80bcca822b551f0c1f87a735fa7513164ea031"
+  },
+  "iteration": {
+    "fix_iterations_used": 0,
+    "fix_iterations_max": 2,
+    "env_retries_used": 1
+  },
+  "tested_tree": {
+    "base_sha": "8c1e4f2a9b7d3c6e5f0a1b2c3d4e5f6a7b8c9d0e",
+    "head_tree_sha": "5d2b7e9f0a3c4e6b8d1f2a3c5e7b9d0f1a2c4e6b",
+    "diff_bundle_sha256": "1e3a5c7b9d0f2e4a6c8b0d1f3e5a7c9b2d4f6e8a0c3b5d7f9e1a2c4b6d8f0e3a"
+  },
+  "counts": {
+    "total": 413,
+    "passed": 412,
+    "failed": 0,
+    "flaky": 1,
+    "skipped": 0,
+    "blocking": 0
+  },
+  "by_cause": {
+    "environment": 1,
+    "flaky_known": 1
+  },
+  "test_inventory_delta": {
+    "method": "listed",
+    "tests_removed": 0,
+    "tests_skipped_added": 1,
+    "deleted_test_files": 0,
+    "skip_markers_added": 1,
+    "deleted_or_skipped": true
+  },
+  "stages": [
+    {
+      "stage": "unit",
+      "status": "warning"
+    },
+    {
+      "stage": "services",
+      "status": "failed"
+    },
+    {
+      "stage": "integration",
+      "status": "not_run",
+      "skip_reason": "upstream_failed"
+    }
+  ],
+  "findings": [
+    {
+      "test_id": "services:kafka",
+      "cause": "environment",
+      "blocking": false,
+      "evidence_summary": "svc-kafka not ready after 120 s on the first attempt and on the automatic retry",
+      "message": "replicant-svc-wrap: exited status=1 (KafkaConfig: log.dirs not writable)",
+      "env_signature": "service_not_ready"
+    }
+  ],
+  "screenshots": [],
+  "restricted_evidence": {
+    "playwright_traces": 0,
+    "videos": 0
+  },
+  "image": {
+    "digest": "sha256:44a7cf163a7bbc3915870ccb04b1e9e8a365dc22a569d13ece7ded89017d4b09",
+    "secret_findings": 0
+  },
+  "risk_floor": "high",
+  "banner": "QA inconclusive: Kafka did not start (environment). Operators notified. \u0394 vs base: +1 skip.",
+  "actions": [
+    "approve",
+    "reject",
+    "request_changes",
+    "rerun_qa"
+  ]
+}

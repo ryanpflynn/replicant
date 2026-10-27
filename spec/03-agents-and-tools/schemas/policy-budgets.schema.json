@@ -1,0 +1,294 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/kinds/policy-budgets/v1.json",
+  "title": "Policy budgets (kind schema v1)",
+  "description": "Owner: WS-03. Behavioral budget policy (ADR-013: budgets are in the bundle). Defines job and per-role run budgets in USD, the soft-limit fraction, the budget_extension gate parameters, and the tenant's gateway model allowlist. Tenant SPEND QUOTAS (month-to-date caps, daily caps) are operational configuration in tenancy (read live by the gateway shim), not here. A tenant-layer budgets policy may only tighten the base (ADR-013 tightening check: every number <= base, allowlist subset of base).",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://schemas.replicant.example.com/contracts/definition-envelope/v1.json"
+    }
+  ],
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "properties": {
+    "kind": {
+      "const": "Policy"
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policyType",
+        "defaults",
+        "gatewayAccess",
+        "extension",
+        "embeddings"
+      ],
+      "properties": {
+        "policyType": {
+          "const": "budgets"
+        },
+        "defaults": {
+          "$ref": "#/$defs/budgetSet"
+        },
+        "byWorkflowType": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "bugfix": {
+              "$ref": "#/$defs/budgetOverride"
+            },
+            "feature": {
+              "$ref": "#/$defs/budgetOverride"
+            },
+            "api_change": {
+              "$ref": "#/$defs/budgetOverride"
+            },
+            "docs": {
+              "$ref": "#/$defs/budgetOverride"
+            },
+            "hotfix": {
+              "$ref": "#/$defs/budgetOverride"
+            },
+            "maintenance": {
+              "$ref": "#/$defs/budgetOverride"
+            },
+            "pr_repair": {
+              "$ref": "#/$defs/budgetOverride"
+            },
+            "qa_only": {
+              "$ref": "#/$defs/budgetOverride"
+            }
+          }
+        },
+        "extension": {
+          "description": "budget_extension gate (C-MSG gate kind). Opened by the workflow when a run fails with GatewayBudgetExceeded or the job budget is exhausted while work remains.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "maxExtensionsPerJob",
+            "maxIncreaseFraction",
+            "requesterSelfApproveMaxUsd"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "maxIncreaseFraction": {
+              "description": "Each approved extension raises the job budget by at most this fraction of the original job budget.",
+              "type": "number",
+              "minimum": 0,
+              "maximum": 2
+            },
+            "approverGroups": {
+              "description": "Okta groups eligible to approve (in addition to gate_rules). The requester may approve only if gate_rules allows requester_may_decide.",
+              "type": "array",
+              "maxItems": 10,
+              "items": {
+                "type": "string",
+                "maxLength": 200
+              }
+            },
+            "requesterSelfApproveMaxUsd": {
+              "description": "Largest single extension the job's requester may approve themselves (control-review G-07). Default and recommended 0: the budget_extension gate is opened with requester_may_decide=false, so another eligible approver must decide. Tenant layers may only lower it.",
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "maxExtensionsPerJob": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5,
+              "description": "Hard cap on approved extensions per job, across all approvers."
+            }
+          }
+        },
+        "gatewayAccess": {
+          "description": "Tenant model allowlist (brief: model allowlists per tenant). Bundle build fails if any agent reachable for the tenant uses a model outside allow. At runtime the gateway shim enforces the run token's models claim (CCR-03-01), which the Runner derives from the agent definition and this policy.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "allow"
+          ],
+          "properties": {
+            "allow": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 50,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/gateway_model_id"
+              }
+            },
+            "deny": {
+              "type": "array",
+              "maxItems": 50,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/gateway_model_id"
+              }
+            },
+            "dataClassificationCeiling": {
+              "description": "Highest repository data classification (WS-09 vocabulary) whose code may be sent to the models in allow. Router/risk rules refuse jobs above it.",
+              "type": "string",
+              "enum": [
+                "public",
+                "internal",
+                "confidential",
+                "restricted"
+              ]
+            }
+          }
+        },
+        "workerLlm": {
+          "description": "Budget for in-worker LLM calls (router, triage, extraction) charged to the job.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxUsdPerJob": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100
+            }
+          }
+        },
+        "embeddings": {
+          "description": "Embedding spend through the gateway (R2-057). memory-service calls the gateway's embeddings route as a service caller with purpose=embedding; the shim enforces perTenantDayUsd per tenant per UTC day and the backfill job enforces reembedBackfillUsdMax per re-embedding run (and the shim enforces it as a pipeline counter when the job passes X-Replicant-Pipeline-Id).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "perTenantDayUsd",
+            "reembedBackfillUsdMax"
+          ],
+          "properties": {
+            "perTenantDayUsd": {
+              "$ref": "#/$defs/usd"
+            },
+            "reembedBackfillUsdMax": {
+              "$ref": "#/$defs/usd"
+            },
+            "models": {
+              "description": "Allowed embedding model IDs (gateway model IDs).",
+              "type": "array",
+              "maxItems": 5,
+              "items": {
+                "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/gateway_model_id"
+              }
+            }
+          }
+        },
+        "prLifetimeUsd": {
+          "description": "Ceiling on cumulative spend (LLM + worker LLM + compute) across all jobs on one pull request, read by control-plane-api intake from cost.v_pr_spend before starting another job on that PR (XD-FIX-R2-059, R1V-116). Tenant layers may only lower it. Default 300.",
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 100000,
+          "default": 300
+        }
+      }
+    }
+  },
+  "$defs": {
+    "usd": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 5000
+    },
+    "roleBudgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "planner": {
+          "$ref": "#/$defs/usd"
+        },
+        "implementer": {
+          "$ref": "#/$defs/usd"
+        },
+        "repair": {
+          "$ref": "#/$defs/usd"
+        },
+        "reviewer": {
+          "$ref": "#/$defs/usd"
+        },
+        "qa": {
+          "$ref": "#/$defs/usd"
+        },
+        "takeover": {
+          "$ref": "#/$defs/usd"
+        },
+        "eval": {
+          "$ref": "#/$defs/usd"
+        }
+      }
+    },
+    "budgetSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jobBaseUsd",
+        "runUsdByRole",
+        "softLimitFraction",
+        "jobHardCapUsd"
+      ],
+      "properties": {
+        "runUsdByRole": {
+          "$ref": "#/$defs/roleBudgets"
+        },
+        "softLimitFraction": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 0.99
+        },
+        "repairCycleUsd": {
+          "description": "Additional budget granted to each PR repair cycle (D-15), on top of what remains.",
+          "$ref": "#/$defs/usd"
+        },
+        "reservePerRunUsd": {
+          "description": "Amount held back from the job budget for each still-unstarted mandatory node (QA, reviewer) when computing an implementer run budget, so that the implementer cannot consume the whole job budget.",
+          "$ref": "#/$defs/usd"
+        },
+        "jobBaseUsd": {
+          "description": "Base job allowance before extensions and repair-cycle grants (renamed from jobUsd, R2-060).",
+          "$ref": "#/$defs/usd"
+        },
+        "jobHardCapUsd": {
+          "description": "Absolute ceiling on total job spend including extensions and repair cycles (R2-060). Effective job cap = min(JobRequest.constraints.budget_usd_max, jobHardCapUsd, jobBaseUsd + approved extensions + cycles × repairCycleUsd).",
+          "$ref": "#/$defs/usd"
+        }
+      }
+    },
+    "budgetOverride": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "runUsdByRole": {
+          "$ref": "#/$defs/roleBudgets"
+        },
+        "softLimitFraction": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 0.99
+        },
+        "repairCycleUsd": {
+          "$ref": "#/$defs/usd"
+        },
+        "reservePerRunUsd": {
+          "$ref": "#/$defs/usd"
+        },
+        "jobBaseUsd": {
+          "$ref": "#/$defs/usd",
+          "description": "Override of jobBaseUsd."
+        },
+        "jobHardCapUsd": {
+          "description": "Absolute ceiling on total job spend including extensions and repair cycles (R2-060). Effective job cap = min(JobRequest.constraints.budget_usd_max, jobHardCapUsd, jobBaseUsd + approved extensions + cycles × repairCycleUsd).",
+          "$ref": "#/$defs/usd"
+        }
+      }
+    }
+  }
+}

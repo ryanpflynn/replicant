@@ -1,0 +1,55 @@
+# WS-09 baseline for every sandbox pod in every sbx-<tenant> namespace (exec cluster).
+# Cilium >= 1.18 (enableDefaultDeny); validated against Cilium 1.20.x semantics [verified: https://docs.cilium.io/en/stable/security/dns/, 2026-10-24].
+# Deny rules take precedence over allow rules in Cilium, so nothing a per-run policy adds can re-open these paths.
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: sbx-baseline-deny
+  annotations:
+    replicant.example.com/owner: WS-09
+    replicant.example.com/contract: C-CRD child object policy (ar-<body>-egress adds allows)
+spec:
+  description: >-
+    Sandbox pods: default-deny both directions; hard-deny instance metadata, the EKS Pod Identity
+    agent, the Kubernetes API, node host network, other nodes, and every other cluster endpoint.
+  endpointSelector:
+    matchLabels:
+      io.cilium.k8s.namespace.labels.replicant.example.com/zone: sandbox
+  enableDefaultDeny:
+    egress: true
+    ingress: true
+  ingressDeny:
+    - fromEntities:
+        - all
+  egressDeny:
+    - toCIDRSet:
+        - cidr: 169.254.169.254/32   # EC2 IMDS (IPv4)
+        - cidr: 169.254.170.23/32    # EKS Pod Identity agent (IPv4) [verified: https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html, 2026-10-24]
+        - cidr: 169.254.0.0/16       # all link-local
+        - cidr: fd00:ec2::254/128    # IMDS (IPv6)
+        - cidr: fd00:ec2::23/128     # Pod Identity agent (IPv6)
+        - cidr: 10.41.0.2/32         # exec VPC 10.41.0.0/16 Route 53 Resolver (XD-W2-02-02): sandboxes resolve only through kube-dns, whose DNS proxy enforces the name allowlist
+        - cidr: fd00:ec2::253/128    # Route 53 Resolver (IPv6, Nitro), in case IPv6 is enabled
+        # NOTE: do not deny the VPC CIDR wholesale. Deny beats allow in Cilium, and the allowed internal
+        # NLBs / VPC endpoints live in the VPC. Default-deny plus explicit allows covers the rest.
+    - toEntities:
+        - kube-apiserver
+        - host
+        - remote-node
+        - health
+        - ingress
+---
+# Cross-tenant isolation at L3/L4 independent of per-run policies: a sandbox may never talk to any
+# endpoint in any sbx-* namespace (including its own namespace's other runs).
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: sbx-no-east-west
+spec:
+  endpointSelector:
+    matchLabels:
+      io.cilium.k8s.namespace.labels.replicant.example.com/zone: sandbox
+  egressDeny:
+    - toEndpoints:
+        - matchLabels:
+            io.cilium.k8s.namespace.labels.replicant.example.com/zone: sandbox

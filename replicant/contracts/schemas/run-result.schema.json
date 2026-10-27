@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/contracts/run-result/v1.json",
+  "title": "Run result envelope",
+  "description": "Contract C-RUNNER v3.0.0 (WS-00) companion. Written by the sandbox entrypoint (WS-03) to <artifacts prefix>run_result/result.json before exit 0. The envelope is fixed here; 'role_result' is owned per role: implementer/repair/planner/reviewer by WS-03, qa by WS-05 (QA result schema). Exit 0 without a valid result => AgentResultMissing/AgentResultInvalid.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "run_id",
+    "job_id",
+    "role",
+    "outcome",
+    "summary",
+    "usage",
+    "outputs"
+  ],
+  "properties": {
+    "schema": {
+      "const": "replicant.run-result/v1"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^run_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "job_id": {
+      "type": "string",
+      "pattern": "^job_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "planner",
+        "implementer",
+        "qa",
+        "reviewer",
+        "repair",
+        "takeover",
+        "eval"
+      ]
+    },
+    "outcome": {
+      "description": "Task-level outcome (distinct from AgentRun phase). completed: role goal met. no_changes: nothing to change (with reason). blocked: agent could not proceed and needs a human (clarification). failed: agent tried and failed (e.g. tests still failing).",
+      "type": "string",
+      "enum": [
+        "completed",
+        "no_changes",
+        "blocked",
+        "failed"
+      ]
+    },
+    "summary": {
+      "description": "Agent-written summary. Untrusted model output: rendered as text, never interpolated into prompts of other roles without the context assembler's quoting.",
+      "type": "string",
+      "maxLength": 8000
+    },
+    "outputs": {
+      "description": "Keys of produced artifacts (bucket-relative), by well-known output name.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "diff_bundle": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "handoff": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "plan": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "qa_report": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "review_report": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "session_state": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "workspace_archive": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "memory_candidates": {
+          "type": "string",
+          "maxLength": 1024
+        }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "wall_seconds"
+      ],
+      "properties": {
+        "wall_seconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "model_calls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_read_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_write_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cost_usd_reported": {
+          "description": "As reported by the CLI or gateway headers. The cost ledger (usage-ingestor) is authoritative.",
+          "type": "number",
+          "minimum": 0
+        },
+        "peak_memory_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "peak_workspace_bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "memory_entries_used": {
+      "description": "Pinned memory refs that were injected into this run (from the inputs manifest), for blast-radius queries.",
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "string",
+        "pattern": "^mem_[0-9a-hjkmnp-tv-z]{26}@[1-9][0-9]*$"
+      }
+    },
+    "steering_consumed": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "string",
+        "pattern": "^msg_[0-9a-hjkmnp-tv-z]{26}$"
+      }
+    },
+    "role_result": {
+      "description": "Role-specific structured result; schema id in role_result.schema.",
+      "type": "object",
+      "required": [
+        "schema"
+      ],
+      "properties": {
+        "schema": {
+          "type": "string",
+          "pattern": "^replicant\\.role-result\\.[a-z_]+/v[0-9]+$"
+        }
+      }
+    }
+  }
+}

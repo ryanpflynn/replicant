@@ -1,0 +1,20 @@
+# Overflow workspace volumes (fixedSizeVolume). Generic ephemeral volumes only; no VolumeSnapshotClass
+# exists in the exec cluster (workspace-storage.md section 6).
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: replicant-workspace-gp3
+  labels: {app.kubernetes.io/part-of: replicant-exec}
+provisioner: ebs.csi.aws.com
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: false
+parameters:
+  type: gp3
+  iops: "12000"
+  throughput: "750"
+  csi.storage.k8s.io/fstype: xfs
+  encrypted: "true"
+  kmsKeyId: arn:aws:kms:us-east-1:222222222222:alias/replicant/prod/exec-ebs
+  tagSpecification_1: "replicant-purpose=workspace"
+  tagSpecification_2: "replicant-cluster=fct-prod-exec"

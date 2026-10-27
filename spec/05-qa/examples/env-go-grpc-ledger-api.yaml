@@ -1,0 +1,331 @@
+# EnvironmentDefinition: Go 1.25 gRPC service with Postgres and Kafka sidecars (WS-05 example).
+# Non-QA fields follow WS-03's kind schema (spec/03-agents-and-tools/schemas/environment-definition.schema.json);
+# spec.qa follows WS-05's replicant.env-qa/v1 (spec/05-qa/schemas/qa-config.schema.json).
+# Validated by spec/05-qa/tools/validate_examples.py against both. Image digests are illustrative.
+apiVersion: replicant.example.com/v1
+kind: EnvironmentDefinition
+metadata:
+  name: go-grpc-ledger
+  scope:
+    level: tenant
+    tenant_id: payments
+  owners:
+    - payments-platform
+  description: Go 1.25 gRPC services in acme-payments that use Postgres and Kafka (ledger-api, refunds-api).
+  labels:
+    replicant.codebase-type: go_service
+spec:
+  codebaseType: go_service
+  image:
+    build:
+      base: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/base-go@sha256:581bacd7bb765d1c38668740687ffd7e03554e3db03a87ffa10af6f062b418b8
+      platform: linux/amd64
+      packages:
+        apt: [postgresql-client, kcat, jq, zstd]
+        goInstall:
+          - gotest.tools/gotestsum@v1.13.0
+          - github.com/fullstorydev/grpcurl/cmd/grpcurl@v1.9.3
+      steps:
+        - name: qa-tools-check
+          run: gotestsum --version && grpcurl -version && pg_isready --version && kcat -V
+          workingDir: /tmp
+    resolved:
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/env-go-grpc-ledger@sha256:f87fc92356d784988038202520f3fbb9a1c92d03a8903da31c3bb455d1c1fe48
+      buildSpecDigest: sha256:373d35d8b05e1a3fb7d6c2056080a1b1f4bb4130463e3d986d833e1832bd4b3a
+      builtAt: '2026-10-22T09:14:03Z'
+  repo:
+    fetchDepth: 50
+  env:
+    GOFLAGS: -mod=readonly
+    CGO_ENABLED: '0'
+  packageMirrors: [goproxy, oci]
+  bootstrap:
+    forRoles: [implementer, repair, reviewer]   # not qa: the QA harness runs these itself (lint L15)
+    steps:
+      - name: go-mod-download
+        run: go mod download && go mod verify
+        timeoutSeconds: 600
+  caches:
+    - name: go-mod
+      path: /workspace/.cache/go-mod
+      kind: workspace
+      env: GOMODCACHE
+    - name: go-build
+      path: /workspace/.cache/go-build
+      kind: workspace
+      env: GOCACHE
+  services:
+    - name: postgres
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/svc-postgres@sha256:7cf3db853f6e121ab0a65e30deea9ed273833fba95e4f49a2cb9cdf2360d880c
+      command: [docker-entrypoint.sh]
+      args: [postgres, -c, listen_addresses=127.0.0.1, -c, fsync=off, -c, synchronous_commit=off, -c, full_page_writes=off,
+             -c, shared_buffers=128MB, -c, max_connections=60, -c, max_wal_size=512MB]
+      env:
+        POSTGRES_USER: ledger
+        POSTGRES_PASSWORD: qa-local-only
+        POSTGRES_DB: ledger
+      data: {env: PGDATA, subdir: pgdata, sizeEstimate: 3Gi}   # XD-FIX-R1-074: the controller sets PGDATA under /workspace/.services/<name>
+      ports:
+        - {name: pg, port: 5432}
+      readiness:
+        exec: [pg_isready, -h, 127.0.0.1, -p, '5432', -U, ledger, -d, ledger]
+        periodSeconds: 1
+        failureThreshold: 60
+      resources:
+        requests: {cpu: 500m, memory: 512Mi, ephemeralStorage: 256Mi}
+        limits: {cpu: '1', memory: 1Gi, ephemeralStorage: 1Gi}
+      forRoles: [qa, implementer, repair]
+      seed:
+        name: migrate
+        run: go run ./cmd/migrate up
+        timeoutSeconds: 180
+    - name: kafka
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/svc-kafka@sha256:71f49e81f00688af741c33c41add17781e66fb8e9d8a7753713f1912d83dea4f
+      command: [/etc/kafka/docker/run]
+      env:
+        KAFKA_NODE_ID: '1'
+        KAFKA_PROCESS_ROLES: broker,controller
+        KAFKA_LISTENERS: PLAINTEXT://127.0.0.1:9092,CONTROLLER://127.0.0.1:9093
+        KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://127.0.0.1:9092
+        KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+        KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+        KAFKA_CONTROLLER_QUORUM_VOTERS: 1@127.0.0.1:9093
+        KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: '1'
+        KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: '1'
+        KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: '1'
+        KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: '0'
+        KAFKA_NUM_PARTITIONS: '3'
+        KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
+        KAFKA_LOG_RETENTION_BYTES: '268435456'
+        KAFKA_LOG_SEGMENT_BYTES: '67108864'
+        KAFKA_HEAP_OPTS: -Xms768m -Xmx768m
+      data: {env: KAFKA_LOG_DIRS, sizeEstimate: 2Gi}   # XD-FIX-R1-074: the controller sets KAFKA_LOG_DIRS under /workspace/.services/<name>
+      ports:
+        - {name: broker, port: 9092}
+        - {name: controller, port: 9093}
+      readiness:
+        tcpPort: 9092
+        periodSeconds: 2
+        failureThreshold: 60
+      resources:
+        requests: {cpu: 500m, memory: 1Gi, ephemeralStorage: 256Mi}
+        limits: {cpu: 1500m, memory: 1536Mi, ephemeralStorage: 1Gi}
+      forRoles: [qa]
+  resourceProfiles:
+    default:
+      requests: {cpu: '4', memory: 12Gi, ephemeralStorage: 30Gi}
+      limits: {cpu: '6', memory: 16Gi, ephemeralStorage: 40Gi}   # A-8: sizeLimit <= ephemeralStorage; controller adds H+F+O (XD-FIX-R1-036)
+      workspace:
+        sizeLimit: 40Gi
+        overflow: {policy: local_only}
+      derivation:
+        method: provisional
+        reason: First 30-run baseline for go_service implementer/repair under replicant-kata-clh is scheduled (WS-03 environment-definition.md section 5.2).
+        expiresAt: '2027-01-31T00:00:00Z'
+    qa:
+      # Agent container only (WS-03): harness, go test -race, go build, buildctl client, app under test.
+      # Services, stubs, builder, agentd and WS-02 sidecars add their own requests (pod total in dependencies.md section 7).
+      requests: {cpu: '3', memory: 6Gi, ephemeralStorage: 26Gi}
+      limits: {cpu: '6', memory: 10Gi, ephemeralStorage: 40Gi}   # A-8: sizeLimit <= ephemeralStorage; controller adds H+F+O (XD-FIX-R1-036)
+      workspace:
+        sizeLimit: 40Gi
+        overflow: {policy: local_only}
+      derivation:
+        method: provisional
+        reason: Planning values from the WS-05 disk and memory budget (dependencies.md section 7) until the qa baseline runs.
+        expiresAt: '2027-01-31T00:00:00Z'
+  profileByRole:
+    implementer: default
+    repair: default
+    reviewer: default
+    qa: qa
+  isolationHint:
+    coding: kata-clh
+    qa_build: kata-clh
+    review: kata-clh
+  networkProfile:
+    coding: coding-default
+    qa_build: qa-with-mirror
+    review: review-readonly
+  outputs:
+    maxOutputBytes: 2147483648
+  qa:
+    schema: replicant.env-qa/v1
+    enabled: true
+    appKind: server
+    privacy:
+      realData: false
+      traceDomSnapshots: false
+    timeouts:
+      totalSeconds: 2700
+      reserveSeconds: 180
+      startupSeconds: 300
+      finalizeSeconds: 600
+    env:
+      DATABASE_URL: postgres://ledger:qa-local-only@127.0.0.1:5432/ledger?sslmode=disable
+      KAFKA_BROKERS: 127.0.0.1:9092
+      FX_RATES_ADDR: 127.0.0.1:4770
+    steps:
+      useBootstrap: true
+      unit:
+        - id: go_unit
+          run: >-
+            gotestsum --format=standard-quiet --junitfile /workspace/.qa/out/go_unit.xml
+            --jsonfile /workspace/.qa/out/go_unit.json -- -race -count=1 -shuffle=on ./...
+          timeoutSeconds: 1200
+          report: {format: junit, path: /workspace/.qa/out/go_unit.xml}
+          listCommand: go test -list '.*' ./...
+          rerun:
+            command: gotestsum --format=standard-quiet --junitfile /workspace/.qa/out/go_unit_rerun.xml -- -race -count=1 {tests}
+            selectorStyle: go-run-regex
+      integration:
+        - id: go_integration
+          run: >-
+            gotestsum --format=standard-quiet --junitfile /workspace/.qa/out/go_integration.xml --
+            -tags=integration -count=1 -p 1 ./internal/...
+          timeoutSeconds: 1200
+          report: {format: junit, path: /workspace/.qa/out/go_integration.xml}
+          listCommand: go test -tags=integration -list '.*' ./internal/...
+          rerun:
+            command: gotestsum --format=standard-quiet --junitfile /workspace/.qa/out/go_integration_rerun.xml -- -tags=integration -count=1 -p 1 {tests}
+            selectorStyle: go-run-regex
+      build:
+        - id: go_build
+          run: go build -trimpath -o bin/ledger-api ./cmd/ledger-api
+          timeoutSeconds: 600
+        - id: go_vet
+          run: go vet ./...
+          required: false
+          alsoOnBase: false
+    imageBuild:
+      enabled: true
+      builder: buildkit
+      builderImage: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/buildkit-rootless@sha256:df8732b47bae0d6c302fff4f034dc390145c00a7fde7b568698c3414a909de90
+      builderResources:
+        requests: {cpu: '1', memory: 1Gi, ephemeralStorage: 256Mi}
+        limits: {cpu: '4', memory: 4Gi, ephemeralStorage: 1Gi}
+      context: .
+      dockerfile: deploy/Dockerfile
+      target: runtime
+      platform: linux/amd64
+      sbom: true
+      secretScan: true
+      timeoutSeconds: 900
+      cacheBudget: 6Gi
+    serviceOptions:
+      - name: postgres
+        wrapLogs: true
+        readinessTimeoutSeconds: 60
+        resetBetweenPasses: command
+        resetCommand: >-
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'
+          && go run ./cmd/migrate up
+      - name: kafka
+        wrapLogs: true
+        readinessTimeoutSeconds: 120
+    stubs:
+      - name: fx-rates
+        kind: grpc
+        server: gripmock
+        image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/qa-stub-gripmock@sha256:85cb12953e4fe406e300e9a8b0eee39c15f57d5901e8dd91758fc0436861e52d
+        contract:
+          service: fx-rates
+          name: acme.fx.v1
+          version: deployed_prod
+        port: 4770
+        fixtures: testdata/qa/stubs/fx-rates
+        mode: static
+        resources:
+          requests: {cpu: 100m, memory: 64Mi, ephemeralStorage: 64Mi}
+          limits: {cpu: 250m, memory: 128Mi, ephemeralStorage: 256Mi}
+    seed:
+      - id: kafka_ready
+        run: kcat -b 127.0.0.1:9092 -L -m 5 >/dev/null
+        timeoutSeconds: 60
+      - id: topics
+        run: >-
+          for t in ledger.entries.v1 refunds.events.v1; do
+          go run ./tools/kafkatopics ensure --brokers 127.0.0.1:9092 --topic "$t" --partitions 3; done
+        timeoutSeconds: 120
+      - id: fixtures
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f testdata/qa/seed.sql
+        fixtures: [testdata/qa/seed.sql]
+    contractCompat:
+      enabled: true
+      blockOnBreaking: true
+    app:
+      start:
+        mode: process
+        command: ./bin/ledger-api --config deploy/qa.yaml
+        ports: [9090, 8081]
+        env:
+          LEDGER_GRPC_ADDR: 127.0.0.1:9090
+          LEDGER_ADMIN_ADDR: 127.0.0.1:8081
+          LOG_FORMAT: json
+      health:
+        startupTimeoutSeconds: 90
+        readiness:
+          - name: grpc_health
+            probe: {type: grpc, port: 9090, grpcService: '', intervalSeconds: 1}
+          - name: readyz
+            probe: {type: http, port: 8081, path: /readyz, expectStatus: [200]}
+          - name: kafka_consumer_started
+            probe: {type: log, logPattern: '"msg":"consumer group joined".*"topic":"refunds\.events\.v1"'}
+        stability:
+          windowSeconds: 30
+          probeIntervalSeconds: 5
+          maxRestarts: 0
+          maxRssGrowthPercent: 50
+        failurePatterns:
+          - pattern: '^panic: '
+          - pattern: 'WARNING: DATA RACE'
+          - pattern: '"level":"(fatal|dpanic)"'
+          - pattern: '"level":"error"'
+            severity: warn
+            ignoreBefore: ready
+        smoke:
+          - name: get_balance
+            type: grpc
+            grpc:
+              port: 9090
+              method: acme.ledger.v1.LedgerService/GetBalance
+              requestJson: '{"account_id":"acct_qa_eur_001"}'
+              expectCode: OK
+              expectJson:
+                - {jsonPath: '$.balance.currency', equals: EUR}
+                - {jsonPath: '$.balance.units', exists: true}
+              maxLatencyMs: 500
+          - name: apply_partial_refund
+            type: grpc
+            grpc:
+              port: 9090
+              method: acme.ledger.v1.LedgerService/ApplyRefund
+              requestJson: '{"payment_id":"pay_qa_eur_100","refund_id":"rf_qa_001","amount":{"currency":"EUR","units":"40"}}'
+              expectCode: OK
+              expectJson:
+                - {jsonPath: '$.entries[?(@.kind=="fx_fee_reversal")]', minLength: 1}
+          - name: metrics_exposed
+            type: http
+            http: {method: GET, port: 8081, path: /metrics, expectStatus: [200]}
+      stop: {signal: SIGTERM, graceSeconds: 20, expectCleanExit: true}
+    flake:
+      changeReruns: 2
+      baseReruns: 3
+      maxFailedTestsForReruns: 25
+      newFlakeBlocks: true
+      quarantine:
+        - testId: go:github.com/acme-payments/ledger-api/internal/outbox.TestPublisherReconnect
+          owner: payments-platform
+          issue: https://github.com/acme-payments/ledger-api/issues/1388
+          expires: '2026-12-31'
+    agent:
+      enabled: true
+      tasks: [diagnose_failures]
+      maxCostUsd: 3
+      maxWallSeconds: 420
+    variants:
+      hotfix:
+        skip: [imageBuild, agent]
+        totalSeconds: 1800
+      maintenance:
+        skip: [agent]

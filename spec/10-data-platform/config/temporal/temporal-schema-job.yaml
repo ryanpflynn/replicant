@@ -1,0 +1,88 @@
+# WS-10 · Temporal persistence schema Job (D-26: Temporal's DB migrated by its own tooling,
+# automatically, in the same deploy flow). Argo CD PreSync hook of the `temporal` Application:
+# runs before any Temporal server pod is updated. Temporal requires the schema to be upgraded
+# BEFORE the server ("Before initiating the Temporal Server upgrade ... update your database
+# schema") and servers to move one minor version at a time
+# [verified: https://docs.temporal.io/self-hosted-guide/upgrade-server, 2026-10-24].
+#
+# Schema versions shipped with server v1.32.1: temporal 1.19, visibility 1.14
+# [verified: https://raw.githubusercontent.com/temporalio/temporal/v1.32.1/schema/postgresql/v12/version.go, 2026-10-24].
+# temporal-sql-tool flags verified against tools/sql/main.go at v1.32.1 (same date).
+# Validated: YAML parse + kubeconform (Kubernetes 1.36 schemas), 2026-10-24.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: temporal-schema
+  namespace: temporal
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 1800
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: temporal-schema    # Pod Identity -> role replicant-prod-temporal-schema (rds-db:connect as temporal_admin)
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # IAM token (15 min validity, checked at connect) written to a memory-backed volume. The
+        # schema run below connects within seconds.
+        - name: iam-token
+          image: public.ecr.aws/aws-cli/aws-cli@sha256:9a1e6b4c3d2f0e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a
+          command: ["/bin/sh", "-ec"]
+          args:
+            - >-
+              aws rds generate-db-auth-token
+              --hostname "$DB_HOST" --port 5432 --username temporal_admin --region us-east-1
+              > /creds/token
+          env:
+            - name: DB_HOST
+              value: temporal-prod.cluster-h2kq8vmc1ytr.us-east-1.rds.amazonaws.com
+          volumeMounts:
+            - {name: creds, mountPath: /creds}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+      containers:
+        - name: schema
+          image: temporalio/admin-tools@sha256:0d7e3c1b2a9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f4e3d   # 1.32.1
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              export SQL_PASSWORD="$(cat /creds/token)"
+              COMMON="--plugin postgres12_pgx --endpoint $DB_HOST --port 5432 --user temporal_admin --tls --tls-ca-file /etc/ssl/rds/global-bundle.pem --tls-server-name $DB_HOST"
+              for DB in temporal temporal_visibility; do
+                temporal-sql-tool $COMMON --database "$DB" create-database --defaultdb postgres || true   # idempotent: exists
+              done
+              # setup-schema -v 0.0 creates the version table on an empty DB; on an initialized DB
+              # the version check makes it a no-op, then update-schema applies pending versions.
+              temporal-sql-tool $COMMON --database temporal setup-schema -v 0.0
+              temporal-sql-tool $COMMON --database temporal update-schema \
+                --schema-dir /etc/temporal/schema/postgresql/v12/temporal/versioned
+              temporal-sql-tool $COMMON --database temporal_visibility setup-schema -v 0.0
+              temporal-sql-tool $COMMON --database temporal_visibility update-schema \
+                --schema-dir /etc/temporal/schema/postgresql/v12/visibility/versioned
+              # Runtime grants come from ALTER DEFAULT PRIVILEGES set at bootstrap (ddl/30-temporal-langfuse-bootstrap.sql),
+              # so every table temporal_admin creates is usable by temporal_server with DML only.
+          env:
+            - name: DB_HOST
+              value: temporal-prod.cluster-h2kq8vmc1ytr.us-east-1.rds.amazonaws.com
+          volumeMounts:
+            - {name: creds, mountPath: /creds, readOnly: true}
+            - {name: rds-ca, mountPath: /etc/ssl/rds, readOnly: true}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+      volumes:
+        - name: creds
+          emptyDir: {medium: Memory, sizeLimit: 1Mi}
+        - name: rds-ca
+          configMap:
+            name: rds-ca-global-bundle

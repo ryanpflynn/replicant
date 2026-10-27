@@ -1,0 +1,383 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/runtime/run-inputs/v1.json",
+  "title": "Run inputs manifest (artifact type run_inputs)",
+  "description": "Owner: WS-03 (schema). SINGLE WRITER: the replicant-worker activity context.stage_inputs (WS-04, logical activity <node>.c<cycle>.n<ordinal>.stage), as C-ART section 4 names the context assembler activity as the run_inputs producer (R1-067, XD-FIX-R1-067). It writes <artifacts prefix>inputs/manifest.json once (If-None-Match: *); its sha256 is RunSpec.inputs.manifest_sha256. The manifest lists every staged input object with its digest, including exactly one `run_plan` object that WS-03's agents.build_run_plan wrote earlier at inputs/run-plan.json and returned as an entry {name, key, sha256, size_bytes}. agents.stage_inputs (effect stage_agent) writes no inputs objects and never writes the manifest; it only registers the gateway run policy. The manifest is the ONLY configuration source of the sandbox entrypoint (C-DEF section 6). Size cap 1 MiB.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "tenant_id",
+    "job_id",
+    "run_id",
+    "role",
+    "release_bundle_id",
+    "created_at",
+    "agent_definition",
+    "environment_definition",
+    "objects"
+  ],
+  "properties": {
+    "schema": {
+      "const": "replicant.run-inputs/v1"
+    },
+    "tenant_id": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/tenant_id"
+    },
+    "job_id": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/job_id"
+    },
+    "run_id": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/run_id"
+    },
+    "role": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/run_role"
+    },
+    "release_bundle_id": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/release_bundle_id"
+    },
+    "created_at": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/timestamp"
+    },
+    "agent_definition": {
+      "$ref": "#/$defs/pinned"
+    },
+    "environment_definition": {
+      "$ref": "#/$defs/pinned"
+    },
+    "memory_snapshot_id": {
+      "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/memory_snapshot_id"
+    },
+    "memory_entries": {
+      "description": "Pinned memory refs injected into this run; copied by the entrypoint to run_result.memory_entries_used and handoff mechanical.memory_injected.",
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/memory_entry_ref"
+      }
+    },
+    "objects": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "$ref": "#/$defs/object"
+      },
+      "allOf": [
+        {
+          "contains": {
+            "properties": {
+              "place": {
+                "const": "run_plan"
+              }
+            },
+            "required": [
+              "place"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "place": {
+                "const": "first_message"
+              }
+            },
+            "required": [
+              "place"
+            ]
+          },
+          "minContains": 0,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "place": {
+                "const": "system_append"
+              }
+            },
+            "required": [
+              "place"
+            ]
+          },
+          "minContains": 0,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "place": {
+                "const": "restore_session"
+              }
+            },
+            "required": [
+              "place"
+            ]
+          },
+          "minContains": 0,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "place": {
+                "const": "system_append_memory"
+              }
+            },
+            "required": [
+              "place"
+            ]
+          },
+          "minContains": 0,
+          "maxContains": 1
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "pinned": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "digest"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/definition_name"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "digest": {
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/digest"
+        }
+      }
+    },
+    "object": {
+      "description": "A staged input. key is bucket-relative under the run's own inputs/ prefix in the given bucket class (C-RUNNER: runs read only their own inputs/).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "type",
+        "bucket_class",
+        "key",
+        "sha256",
+        "size_bytes",
+        "content_type",
+        "place"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,40}$"
+        },
+        "type": {
+          "description": "Registered artifact type (C-ART section 4). `agent_prompt` is requested by CCR-03-06 (until accepted, the two prompt files are typed `task_packet`).",
+          "type": "string",
+          "enum": [
+            "run_inputs",
+            "agent_prompt",
+            "task_packet",
+            "briefing",
+            "memory_injection",
+            "handoff",
+            "plan",
+            "diff_bundle",
+            "cli_session_state",
+            "steering_message",
+            "review_report",
+            "qa_report",
+            "intake_attachment"
+          ]
+        },
+        "bucket_class": {
+          "type": "string",
+          "enum": [
+            "artifacts",
+            "session"
+          ]
+        },
+        "key": {
+          "type": "string",
+          "maxLength": 1024,
+          "pattern": "^tenants/[a-z][a-z0-9-]{1,30}[a-z0-9]/jobs/job_[0-9a-hjkmnp-tv-z]{26}/runs/run_[0-9a-hjkmnp-tv-z]{26}/inputs/[A-Za-z0-9][A-Za-z0-9._/-]{0,500}$"
+        },
+        "sha256": {
+          "$ref": "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/sha256_hex"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "content_type": {
+          "type": "string",
+          "maxLength": 127
+        },
+        "content_encoding": {
+          "type": "string",
+          "enum": [
+            "identity",
+            "zstd",
+            "gzip"
+          ]
+        },
+        "place": {
+          "description": "What the entrypoint does with the object. run_plan: the replicant.run-plan/v1 document written by agents.build_run_plan (exactly one per manifest). system_append: role prompt + constraints, no memory text (staged by context.stage_inputs) → /replicant/inputs/system-append.md. system_append_memory: the memory block (type memory_injection, replicant.memory-injection/v1) → /replicant/inputs/memory-injection.json, the only staged copy of memory text (purgeable); the entrypoint joins system-append.md + \"\\n\\n\" + its .rendered on tmpfs (/run/replicant/prompt/system-append.md), never uploaded (XD-W2-04-01). first_message: composed first user turn (task, handoff, reviewer feedback, steering backlog) → /replicant/inputs/first-message.md. context_file: /replicant/inputs/context/<path> (read-only to the agent). qa_file: /replicant/inputs/qa/<path> (QA contracts, plan acceptance; WS-05). apply_diff: git apply --binary --index onto base_sha (DiffApplyFailed on conflict). restore_session: unpack into the CLI session directory after the session-resume rule SR-1 checks (cli-invocation.md section 2.8). none: verified only.",
+          "type": "string",
+          "enum": [
+            "run_plan",
+            "system_append",
+            "system_append_memory",
+            "first_message",
+            "context_file",
+            "qa_file",
+            "apply_diff",
+            "restore_session",
+            "none"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 200,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}(/[A-Za-z0-9][A-Za-z0-9._-]{0,99}){0,3}$"
+        },
+        "session": {
+          "description": "Required when place=restore_session: the capture's replicant-session.json header as staged (the entrypoint re-reads the header inside the tar and requires equality).",
+          "$ref": "https://schemas.replicant.example.com/runtime/run-plan/v1.json#/$defs/session_header"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "place": {
+                "enum": [
+                  "context_file",
+                  "qa_file"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "path"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "place": {
+                "const": "restore_session"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "session"
+            ],
+            "properties": {
+              "type": {
+                "const": "cli_session_state"
+              },
+              "bucket_class": {
+                "const": "session"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "place": {
+                "const": "apply_diff"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "type": {
+                "const": "diff_bundle"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "place": {
+                "const": "run_plan"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "type": {
+                "const": "run_inputs"
+              },
+              "name": {
+                "const": "run_plan"
+              },
+              "content_type": {
+                "const": "application/json"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "place": {
+                "enum": [
+                  "system_append",
+                  "first_message"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "agent_prompt",
+                  "task_packet"
+                ]
+              },
+              "content_type": {
+                "const": "text/markdown"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "place": {
+                "const": "system_append_memory"
+              }
+            },
+            "required": [
+              "place"
+            ]
+          },
+          "then": {
+            "properties": {
+              "type": {
+                "const": "memory_injection"
+              },
+              "content_type": {
+                "const": "application/json"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

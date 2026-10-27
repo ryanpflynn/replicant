@@ -1,0 +1,59 @@
+# Policy budgets (global base). Tenant layers may only tighten it (ADR-013 tightening check).
+apiVersion: replicant.example.com/v1
+kind: Policy
+metadata:
+  name: budgets
+  scope:
+    level: global
+  owners:
+    - replicant-platform
+    - finops
+  description: Default per-job and per-role run budgets, extension gate, and model allowlist.
+spec:
+  policyType: budgets
+  prLifetimeUsd: 300          # per-PR cumulative ceiling, checked at intake against cost.v_pr_spend (R2-059)
+  defaults:
+    jobBaseUsd: 40
+    jobHardCapUsd: 120
+    runUsdByRole:
+      planner: 4
+      implementer: 25
+      repair: 12
+      reviewer: 8
+      qa: 3
+      takeover: 1
+    softLimitFraction: 0.9
+    repairCycleUsd: 15
+    reservePerRunUsd: 4
+  byWorkflowType:
+    docs:
+      jobBaseUsd: 8
+      runUsdByRole:
+        implementer: 5
+    hotfix:
+      jobBaseUsd: 60
+    maintenance:
+      jobBaseUsd: 15
+      runUsdByRole:
+        implementer: 10
+  extension:
+    enabled: true
+    maxExtensionsPerJob: 2
+    requesterSelfApproveMaxUsd: 0
+    maxIncreaseFraction: 0.5
+    approverGroups:
+      - replicant-budget-approvers
+  gatewayAccess:
+    allow:
+      - anthropic/claude-sonnet-5-5
+      - anthropic/claude-opus-5-5
+      - anthropic/claude-haiku-5-5
+      - openai/gpt-5-codex-2025-09-15
+      - voyage/voyage-code-4
+    dataClassificationCeiling: confidential
+  embeddings:
+    perTenantDayUsd: 25
+    reembedBackfillUsdMax: 400
+    models: [voyage/voyage-code-4]
+  workerLlm:
+    maxUsdPerJob: 2

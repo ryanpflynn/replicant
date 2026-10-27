@@ -1,0 +1,57 @@
+{
+  "schema": "replicant.golden-task/v1",
+  "golden_task_id": "gtask_01m6a3y8q2v7c4n9k0r5t1w6xz",
+  "source": {
+    "kind": "historical_pr",
+    "source_tenant_id": "payments",
+    "source_repo": "github.com/acme-payments/ledger-api",
+    "source_pr_number": 1187,
+    "source_issue_url": "https://github.com/acme-payments/ledger-api/issues/1160"
+  },
+  "workflow_type": "bugfix",
+  "codebase_type": "go-service",
+  "repo": {
+    "provider": "gitea",
+    "host": "git.eval.prod.replicant.internal",
+    "owner": "golden",
+    "name": "gtask-01m6a3y8q2v7c4n9k0r5t1w6xz",
+    "base_sha": "7d3c1e9f0a2b4c6d8e0f1a3b5c7d9e1f2a4b6c8d",
+    "snapshot_key": "golden/gtask_01m6a3y8q2v7c4n9k0r5t1w6xz/repo.bundle",
+    "snapshot_sha256": "5e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f",
+    "environment": "environment/go-service"
+  },
+  "statement": {
+    "title": "Prorated refunds are off by one cent for mid-cycle cancellations",
+    "body": "Customers cancelling mid-cycle get refunds that are 1 cent lower than finance expects (example: plan 19.99/month, cancelled after 11 of 30 days, refund 12.66 but should be 12.67). Started after the November billing release."
+  },
+  "scope": {
+    "allowed_paths": ["internal/proration/**", "internal/refunds/**"],
+    "forbidden_paths": ["api/**", "migrations/**"],
+    "expected_risk_level_min": "medium",
+    "expected_gates": ["plan_approval", "publish_approval"]
+  },
+  "scoring": {
+    "checks": ["D1_terminal", "D2_diff_applies", "D3_build", "D4_visible_tests", "D5_hidden_tests", "D8_diff_size", "D9_scope", "D10_secret_scan", "D11_gates", "D12_lint", "D13_resources", "D14_test_tamper"],
+    "hidden_tests_key": "golden/gtask_01m6a3y8q2v7c4n9k0r5t1w6xz/hidden_tests.patch",
+    "fail_to_pass": ["internal/proration.TestProrateMidCycleRounding", "internal/refunds.TestRefundMatchesFinanceExamples"],
+    "pass_to_pass": ["internal/proration.TestProrateFullCycle", "internal/refunds.TestRefundZeroUsage"],
+    "test_command_ref": "go-test",
+    "reference_patch_key": "golden/gtask_01m6a3y8q2v7c4n9k0r5t1w6xz/reference.patch",
+    "reference_stats": {"files_changed": 2, "lines_changed": 23},
+    "rubrics": ["plan_quality", "diff_quality", "pr_description"]
+  },
+  "gate_script": {"plan_approval": "approve"},
+  "labels": {
+    "difficulty": "medium",
+    "language": "go",
+    "risk_tags": ["money"],
+    "verified_by": ["usr_01knk8dfr0fvjc7v0b9vhvkzbp", "usr_01knk9a2m4p6r8t0v2x4z6b8d0"],
+    "ground_truth_origin": "human_written"
+  },
+  "provenance": {
+    "created_at": "2026-10-20T14:02:11Z",
+    "created_by": "svc_eval-worker",
+    "data_classification": "confidential",
+    "tenant_consent": "aud_01m59qz0a1b2c3d4e5f6g7h8j9"
+  }
+}

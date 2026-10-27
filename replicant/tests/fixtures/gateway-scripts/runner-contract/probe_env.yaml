@@ -1,0 +1,23 @@
+# runner-local contract scenario probe_env: RC-ENV-01..04 and RC-RUN-08 (probe_env.sh, base64 so the CLI's Bash rules see one command), then the canned fix.
+schema: replicant.gateway-script/v1
+name: runner-contract-probe-env
+protocol: anthropic_messages
+finish: "Done."
+turns:
+  - respond:
+      tool_use: {name: Bash, input: {command: "echo IyEvYmluL2Jhc2gKIyBSQy1FTlYtMDEuLjA0IGFuZCBSQy1SVU4tMDggZXZpZGVuY2UsIHByaW50ZWQgYXMgS0VZPVZBTFVFIGxpbmVzIGludG8gdGhlIHJ1bidzIGhhbmRvZmYuCmVjaG8gIkVOVl9OQU1FUz0kKGVudiB8IGN1dCAtZD0gLWYxIHwgc29ydCB8IHRyICdcbicgJywnKSIKZm9yIGQgaW4gL3J1bi9mYWN0b3J5L3Rva2VuLXNlZWQgL3J1bi9mYWN0b3J5L3Rva2VucyAvdmFyL3J1bi9zZWNyZXRzL2t1YmVybmV0ZXMuaW87IGRvIFsgLWUgIiRkIiBdICYmIGVjaG8gIlBBVEhfUFJFU0VOVD0kZCIgfHwgZWNobyAiUEFUSF9BQlNFTlQ9JGQiOyBkb25lCmZvciB2IGluIEhUVFBTX1BST1hZIEhUVFBfUFJPWFkgTk9fUFJPWFkgTlBNX0NPTkZJR19SRUdJU1RSWSBHT1BST1hZIFBJUF9JTkRFWF9VUkw7IGRvIGVjaG8gIiR2PSR7IXZ9IjsgZG9uZQojIHRoZSBzYW5kYm94IGVudmlyb25tZW50IGFzIHRoZSBydW5uZXIgc2V0IGl0OiBQSUQgMSAoZmFjdG9yeS1lbnRyeXBvaW50KSBvZiB0aGUgYWdlbnQgY29udGFpbmVyOyB0aGUgQ0xJJ3MgdG9vbAojIHByb2Nlc3NlcyBzZWUgdGhlaXIgb3duIFRSQUNFUEFSRU5UICh0aGUgQ0xJJ3Mgc3BhbikKZm9yIHYgaW4gVFJBQ0VQQVJFTlQgT1RFTF9SRVNPVVJDRV9BVFRSSUJVVEVTOyBkbyBlY2hvICIkdj0kKHRyICdcMCcgJ1xuJyA8IC9wcm9jLzEvZW52aXJvbiAyPi9kZXYvbnVsbCB8IHNlZCAtbiAicy9eJHY9Ly9wIikiOyBkb25lCmVjaG8gIkFOVEhST1BJQ19BVVRIX1RPS0VOX1NFVD0ke0FOVEhST1BJQ19BVVRIX1RPS0VOOit5ZXN9IgpjZCAiJHtGQUNUT1JZX1dPUktTUEFDRV9ESVI6LS93b3Jrc3BhY2V9L3JlcG8iIDI+L2Rldi9udWxsIHx8IGNkIC93b3Jrc3BhY2UvcmVwbwplY2hvICJIRUFEPSQoZ2l0IHJldi1wYXJzZSBIRUFEKSIKdD0kKG1rdGVtcCAtZCk7IGNwIC1yIC4gIiR0L3IiICYmIGNkICIkdC9yIiAmJiBlY2hvIHByb2JlID4gLnJjLWVudi0wNCAmJiBnaXQgYWRkIC5yYy1lbnYtMDQgJiYgZ2l0IC1jIHVzZXIubmFtZT1wcm9iZSAtYyB1c2VyLmVtYWlsPXByb2JlQHggY29tbWl0IC1xIC1tIHByb2JlICYmIGVjaG8gIkdJVF9EQVRFUz0kKGdpdCBsb2cgLTEgLS1mb3JtYXQ9JyVhSXwlY0knKSI7IGNkIC87IHJtIC1yZiAiJHQiCnA9JFBQSUQKZm9yIGkgaW4gMSAyIDMgNCA1IDY7IGRvCiAgYz0kKHRyICdcMCcgJyAnIDwgL3Byb2MvJHAvY21kbGluZSAyPi9kZXYvbnVsbCkKICBjYXNlICIkYyIgaW4gKi0tc2Vzc2lvbi1pZCopIGVjaG8gIkNMSV9TRVNTSU9OPSQoZWNobyAiJGMiIHwgc2VkIC1uICdzLy4qLS1zZXNzaW9uLWlkWyA9XVwoWzAtOWEtZi1dKlwpLiovXDEvcCcpIjsgYnJlYWs7OyBlc2FjCiAgcD0kKGF3ayAne3ByaW50ICQ0fScgL3Byb2MvJHAvc3RhdCAyPi9kZXYvbnVsbCk7IFsgLW4gIiRwIiBdIHx8IGJyZWFrCmRvbmUKZWNobyAiUFJPQkVfRE9ORT0xIgo= | base64 -d > /tmp/probe-env.sh && bash /tmp/probe-env.sh > /replicant/out/handoff.md 2>&1; cat /replicant/out/handoff.md", description: "Environment probe"}}
+      usage: {input_tokens: 2000, output_tokens: 40}
+  - respond:
+      tool_use: {name: Read, input: {file_path: "${cwd}/internal/ledger/ledger.go"}}
+      usage: {input_tokens: 9000, output_tokens: 60}
+  - respond:
+      tool_use:
+        name: Edit
+        input:
+          file_path: "${cwd}/internal/ledger/ledger.go"
+          old_string: "\t\tfxReversal := c.FXFeeMinor\n"
+          new_string: "\t\tfxReversal := Prorate(c.FXFeeMinor, refundMinor, c.AmountMinor)\n"
+      usage: {input_tokens: 11000, output_tokens: 120}
+  - respond:
+      structured_output_from: implementer.agent_report.json
+      usage: {input_tokens: 12000, output_tokens: 200}

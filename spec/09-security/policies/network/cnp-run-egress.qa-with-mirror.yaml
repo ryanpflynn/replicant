@@ -1,0 +1,68 @@
+# Rendered from network profile `qa-with-mirror` (role qa, workload class qa_build).
+# Differences from coding-default: no memory-mcp, no context-mcp, no session bucket; adds the
+# container-image mirror for rootless BuildKit/buildah base images. QA dependencies (databases,
+# queues, dependent-service stubs) run inside the same pod/VM (WS-05), so they need no network policy:
+# loopback traffic never leaves the pod.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: ar-chxtsxqzcpds1fc1c4dvw9e4em-egress
+  namespace: sbx-payments
+  labels:
+    app.kubernetes.io/managed-by: agentrun-controller
+    replicant.example.com/tenant: payments
+    replicant.example.com/run-id: run_chxtsxqzcpds1fc1c4dvw9e4em
+    replicant.example.com/network-profile: qa-with-mirror
+spec:
+  endpointSelector:
+    matchLabels:
+      replicant.example.com/run-id: run_chxtsxqzcpds1fc1c4dvw9e4em
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+          rules:
+            dns:
+              - matchName: ai-gateway.prod.replicant.internal
+              - matchName: runner-sandbox.prod.replicant.internal
+              - matchName: repo-mirror.prod.replicant.internal
+              - matchName: otel-sandbox.prod.replicant.internal
+              - matchName: artifactory.acme.internal
+              - matchName: acme-replicant-prod-artifacts.s3.us-east-1.amazonaws.com
+              - matchName: acme-replicant-prod-transcripts.s3.us-east-1.amazonaws.com
+    - toFQDNs:
+        - matchName: ai-gateway.prod.replicant.internal
+        - matchName: runner-sandbox.prod.replicant.internal
+        - matchName: artifactory.acme.internal
+        - matchName: acme-replicant-prod-artifacts.s3.us-east-1.amazonaws.com
+        - matchName: acme-replicant-prod-transcripts.s3.us-east-1.amazonaws.com
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    # repo-mirror: the name resolves to the in-cluster Service (CoreDNS rewrite of repo-mirror.<env>.replicant.internal
+    # to repo-mirror.replicant-mirror.svc). Cilium enforces Service traffic after load-balancing translation, so the
+    # rule selects the backend pods and their container port, not an FQDN.
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: replicant-mirror
+            k8s:app.kubernetes.io/name: repo-mirror
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
+    # Sandbox OTLP (XD-FIX-R1-041): otel-sandbox.prod.replicant.internal is a CoreDNS rewrite to the WS-08
+    # Service alloy-sandbox-otlp; Cilium enforces Service traffic on the backend pods.
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: replicant-observability
+            k8s:app.kubernetes.io/name: alloy-sandbox-otlp
+      toPorts:
+        - ports:
+            - port: "4318"
+              protocol: TCP

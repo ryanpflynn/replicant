@@ -1,0 +1,10 @@
+# Mimir runtime overrides. Owner WS-08.
+overrides:
+  replicant:
+    ingestion_rate: 150000
+    ingestion_burst_size: 1500000
+    max_global_series_per_user: 3000000   # sized at about 3x the estimated 1 M active series (platform.md 4.4)
+    max_global_series_per_metric: 300000
+    max_global_exemplars_per_user: 200000
+    compactor_blocks_retention_period: 400d
+    max_fetched_series_per_query: 500000

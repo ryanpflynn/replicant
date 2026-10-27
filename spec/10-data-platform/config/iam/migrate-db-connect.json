@@ -1,0 +1,14 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "MigratorOnAnyReplicantClusterIncarnation",
+      "Effect": "Allow",
+      "Action": "rds-db:connect",
+      "Resource": [
+        "arn:aws:rds-db:us-east-1:111111111111:dbuser:cluster-*/replicant_migrator",
+        "arn:aws:rds-db:us-west-2:111111111111:dbuser:cluster-*/replicant_migrator"
+      ]
+    }
+  ]
+}

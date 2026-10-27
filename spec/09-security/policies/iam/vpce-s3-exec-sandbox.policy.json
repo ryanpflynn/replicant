@@ -1,0 +1,39 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "OnlyReplicantRunPrefixesByReplicantExecPrincipals",
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging",
+        "s3:AbortMultipartUpload",
+        "s3:ListMultipartUploadParts",
+        "s3:GetObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*/jobs/*/runs/*/*",
+        "arn:aws:s3:::acme-replicant-prod-transcripts/tenants/*/jobs/*/runs/*/*",
+        "arn:aws:s3:::acme-replicant-prod-session/tenants/*/jobs/*/runs/*/*"
+      ],
+      "Condition": {
+        "ArnEquals": {
+          "aws:PrincipalArn": [
+            "arn:aws:iam::222222222222:role/replicant-prod-sandbox-artifacts"
+          ]
+        },
+        "StringEquals": {
+          "s3:ResourceAccount": "111111111111"
+        }
+      }
+    },
+    {
+      "Sid": "ImagePullLayersFromEcrRegionalBucket",
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::prod-us-east-1-starport-layer-bucket/*"
+    }
+  ]
+}

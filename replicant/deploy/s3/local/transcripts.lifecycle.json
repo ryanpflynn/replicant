@@ -1,0 +1,76 @@
+{
+  "Rules": [
+    {
+      "ID": "expire-r7d",
+      "Status": "Enabled",
+      "Filter": {
+        "Tag": {
+          "Key": "replicant-retention",
+          "Value": "r7d"
+        }
+      },
+      "Expiration": {
+        "Days": 1
+      },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 1
+      }
+    },
+    {
+      "ID": "expire-r30d",
+      "Status": "Enabled",
+      "Filter": {
+        "Tag": {
+          "Key": "replicant-retention",
+          "Value": "r30d"
+        }
+      },
+      "Expiration": {
+        "Days": 3
+      },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 1
+      }
+    },
+    {
+      "ID": "expire-r90d",
+      "Status": "Enabled",
+      "Filter": {
+        "Tag": {
+          "Key": "replicant-retention",
+          "Value": "r90d"
+        }
+      },
+      "Expiration": {
+        "Days": 7
+      },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 1
+      }
+    },
+    {
+      "ID": "housekeeping",
+      "Status": "Enabled",
+      "Filter": {},
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 2
+      },
+      "Expiration": {
+        "ExpiredObjectDeleteMarker": true
+      }
+    },
+    {
+      "ID": "backstop-untagged",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": ""
+      },
+      "Expiration": {
+        "Days": 7
+      },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 1
+      }
+    }
+  ]
+}

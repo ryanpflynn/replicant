@@ -1,0 +1,350 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/kinds/policy-memory_snapshot/v1.json",
+  "title": "Policy spec: memory_snapshot",
+  "description": "WS-04 owns this kind schema (C-DEF §2, policyType memory_snapshot). Pinned in every Release Bundle as spec.memory_snapshot_policy. It is behavioral configuration (ADR-013): it decides which memory a job may receive and how much, so changes ship as a new bundle and pass the eval harness. It does NOT contain memory content; entries enter a job only through the snapshot taken at context assembly. It also carries the per-role context budget profiles used by the Context Assembler (context-budget.md), because they are behavioral and must be bundle-pinned. Global only (XD-FIX-R1-145): memory_snapshot policies are not tenant-layer-eligible; the policy-publish validator rejects a document with policyType memory_snapshot and metadata.scope.level = tenant.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "policyType",
+    "eligibility",
+    "limits",
+    "push",
+    "pull",
+    "refresh",
+    "experiments",
+    "context_budgets"
+  ],
+  "properties": {
+    "policyType": {
+      "const": "memory_snapshot"
+    },
+    "eligibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope_levels",
+        "types",
+        "min_confidence"
+      ],
+      "properties": {
+        "scope_levels": {
+          "type": "array",
+          "uniqueItems": true,
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "enum": [
+              "org",
+              "tenant",
+              "service_group",
+              "repo",
+              "path"
+            ]
+          }
+        },
+        "types": {
+          "type": "array",
+          "uniqueItems": true,
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "enum": [
+              "rule",
+              "procedure",
+              "negative",
+              "preference"
+            ]
+          }
+        },
+        "min_confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "include_probation": {
+          "type": "boolean",
+          "default": true
+        },
+        "include_auto_activated": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_snapshot_entries",
+        "max_per_scope_level"
+      ],
+      "properties": {
+        "max_snapshot_entries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2000
+        },
+        "max_per_scope_level": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "org": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "tenant": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "service_group": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "repo": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "path": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "push": {
+      "description": "Per-role injection settings. Token budgets themselves are in the context budget section (context-budget.md); this sets which sections a role receives.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "roles"
+      ],
+      "properties": {
+        "roles": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^(planner|implementer|qa|reviewer|repair)$": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "sections"
+              ],
+              "properties": {
+                "sections": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "enforced",
+                      "rule",
+                      "procedure",
+                      "negative",
+                      "preference"
+                    ]
+                  }
+                },
+                "max_entries": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 300
+                },
+                "min_relevance": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "path_filter": {
+                  "type": "string",
+                  "enum": [
+                    "touched_or_planned",
+                    "repo_wide"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "pull": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "types",
+        "max_results_per_call",
+        "max_calls_per_run"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "types": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "rule",
+              "episode",
+              "procedure",
+              "negative",
+              "preference"
+            ]
+          }
+        },
+        "episode_repo_scope": {
+          "type": "string",
+          "enum": [
+            "same_repo",
+            "service_group",
+            "tenant_visible"
+          ],
+          "default": "service_group"
+        },
+        "max_results_per_call": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        },
+        "max_calls_per_run": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 500
+        },
+        "episode_max_age_days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 730
+        }
+      }
+    },
+    "refresh": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "pinned_with_revocation",
+            "per_cycle"
+          ],
+          "description": "pinned_with_revocation (default): the initial snapshot holds for the job; later assemblies only subtract entries an admin or the safety policy took out of service. per_cycle: take a fresh snapshot at each repair cycle (eval-only)."
+        }
+      }
+    },
+    "experiments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "holdout_enabled"
+      ],
+      "properties": {
+        "holdout_enabled": {
+          "type": "boolean"
+        },
+        "probation_holdout_rate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.5
+        },
+        "never_holdout_enforced": {
+          "const": true
+        },
+        "global_holdout_rate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.1,
+          "description": "Share of jobs (deterministic by sha256('mglobal:'+job_id)) that receive an empty push set; pull stays available (memory-evals.md §2)."
+        },
+        "periodic_recheck_rate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.2
+        }
+      }
+    },
+    "context_budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile",
+        "roles"
+      ],
+      "properties": {
+        "profile": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_.-]{1,63}@[1-9][0-9]*$"
+        },
+        "roles": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^(planner|implementer|qa|reviewer|repair|takeover)$": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "working_window_cap",
+                "min_headroom_pct",
+                "sections"
+              ],
+              "properties": {
+                "working_window_cap": {
+                  "type": "integer",
+                  "minimum": 8000
+                },
+                "min_headroom_pct": {
+                  "type": "number",
+                  "minimum": 50,
+                  "maximum": 95
+                },
+                "sections": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "patternProperties": {
+                    "^(role_prompt|constraints|memory|briefing|working_memory|task|steering)$": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "pct",
+                        "cap"
+                      ],
+                      "properties": {
+                        "pct": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 50
+                        },
+                        "cap": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "overflow": {
+                          "type": "string",
+                          "enum": [
+                            "trim_by_priority",
+                            "summarize_deterministic",
+                            "move_to_file",
+                            "move_to_mcp",
+                            "fail"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "x-replicant-tenant-layer-eligible": false
+}

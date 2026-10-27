@@ -1,0 +1,107 @@
+// events.alloy - Grafana Alloy v1.21.x Deployment "alloy-events" (exactly 1 replica) in BOTH clusters. Owner WS-08.
+// Kubernetes events (pod scheduling, OOMKilled, evictions, image pulls, AgentRun events) to Loki tenant "platform"
+// with source="k8s-events". loki.source.kubernetes_events does not shard across replicas, so the Deployment must
+// stay at one replica (a restart re-lists events; Loki deduplicates identical entries).
+//
+// Required environment: REPLICANT_ENV, REPLICANT_CLUSTER, LOKI_PUSH_URL, LOKI_TLS_DIR (as node-logs.alloy).
+
+logging {
+  level  = "info"
+  format = "json"
+}
+
+loki.source.kubernetes_events "cluster" {
+  job_name   = "k8s-events"
+  log_format = "json"
+  forward_to = [loki.process.events.receiver]
+}
+
+loki.process "events" {
+  forward_to = [loki.secretfilter.events.receiver]
+
+  stage.json {
+    expressions = {
+      reason = "reason",
+      type   = "type",
+      kind   = "kind",
+      name   = "name",
+    }
+  }
+
+  // sbx-<tenant> namespaces map to that tenant; every other namespace is replicant-system.
+  stage.template {
+    source   = "tenant_value"
+    template = `{{ $ns := default "" .namespace }}{{ if hasPrefix "sbx-" $ns }}{{ trimPrefix "sbx-" $ns }}{{ else }}replicant-system{{ end }}`
+  }
+
+  stage.template {
+    source   = "level"
+    template = `{{ if eq (default "" .type) "Warning" }}warn{{ else }}info{{ end }}`
+  }
+
+  // AgentRun and Pod names in sandbox namespaces encode the run: keep the object name as metadata only.
+  stage.template {
+    source   = "agentrun"
+    template = `{{ $n := default "" .name }}{{ if regexMatch "^ar-[0-9a-hjkmnp-tv-z]{26}" $n }}{{ substr 0 29 $n }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "run_id"
+    template = `{{ if .agentrun }}{{ printf "run_%s" (trimPrefix "ar-" .agentrun) }}{{ end }}`
+  }
+
+  stage.structured_metadata {
+    values = {
+      agentrun = "",
+      run_id   = "",
+    }
+  }
+
+  stage.labels {
+    values = {
+      tenant = "tenant_value",
+      level  = "",
+    }
+  }
+
+  stage.static_labels {
+    values = {
+      env           = sys.env("REPLICANT_ENV"),
+      cluster       = sys.env("REPLICANT_CLUSTER"),
+      service       = "kubernetes",
+      source        = "k8s-events",
+      workflow_type = "none",
+      role          = "none",
+    }
+  }
+
+  stage.label_keep {
+    values = ["env", "cluster", "namespace", "service", "tenant", "workflow_type", "role", "level", "source"]
+  }
+
+  stage.tenant {
+    value = "platform"
+  }
+}
+
+// Event messages can quote container args or env (for example failed image pulls with credentials in a URL):
+// second-pass redaction like every other log path (D-21).
+loki.secretfilter "events" {
+  forward_to         = [loki.write.default.receiver]
+  gitleaks_config    = "/etc/replicant/redaction/gitleaks-replicant.toml"
+  redact_with        = "[REDACTED:$SECRET_NAME:$SECRET_HASH]"
+  origin_label       = "service"
+  processing_timeout = "250ms"
+}
+
+loki.write "default" {
+  endpoint {
+    url = sys.env("LOKI_PUSH_URL")
+
+    tls_config {
+      ca_file   = sys.env("LOKI_TLS_DIR") + "/ca.crt"
+      cert_file = sys.env("LOKI_TLS_DIR") + "/tls.crt"
+      key_file  = sys.env("LOKI_TLS_DIR") + "/tls.key"
+    }
+  }
+}

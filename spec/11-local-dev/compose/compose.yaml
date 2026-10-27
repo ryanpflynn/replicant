@@ -1,0 +1,1652 @@
+# Replicant local stack (WS-11). Lives in the monorepo at dev/compose/compose.yaml.
+# Start it with `replicant dev up` (or `make up`), never by hand-editing this file per developer.
+#
+# Profiles
+#   core           control plane, workers, Temporal, replicant Postgres, Langfuse (prompt store, ADR-11-005),
+#                  IdP stub, Gitea, Slack mock, replicant-gateway-shim (WS-03, local backends), run-grant
+#                  JWKS/revocation (run-grants), runner-local, repo-mirror, ecosystem stubs + Zoekt, egress
+#                  proxy and package mirrors
+#   s3-seaweedfs   the local S3 server (default; `replicant dev up` always adds it unless --s3 minio)
+#   observability  Grafana, Loki, Tempo, Prometheus, Alloy (Langfuse is already in core)
+#   k8s            kind cluster provisioner with the real AgentRun CRD, controller, runner-api, run-notifier
+#   ramp           a second replicant-worker deployment version (walkthrough 8)
+#   github-dev     Cloudflare quick tunnel for the dev GitHub App (walkthrough 11; ADR-07-004)
+#   chaos          toxiproxy; use with -f compose.chaos.yaml, which points clients at it (test-strategy.md §7)
+#   s3-minio       MinIO built from source, serving as `s3.replicant.localhost` instead of SeaweedFS (ADR-11-004)
+#
+# Contract versions this file targets: C-ARCH 2.0.0, C-STATE 2.0.0, C-IDS 2.0.0, C-RUNNER 3.0.0,
+# C-CRD 3.0.0, C-MSG 2.0.0, C-JOBREQ 2.0.0, C-DEF 3.0.0, C-ART 2.0.0, C-PG 2.0.0.
+#
+# Conventions
+#   * Every browser-facing service listens in-container on the same port it publishes, and carries
+#     the network alias <name>.replicant.localhost. `*.localhost` resolves to loopback in browsers, and
+#     the alias resolves to the container inside the stack, so OIDC issuers, presigned S3 URLs and
+#     Gitea clone URLs are identical inside and outside containers.
+#   * Host ports bind to 127.0.0.1 only.
+#   * Every image is pinned to an exact version. Replicant images are built from the monorepo.
+#   * No service connects to replicant Postgres except through its own svc_<service> role, and no
+#     walkthrough step opens a database connection (D-26).
+
+name: replicant
+
+x-replicant-build-args: &replicant-build-args
+  REPLICANT_BUILD_ID: ${REPLICANT_WORKER_BUILD_ID:-b20261024-000000000000}
+  REPLICANT_GIT_SHA: ${REPLICANT_GIT_SHA:-000000000000}
+
+x-common-env: &common-env
+  REPLICANT_ENV: local
+  REPLICANT_ORG: local
+  REPLICANT_REGION: local-1
+  REPLICANT_LOG_FORMAT: json
+  REPLICANT_TEMPORAL_ADDRESS: temporal:7233
+  REPLICANT_TEMPORAL_NAMESPACE: replicant-local
+  REPLICANT_TEMPORAL_TLS: "false"
+  REPLICANT_TEMPORAL_CODEC_KEY_FILE: /run/secrets/temporal_codec_key
+  REPLICANT_S3_ENDPOINT: http://s3.replicant.localhost:8333
+  REPLICANT_S3_PUBLIC_ENDPOINT: http://s3.replicant.localhost:8333
+  REPLICANT_S3_REGION: us-east-1
+  REPLICANT_S3_FORCE_PATH_STYLE: "true"
+  REPLICANT_S3_SSE_MODE: sse-s3
+  REPLICANT_SCHEMA_REVISION_CHECK: strict
+  REPLICANT_OIDC_ISSUER: http://dex.replicant.localhost:5556/dex
+  REPLICANT_LANGFUSE_HOST: http://langfuse.replicant.localhost:3000
+  REPLICANT_LANGFUSE_PUBLIC_KEY: pk-lf-replicant-local
+  REPLICANT_LANGFUSE_SECRET_KEY_FILE: /run/secrets/langfuse_secret_key
+  REPLICANT_IDENTITY_URL: http://identity-service:8080
+  REPLICANT_CONTROL_PLANE_URL: http://control-plane-api:8401
+  REPLICANT_MEMORY_URL: http://memory-service:8080
+  REPLICANT_TOKEN_BROKER_URL: http://github-token-broker:8080
+  # Kill switches (C-MSG 2.0.0 ops.kill_switch, C-ART 2.0.0 ops bucket): the out-of-band mirror that intake, the
+  # Publisher and runner.start_run (ops.read_kill_switches) read when Postgres is down. Same key as prod, in the
+  # local S3 store; control-plane-api is the only writer (XD-FIX-R2-016-WS07). Prod also mirrors to a ConfigMap.
+  REPLICANT_KILL_SWITCH_MIRROR: s3://local-replicant-local-ops/kill-switches/v1/state.json
+  # S3 credentials for replicant services. Locally one identity `replicant-services` (parity.md P-41); prod uses one
+  # IAM role per service (Pod Identity). INI file rendered by `replicant dev up`.
+  AWS_SHARED_CREDENTIALS_FILE: /run/secrets/s3_services_credentials
+  AWS_CONFIG_FILE: /dev/null
+  OTEL_SDK_DISABLED: ${REPLICANT_OTEL_DISABLED:-true}
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy:4317
+  OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+  OTEL_TRACES_SAMPLER: parentbased_always_on
+
+x-run-token-verifier-env: &run-token-verifier-env
+  # Runner JWKS and issuers: runner-local and, in the k8s profile, the kind runner-api (R1-258).
+  REPLICANT_RUN_TOKEN_ISSUERS: http://runner-local:8480,http://runner-api.replicant-runner.svc:8480
+  REPLICANT_RUN_TOKEN_JWKS_URLS: http://runner-local:8490/.well-known/jwks.json,http://replicant-local-control-plane:30490/.well-known/jwks.json
+  # Core run-grant JWKS and revocation list (served by run-grants; prod host grants.<env>.replicant.internal).
+  REPLICANT_RUN_GRANT_ISSUER: replicant-local-core
+  REPLICANT_RUN_GRANT_JWKS_URL: http://grants.replicant.localhost:8403/.well-known/jwks.json
+  REPLICANT_RUN_GRANT_REVOCATION_URL: http://grants.replicant.localhost:8403/grants/revoked
+  REPLICANT_RUN_GRANT_REVOCATION_POLL_SECONDS: "60"
+  # Exec revocation feed (C-RUNNER 3.0.0 GET /v1/revocations, CCR-02-09): polled every 10 s from runner-local and,
+  # in the k8s profile, the kind runner-api; a listed run_id is rejected even if its token is unexpired.
+  REPLICANT_EXEC_REVOCATIONS_URLS: http://runner-local:8480/v1/revocations,http://replicant-local-control-plane:30480/v1/revocations
+  REPLICANT_EXEC_REVOCATIONS_TOKEN_FILE: /run/secrets/runner_revocations_token
+  REPLICANT_EXEC_REVOCATIONS_POLL_SECONDS: "10"
+
+x-run-grant-signer-env: &run-grant-signer-env
+  # The Runner-call activity signs RunSpec.run_grant (C-RUNNER 3.0.0). Prod: KMS key class `run-grant`.
+  REPLICANT_RUN_GRANT_SIGNER: file
+  REPLICANT_RUN_GRANT_KEY_FILE: /run/secrets/run_grant_signing_key
+  REPLICANT_RUN_GRANT_KID: rg-local-1
+  REPLICANT_RUN_GRANT_ISSUER: replicant-local-core
+
+x-python-service: &python-service
+  restart: unless-stopped
+  networks: [core]
+  init: true
+  stop_grace_period: 30s
+  logging:
+    driver: json-file
+    options: {max-size: "20m", max-file: "3"}
+
+x-requires-db: &requires-db
+  migrate:
+    condition: service_completed_successfully
+  s3-init:
+    condition: service_completed_successfully
+
+x-requires-db-temporal: &requires-db-temporal
+  migrate:
+    condition: service_completed_successfully
+  s3-init:
+    condition: service_completed_successfully
+  temporal-bootstrap:
+    condition: service_completed_successfully
+
+x-http-healthcheck: &http-healthcheck
+  test: ["CMD", "python", "-c", "import sys,urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/readyz',timeout=3)"]
+  interval: 10s
+  timeout: 5s
+  retries: 30
+  start_period: 20s
+
+services:
+  # ---------------------------------------------------------------------------------------------
+  # Stores
+  # ---------------------------------------------------------------------------------------------
+  postgres-replicant:
+    profiles: [core]
+    # Prod parity (XD-10-03): pgvector 0.8.2 (the Aurora version) plus pgaudit. Built from
+    # dev/postgres-replicant/Dockerfile: FROM pgvector/pgvector:0.8.2-pg17-bookworm + postgresql-17-pgaudit.
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/postgres:17-pgvector0.8.2
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}/dev/postgres-replicant"}
+    restart: unless-stopped
+    networks: [core]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_replicant_superuser
+      POSTGRES_DB: replicant
+      REPLICANT_MIGRATOR_PASSWORD_FILE: /run/secrets/db_replicant_migrator
+    secrets: [pg_replicant_superuser, db_replicant_migrator]
+    volumes:
+      - pg-replicant-data:/var/lib/postgresql/data
+      # WS-10 files, unmodified (postgres.md §10): fake RDS roles, then the production bootstrap SQL.
+      - "${REPLICANT_REPO_ROOT:-../..}/libs/python/replicant-db/bootstrap/00-fake-rds-roles.sql:/docker-entrypoint-initdb.d/00-fake-rds-roles.sql:ro"
+      - "${REPLICANT_REPO_ROOT:-../..}/libs/python/replicant-db/bootstrap/00-bootstrap.sql:/docker-entrypoint-initdb.d/01-bootstrap.sql:ro"
+      - ./config/postgres-replicant/02-migrator-password.sh:/docker-entrypoint-initdb.d/02-migrator-password.sh:ro
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements,pgaudit", "-c", "pgaudit.log=ddl,role", "-c", "max_connections=300", "-c", "log_min_duration_statement=500"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d replicant"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  postgres-temporal:
+    profiles: [core]
+    image: postgres:16.14
+    restart: unless-stopped
+    networks: [core]
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: ${REPLICANT_PG_TEMPORAL_PASSWORD:-temporal-local}
+    volumes: [pg-temporal-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  postgres-langfuse:
+    profiles: [core]
+    image: postgres:17.6
+    restart: unless-stopped
+    networks: [core]
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: ${REPLICANT_PG_LANGFUSE_PASSWORD:-langfuse-local}
+      POSTGRES_DB: langfuse
+      TZ: UTC
+      PGTZ: UTC
+    volumes: [pg-langfuse-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  s3:
+    profiles: [s3-seaweedfs]
+    image: chrislusf/seaweedfs:4.48
+    restart: unless-stopped
+    networks:
+      core:
+        aliases: [s3.replicant.localhost]
+    command:
+      - server
+      - -dir=/data
+      - -volume.max=0
+      - -master.volumeSizeLimitMB=1024
+      - -s3
+      - -s3.port=8333
+      - -s3.config=/etc/seaweedfs/s3.json
+      - -s3.iam.config=/etc/seaweedfs/iam.json
+      - -s3.allowDeleteBucketNotEmpty=false
+    volumes:
+      - s3-data:/data
+      # Rendered by `replicant dev up` from config/s3/*.json.tmpl with the generated keys.
+      - ${REPLICANT_DEV_HOME:-./.replicant-dev}/generated/s3.json:/etc/seaweedfs/s3.json:ro
+      - ${REPLICANT_DEV_HOME:-./.replicant-dev}/generated/iam.json:/etc/seaweedfs/iam.json:ro
+    ports: ["127.0.0.1:8333:8333"]
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 8333"]
+      interval: 5s
+      timeout: 3s
+      retries: 40
+      start_period: 10s
+
+  s3-init:
+    profiles: [core]
+    image: amazon/aws-cli:2.37.8
+    networks: [core]
+    depends_on:
+      # Exactly one S3 server profile is active (s3-seaweedfs by default, or s3-minio); both are optional
+      # here so either satisfies the dependency. init.sh also waits for s3.replicant.localhost:8333.
+      s3: {condition: service_healthy, required: false}
+      s3-minio: {condition: service_healthy, required: false}
+    environment:
+      AWS_ACCESS_KEY_ID: replicant-admin
+      AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/s3_admin_secret
+      AWS_DEFAULT_REGION: us-east-1
+      S3_ENDPOINT: http://s3.replicant.localhost:8333
+      LANGFUSE_S3_SECRET: ${REPLICANT_S3_LANGFUSE_SECRET:-langfuse-local-secret}
+      REPLICANT_ORG: local
+      REPLICANT_ENV: local
+    secrets: [s3_admin_secret]
+    entrypoint: ["/bin/sh", "/init/init.sh"]
+    volumes:
+      - ./config/s3/init.sh:/init/init.sh:ro
+      # WS-10's generated local bucket configs (object-storage.md §8), applied with plain S3 API calls.
+      - "${REPLICANT_REPO_ROOT:-../..}/deploy/s3/local:/init/s3-local:ro"
+    restart: "no"
+
+  # ---------------------------------------------------------------------------------------------
+  # Temporal (full server on PostgreSQL 16, same persistence plugin and SQL visibility as prod; ADR-11-001)
+  # ---------------------------------------------------------------------------------------------
+  temporal-schema:
+    profiles: [core]
+    image: temporalio/admin-tools:1.32.1
+    networks: [core]
+    depends_on:
+      postgres-temporal: {condition: service_healthy}
+    environment:
+      POSTGRES_SEEDS: postgres-temporal
+      DB_PORT: "5432"
+      POSTGRES_USER: temporal
+      SQL_PASSWORD: ${REPLICANT_PG_TEMPORAL_PASSWORD:-temporal-local}
+    entrypoint: ["/bin/sh", "/scripts/setup-schema.sh"]
+    volumes: [./config/temporal/setup-schema.sh:/scripts/setup-schema.sh:ro]
+    restart: "no"
+
+  temporal:
+    profiles: [core]
+    image: temporalio/server:1.32.1
+    restart: unless-stopped
+    networks: [core]
+    depends_on:
+      temporal-schema: {condition: service_completed_successfully}
+    environment:
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_SEEDS: postgres-temporal
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: ${REPLICANT_PG_TEMPORAL_PASSWORD:-temporal-local}
+      BIND_ON_IP: 0.0.0.0
+      NUM_HISTORY_SHARDS: "4"
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/replicant-local.yaml
+      PROMETHEUS_ENDPOINT: 0.0.0.0:9090
+      SERVICES: frontend,history,matching,worker
+    volumes: [./config/temporal/dynamicconfig.yaml:/etc/temporal/config/dynamicconfig/replicant-local.yaml:ro]
+    ports: ["127.0.0.1:7233:7233"]
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 7233"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 20s
+
+  temporal-bootstrap:
+    profiles: [core]
+    image: temporalio/admin-tools:1.32.1
+    networks: [core]
+    depends_on:
+      temporal: {condition: service_healthy}
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      REPLICANT_TEMPORAL_NAMESPACE: replicant-local
+      REPLICANT_NAMESPACE_RETENTION: 30d
+    entrypoint: ["/bin/sh", "/scripts/bootstrap.sh"]
+    volumes: [./config/temporal/bootstrap.sh:/scripts/bootstrap.sh:ro]
+    restart: "no"
+
+  temporal-ui:
+    profiles: [core]
+    image: temporalio/ui:2.55.0
+    restart: unless-stopped
+    networks:
+      core:
+        aliases: [temporal.replicant.localhost]
+    depends_on:
+      temporal-bootstrap: {condition: service_completed_successfully}
+      dex: {condition: service_healthy}
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_UI_PORT: "8233"
+      TEMPORAL_DEFAULT_NAMESPACE: replicant-local
+      TEMPORAL_CODEC_ENDPOINT: http://codec.replicant.localhost:8402
+      TEMPORAL_CODEC_PASS_ACCESS_TOKEN: "true"
+      TEMPORAL_AUTH_ENABLED: "true"
+      TEMPORAL_AUTH_TYPE: oidc
+      TEMPORAL_AUTH_PROVIDER_URL: http://dex.replicant.localhost:5556/dex
+      TEMPORAL_AUTH_ISSUER_URL: http://dex.replicant.localhost:5556/dex
+      TEMPORAL_AUTH_CLIENT_ID: temporal-ui
+      TEMPORAL_AUTH_CLIENT_SECRET: temporal-ui-local-secret
+      TEMPORAL_AUTH_CALLBACK_URL: http://temporal.replicant.localhost:8233/auth/sso/callback
+      TEMPORAL_AUTH_SCOPES: openid,profile,email,groups
+      TEMPORAL_CORS_ORIGINS: http://temporal.replicant.localhost:8233
+      TEMPORAL_DISABLE_NEWS_FETCH: "true"
+      TEMPORAL_NOTIFY_ON_NEW_VERSION: "false"
+    ports: ["127.0.0.1:8233:8233"]
+
+  temporal-codec-server:
+    profiles: [core]
+    <<: *python-service
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/temporal-codec-server:${REPLICANT_IMAGE_TAG:-dev}
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}", dockerfile: services/temporal-codec-server/Dockerfile, args: *replicant-build-args}
+    networks:
+      core:
+        aliases: [codec.replicant.localhost]
+    environment:
+      <<: *common-env
+      REPLICANT_HTTP_PORT: "8402"
+      REPLICANT_CODEC_CORS_ORIGINS: http://temporal.replicant.localhost:8233
+      REPLICANT_CODEC_REQUIRE_GROUP: replicant-operators
+      # Each decode is audited through control-plane-api POST /internal/v1/audit/events; refused if that fails (CCR-01-11).
+      REPLICANT_CODEC_AUDIT_URL: http://control-plane-api:8401/internal/v1/audit/events
+    secrets: [temporal_codec_key]
+    ports: ["127.0.0.1:8402:8402"]
+
+  # ---------------------------------------------------------------------------------------------
+  # Database migration (D-26). One-shot; every replicant service waits for it.
+  # ---------------------------------------------------------------------------------------------
+  migrate:
+    profiles: [core]
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/migrate:${REPLICANT_IMAGE_TAG:-dev}
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}", dockerfile: libs/python/replicant-db/Dockerfile.migrate, args: *replicant-build-args}
+    networks: [core]
+    depends_on:
+      postgres-replicant: {condition: service_healthy}
+    environment:
+      REPLICANT_ENV: local
+      REPLICANT_DB_HOST: postgres-replicant
+      REPLICANT_DB_NAME: replicant
+      REPLICANT_DB_USER: replicant_migrator
+      REPLICANT_DB_PASSWORD_FILE: /run/secrets/db_replicant_migrator
+      REPLICANT_DB_ROLE_PASSWORDS_DIR: /run/secrets
+      REPLICANT_MIGRATE_LOCK_TIMEOUT_SECONDS: "120"
+    # `replicant-db migrate` = take advisory lock, apply roles/grants (WS-10), alembic upgrade head,
+    # verify no model/schema drift, record the run in ops.migration_runs, release lock.
+    command: ["replicant-db", "migrate", "--to", "head", "--advisory-lock", "--verify-drift", "--ensure-roles"]
+    secrets:
+      - db_replicant_migrator
+      - db_svc_control_plane_api
+      - db_svc_identity_service
+      - db_svc_github_integration
+      - db_svc_slack_integration
+      - db_svc_replicant_projector
+      - db_svc_memory_service
+      - db_svc_ecosystem_indexer
+      - db_svc_context_mcp
+      - db_svc_usage_ingestor
+      - db_svc_eval_worker
+      - db_svc_replicant_worker
+      - db_svc_publisher_worker
+      - db_svc_github_token_broker
+      - db_svc_retention_sweeper
+      - db_grafana_ro
+    restart: "no"
+
+  # ---------------------------------------------------------------------------------------------
+  # Identity: stub IdP (Dex; ADR-11-003)
+  # ---------------------------------------------------------------------------------------------
+  dex:
+    profiles: [core]
+    image: dexidp/dex:v2.46.0
+    restart: unless-stopped
+    networks:
+      core:
+        aliases: [dex.replicant.localhost]
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    environment:
+      # Third-party images that cannot read *_FILE secrets get them from the generated .env; `replicant dev up`
+      # writes the same value to secrets/oidc_replicant_web for control-plane-api.
+      DEX_REPLICANT_WEB_SECRET: ${REPLICANT_OIDC_WEB_SECRET:-replicant-web-local-secret}
+    volumes: [./config/dex/config.yaml:/etc/dex/config.yaml:ro]
+    ports: ["127.0.0.1:5556:5556"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:5558/healthz/ready || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # ---------------------------------------------------------------------------------------------
+  # Control plane and integrations
+  # ---------------------------------------------------------------------------------------------
+  control-plane-api:
+    profiles: [core]
+    <<: *python-service
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/control-plane-api:${REPLICANT_IMAGE_TAG:-dev}
+    # `dev` build target: the only difference from prod is package replicant_dev_auth (seed authenticator and
+    # /v1/admin/dev/** routes), excluded from prod images at build time (WS-07 identity.md §9.3 L-1).
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}", dockerfile: services/control-plane-api/Dockerfile, target: dev, args: *replicant-build-args}
+    networks:
+      core:
+        aliases: [api.replicant.localhost]
+    depends_on:
+      <<: *requires-db-temporal
+      dex: {condition: service_healthy}
+      langfuse-web: {condition: service_healthy}
+    environment:
+      <<: *common-env
+      REPLICANT_HTTP_PORT: "8401"
+      REPLICANT_DB_DSN: postgresql+psycopg://svc_control_plane_api@postgres-replicant:5432/replicant
+      REPLICANT_DB_PASSWORD_FILE: /run/secrets/db_svc_control_plane_api
+      REPLICANT_OIDC_CLIENT_ID: replicant-web
+      REPLICANT_OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc_replicant_web
+      REPLICANT_OIDC_CLI_CLIENT_ID: replicant-cli
+      REPLICANT_OIDC_REDIRECT_URI: http://app.replicant.localhost:8400/auth/callback
+      REPLICANT_ADMIN_GROUP: replicant-admins
+      REPLICANT_OPERATOR_GROUP: replicant-operators
+      REPLICANT_WEB_ORIGIN: http://app.replicant.localhost:8400
+      REPLICANT_DEV_SEED_TOKEN_FILE: /run/secrets/dev_seed_token   # honored only when REPLICANT_ENV=local
+      REPLICANT_RUNNER_DEFAULT: ${REPLICANT_RUNNER:-local}
+      REPLICANT_KILL_SWITCH_MIRROR_WRITE: "true"     # sole writer of ops kill-switches/v1/state.json (If-Match / If-None-Match)
+      REPLICANT_GATEWAY_SHIM_URL: http://gateway-shim:8420      # POST /internal/v1/revocations on cancel/takeover
+      REPLICANT_GATEWAY_SERVICE_TOKEN_FILE: /run/secrets/gateway_service_token
+      # Local-only static callers of /internal/v1/** (token -> principal, e.g. svc_replicant-gateway-shim); prod verifies
+      # projected ServiceAccount tokens (identity.md E24). Honored only when REPLICANT_ENV=local (XD-W3-R1V-067).
+      REPLICANT_INTERNAL_CALLER_TOKENS_FILE: /run/secrets/control_plane_internal_callers
+    secrets: [db_svc_control_plane_api, oidc_replicant_web, temporal_codec_key, langfuse_secret_key, dev_seed_token, gateway_service_token, s3_services_credentials, control_plane_internal_callers]
+    ports: ["127.0.0.1:8401:8401"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8401/readyz',timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  run-grants:
+    # Core run-grant JWKS and revocation list (C-RUNNER 3.0.0, WS-07 architecture.md §2.7): the separate minimal
+    # ASGI app in the control-plane-api image. Locally it publishes the public half of the file signer key that
+    # replicant-worker and eval-worker sign RunSpec.run_grant with (prod: KMS key class `run-grant`).
+    profiles: [core]
+    <<: *python-service
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/control-plane-api:${REPLICANT_IMAGE_TAG:-dev}
+    networks:
+      core:
+        aliases: [grants.replicant.localhost]
+    depends_on:
+      control-plane-api: {condition: service_healthy}
+    command: ["control-plane-api", "serve-grants", "--port", "8403"]
+    environment:
+      <<: *common-env
+      REPLICANT_HTTP_PORT: "8403"
+      REPLICANT_DB_DSN: postgresql+psycopg://svc_control_plane_api@postgres-replicant:5432/replicant
+      REPLICANT_DB_PASSWORD_FILE: /run/secrets/db_svc_control_plane_api
+      REPLICANT_RUN_GRANT_JWKS_SOURCE: file                  # prod: kms (GetPublicKey on the run-grant key aliases)
+      REPLICANT_RUN_GRANT_JWKS_FILE: /etc/replicant/run-grant-jwks.json
+    secrets: [db_svc_control_plane_api]
+    volumes:
+      # Generated by `replicant dev up` from secrets/run_grant_signing_key (public key only, kid rg-local-1).
+      - ${REPLICANT_DEV_HOME:-./.replicant-dev}/generated/run-grant-jwks.json:/etc/replicant/run-grant-jwks.json:ro
+    ports: ["127.0.0.1:8403:8403"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8403/.well-known/jwks.json',timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  control-plane-web:
+    profiles: [core]
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/control-plane-web:${REPLICANT_IMAGE_TAG:-dev}
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}", dockerfile: web/control-plane-web/Dockerfile, args: *replicant-build-args}
+    restart: unless-stopped
+    networks:
+      core:
+        aliases: [app.replicant.localhost]
+    depends_on:
+      control-plane-api: {condition: service_healthy}
+    environment:
+      NGINX_PORT: "8400"
+      REPLICANT_API_UPSTREAM: http://control-plane-api:8401
+    ports: ["127.0.0.1:8400:8400"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8400/healthz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+
+  identity-service:
+    profiles: [core]
+    <<: *python-service
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/identity-service:${REPLICANT_IMAGE_TAG:-dev}
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}", dockerfile: services/identity-service/Dockerfile, target: dev, args: *replicant-build-args}
+    depends_on:
+      <<: *requires-db
+      github-token-broker: {condition: service_healthy}
+    environment:
+      <<: *common-env
+      REPLICANT_HTTP_PORT: "8080"
+      REPLICANT_DB_DSN: postgresql+psycopg://svc_identity_service@postgres-replicant:5432/replicant
+      REPLICANT_DB_PASSWORD_FILE: /run/secrets/db_svc_identity_service
+      REPLICANT_SCIM_BEARER_TOKEN_FILE: /run/secrets/scim_token
+      REPLICANT_ADMIN_GROUP: replicant-admins
+      # Repo permission checks go live to the SCM through the broker: Gitea locally, GitHub for the dev app.
+      REPLICANT_SCM_PROVIDERS: gitea,github
+      REPLICANT_GITEA_BASE_URL: http://git.replicant.localhost:3300
+    secrets: [db_svc_identity_service, scim_token]
+    healthcheck: *http-healthcheck
+
+  github-integration:
+    profiles: [core]
+    <<: *python-service
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/github-integration:${REPLICANT_IMAGE_TAG:-dev}
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}", dockerfile: services/github-integration/Dockerfile, args: *replicant-build-args}
+    depends_on:
+      <<: *requires-db-temporal
+      github-token-broker: {condition: service_healthy}
+    environment:
+      <<: *common-env
+      REPLICANT_HTTP_PORT: "8080"
+      REPLICANT_DB_DSN: postgresql+psycopg://svc_github_integration@postgres-replicant:5432/replicant
+      REPLICANT_DB_PASSWORD_FILE: /run/secrets/db_svc_github_integration
+      # Two webhook routes (WS-07 G-9): /github/webhook (dev GitHub App via the Cloudflare quick tunnel,
+      # X-Hub-Signature-256 over the raw body) and /webhooks/gitea (local Gitea, normalized by the gitea adapter).
+      REPLICANT_GITEA_WEBHOOK_SECRET_FILE: /run/secrets/gitea_webhook_secret
+      REPLICANT_GITHUB_APP_REGISTRATION: dev
+      # The dev App webhook secret is read from `replicant secret-agent` (keyring-backed; WS-07 github-app.md §5.3)
+      # over a Unix socket, never from a file or env var. Absent until `replicant dev github-app create`.
+      REPLICANT_SECRET_AGENT_SOCKET: /run/replicant-secret-agent/agent.sock
+      REPLICANT_GITHUB_WEBHOOK_SECRET_REF: secret-agent:replicant-dev/github-app/webhook_secret
+      REPLICANT_GITEA_BASE_URL: http://git.replicant.localhost:3300
+      REPLICANT_REPLICANT_BOT_LOGINS: replicant-bot
+    secrets: [db_svc_github_integration, gitea_webhook_secret, s3_services_credentials]
+    volumes:
+      - ${REPLICANT_DEV_HOME:-./.replicant-dev}/secret-agent:/run/replicant-secret-agent
+    healthcheck: *http-healthcheck
+
+  github-token-broker:
+    profiles: [core]
+    <<: *python-service
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/github-token-broker:${REPLICANT_IMAGE_TAG:-dev}
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}", dockerfile: services/github-token-broker/Dockerfile, args: *replicant-build-args}
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    environment:
+      <<: *common-env
+      REPLICANT_HTTP_PORT: "8080"
+      REPLICANT_BROKER_CALLERS_FILE: /etc/replicant/broker-callers.yaml
+      # Provider backends: `gitea` mints scoped Gitea access tokens for the replicant-bot user and deletes
+      # them after REPLICANT_BROKER_GITEA_TOKEN_TTL (Gitea tokens have no expiry; parity.md P-12).
+      # `github` uses the dev App private key when present (walkthrough 11).
+      REPLICANT_BROKER_GITEA_BASE_URL: http://git.replicant.localhost:3300
+      REPLICANT_BROKER_GITEA_BOT_USER: replicant-bot
+      REPLICANT_BROKER_GITEA_BOT_PASSWORD_FILE: /run/secrets/gitea_bot_password
+      REPLICANT_BROKER_GITEA_TOKEN_TTL: 3600s
+      # Dev App private key: read through `replicant secret-agent` (keyring), so the PEM never lands in a compose
+      # file, env var or secret file (WS-07 github-app.md §5.3). Prod: KMS key alias/replicant/<env>/github-app.
+      REPLICANT_SECRET_AGENT_SOCKET: /run/replicant-secret-agent/agent.sock
+      REPLICANT_BROKER_GITHUB_APP_KEY_REF: secret-agent:replicant-dev/github-app/pem
+      REPLICANT_BROKER_GITHUB_APP_ENV_FILE: /etc/replicant/github-app.env       # non-secret: app id, slug, client id
+      # audit.emit and the C-PG rule-8 startup revision check (WS-10 postgres.md §3.2: login svc_github_token_broker).
+      REPLICANT_DB_DSN: postgresql+psycopg://svc_github_token_broker@postgres-replicant:5432/replicant
+      REPLICANT_DB_PASSWORD_FILE: /run/secrets/db_svc_github_token_broker
+    secrets: [gitea_bot_password, db_svc_github_token_broker]
+    volumes:
+      - ./config/github-token-broker/broker-callers.yaml:/etc/replicant/broker-callers.yaml:ro
+      - ${REPLICANT_DEV_HOME:-./.replicant-dev}/secret-agent:/run/replicant-secret-agent
+      - ${REPLICANT_DEV_HOME:-./.replicant-dev}/github-app.env:/etc/replicant/github-app.env:ro
+    healthcheck: *http-healthcheck
+
+  slack-integration:
+    profiles: [core]
+    <<: *python-service
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/slack-integration:${REPLICANT_IMAGE_TAG:-dev}
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}", dockerfile: services/slack-integration/Dockerfile, args: *replicant-build-args}
+    depends_on:
+      <<: *requires-db
+      control-plane-api: {condition: service_healthy}
+    environment:
+      <<: *common-env
+      REPLICANT_HTTP_PORT: "8080"
+      REPLICANT_DB_DSN: postgresql+psycopg://svc_slack_integration@postgres-replicant:5432/replicant
+      REPLICANT_DB_PASSWORD_FILE: /run/secrets/db_svc_slack_integration
+      SLACK_SIGNING_SECRET_FILE: /run/secrets/slack_signing_secret
+      SLACK_BOT_TOKEN_FILE: /run/secrets/slack_bot_token
+      # Bolt for Python honors a custom Web API base URL; the mock implements the subset used.
+      SLACK_API_URL: http://slack-mock:8410/api/
+    secrets: [db_svc_slack_integration, slack_signing_secret, slack_bot_token]
+    healthcheck: *http-healthcheck
+
+  slack-mock:
+    profiles: [core]
+    <<: *python-service
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/slack-mock:${REPLICANT_IMAGE_TAG:-dev}
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}", dockerfile: tools/slack-mock/Dockerfile, args: *replicant-build-args}
+    networks:
+      core:
+        aliases: [slack.replicant.localhost]
+    environment:
+      SLACK_MOCK_PORT: "8410"
+      SLACK_MOCK_CONFIG: /etc/slack-mock/workspace.yaml
+      SLACK_MOCK_SIGNING_SECRET_FILE: /run/secrets/slack_signing_secret
+      SLACK_MOCK_BOT_TOKEN_FILE: /run/secrets/slack_bot_token
+      SLACK_MOCK_INTERACTIVITY_URL: http://slack-integration:8080/slack/interactions
+      SLACK_MOCK_COMMANDS_URL: http://slack-integration:8080/slack/commands
+      SLACK_MOCK_EVENTS_URL: http://slack-integration:8080/slack/events
+    secrets: [slack_signing_secret, slack_bot_token]
+    volumes: [./config/slack-mock/workspace.yaml:/etc/slack-mock/workspace.yaml:ro]
+    ports: ["127.0.0.1:8410:8410"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8410/healthz',timeout=3)"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+
+  usage-ingestor:
+    profiles: [core]
+    <<: *python-service
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/usage-ingestor:${REPLICANT_IMAGE_TAG:-dev}
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}", dockerfile: services/usage-ingestor/Dockerfile, args: *replicant-build-args}
+    depends_on: *requires-db
+    environment:
+      <<: *common-env
+      REPLICANT_HTTP_PORT: "8080"
+      REPLICANT_DB_DSN: postgresql+psycopg://svc_usage_ingestor@postgres-replicant:5432/replicant
+      REPLICANT_DB_PASSWORD_FILE: /run/secrets/db_svc_usage_ingestor
+      REPLICANT_USAGE_INGEST_TOKEN_FILE: /run/secrets/usage_ingest_token
+    secrets: [db_svc_usage_ingestor, usage_ingest_token]
+    healthcheck: *http-healthcheck
+
+  # ---------------------------------------------------------------------------------------------
+  # Workers (Temporal)
+  # ---------------------------------------------------------------------------------------------
+  replicant-worker:
+    profiles: [core]
+    <<: *python-service
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/replicant-worker:${REPLICANT_WORKER_IMAGE_TAG:-dev}
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}", dockerfile: workers/replicant-worker/Dockerfile, args: *replicant-build-args}
+    depends_on:
+      <<: *requires-db-temporal
+      memory-service: {condition: service_healthy}
+      langfuse-web: {condition: service_healthy}
+    environment:
+      <<: [*common-env, *run-grant-signer-env]
+      REPLICANT_WORKER_DEPLOYMENT_NAME: replicant-worker
+      REPLICANT_WORKER_BUILD_ID: ${REPLICANT_WORKER_BUILD_ID:-b20261024-000000000000}
+      REPLICANT_WORKER_SET_CURRENT_ON_START: "true"     # local only; CI/Argo do this in prod (parity.md P-07)
+      # Task queues are fixed by the worker code (WS-01 reference worker.py): replicant-jobs, replicant-runner-calls,
+      # replicant-llm-calls. No env var selects them (R1-267).
+      REPLICANT_DB_DSN: postgresql+psycopg://svc_replicant_worker@postgres-replicant:5432/replicant
+      REPLICANT_DB_PASSWORD_FILE: /run/secrets/db_svc_replicant_worker
+      # Runner selection: `local` -> runner-local; `k8s` -> runner-api in kind (walkthrough 10).
+      REPLICANT_RUNNER_URL: ${REPLICANT_RUNNER_URL:-http://runner-local:8480}
+      REPLICANT_RUNNER_TOKEN_FILE: /run/secrets/runner_worker_token   # static dev key (C-RUNNER: local profile)
+      REPLICANT_GATEWAY_URL: http://gateway-shim:8420      # in-worker LLM calls and PUT /internal/v1/runs/{id}/policy
+      REPLICANT_GATEWAY_SERVICE_TOKEN_FILE: /run/secrets/gateway_service_token
+      # Replay cassette set for e2e/walkthrough runs (gateway-stub.md §3); empty = none (passthrough/record).
+      REPLICANT_GATEWAY_CASSETTE_SET: ${REPLICANT_GATEWAY_CASSETTE_SET:-}
+      # Deterministic runs (WS-03 run plan `effective.deterministic`, XD-11-09): on whenever a cassette set is replayed.
+      REPLICANT_DETERMINISTIC_RUNS: ${REPLICANT_DETERMINISTIC_RUNS:-false}
+      REPLICANT_CONTEXT_MCP_URL: http://context-mcp:8080
+    secrets: [db_svc_replicant_worker, runner_worker_token, gateway_service_token, temporal_codec_key, langfuse_secret_key, run_grant_signing_key, s3_services_credentials]
+    healthcheck:
+      test: ["CMD", "replicant-worker", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  replicant-worker-next:
+    profiles: [ramp]
+    <<: *python-service
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/replicant-worker:${REPLICANT_WORKER_NEXT_IMAGE_TAG:-next}
+    depends_on:
+      replicant-worker: {condition: service_healthy}
+    environment:
+      <<: [*common-env, *run-grant-signer-env]
+      REPLICANT_WORKER_DEPLOYMENT_NAME: replicant-worker
+      REPLICANT_WORKER_BUILD_ID: ${REPLICANT_WORKER_NEXT_BUILD_ID:-b20261024-111111111111}
+      REPLICANT_WORKER_SET_CURRENT_ON_START: "false"    # registered, not current: only bundle pins route work to it
+      # Task queues are fixed by the worker code (WS-01 reference worker.py): replicant-jobs, replicant-runner-calls,
+      # replicant-llm-calls. No env var selects them (R1-267).
+      REPLICANT_DB_DSN: postgresql+psycopg://svc_replicant_worker@postgres-replicant:5432/replicant
+      REPLICANT_DB_PASSWORD_FILE: /run/secrets/db_svc_replicant_worker
+      REPLICANT_RUNNER_URL: ${REPLICANT_RUNNER_URL:-http://runner-local:8480}
+      REPLICANT_RUNNER_TOKEN_FILE: /run/secrets/runner_worker_token
+      REPLICANT_GATEWAY_URL: http://gateway-shim:8420      # in-worker LLM calls and PUT /internal/v1/runs/{id}/policy
+      REPLICANT_GATEWAY_SERVICE_TOKEN_FILE: /run/secrets/gateway_service_token
+      # Replay cassette set for e2e/walkthrough runs (gateway-stub.md §3); empty = none (passthrough/record).
+      REPLICANT_GATEWAY_CASSETTE_SET: ${REPLICANT_GATEWAY_CASSETTE_SET:-}
+      # Deterministic runs (WS-03 run plan `effective.deterministic`, XD-11-09): on whenever a cassette set is replayed.
+      REPLICANT_DETERMINISTIC_RUNS: ${REPLICANT_DETERMINISTIC_RUNS:-false}
+      REPLICANT_CONTEXT_MCP_URL: http://context-mcp:8080
+    secrets: [db_svc_replicant_worker, runner_worker_token, gateway_service_token, temporal_codec_key, langfuse_secret_key, run_grant_signing_key, s3_services_credentials]
+    healthcheck:
+      test: ["CMD", "replicant-worker", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  publisher-worker:
+    profiles: [core]
+    <<: *python-service
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/publisher-worker:${REPLICANT_IMAGE_TAG:-dev}
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}", dockerfile: workers/publisher-worker/Dockerfile, args: *replicant-build-args}
+    depends_on:
+      <<: *requires-db-temporal
+      github-token-broker: {condition: service_healthy}
+    environment:
+      <<: *common-env
+      REPLICANT_WORKER_DEPLOYMENT_NAME: publisher-worker
+      REPLICANT_WORKER_BUILD_ID: ${REPLICANT_WORKER_BUILD_ID:-b20261024-000000000000}
+      REPLICANT_WORKER_SET_CURRENT_ON_START: "true"
+      # Polls replicant-publisher (fixed in code).
+      REPLICANT_DB_DSN: postgresql+psycopg://svc_publisher_worker@postgres-replicant:5432/replicant
+      REPLICANT_DB_PASSWORD_FILE: /run/secrets/db_svc_publisher_worker
+    secrets: [db_svc_publisher_worker, temporal_codec_key, s3_services_credentials]
+    healthcheck:
+      test: ["CMD", "publisher-worker", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  replicant-projector:
+    profiles: [core]
+    <<: *python-service
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/replicant-projector:${REPLICANT_IMAGE_TAG:-dev}
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}", dockerfile: workers/replicant-projector/Dockerfile, args: *replicant-build-args}
+    depends_on: *requires-db-temporal
+    environment:
+      <<: *common-env
+      REPLICANT_WORKER_DEPLOYMENT_NAME: replicant-projector
+      REPLICANT_WORKER_BUILD_ID: ${REPLICANT_WORKER_BUILD_ID:-b20261024-000000000000}
+      REPLICANT_WORKER_SET_CURRENT_ON_START: "true"
+      # Polls replicant-projections (fixed in code).
+      REPLICANT_DB_DSN: postgresql+psycopg://svc_replicant_projector@postgres-replicant:5432/replicant
+      REPLICANT_DB_PASSWORD_FILE: /run/secrets/db_svc_replicant_projector
+    secrets: [db_svc_replicant_projector, temporal_codec_key]
+    healthcheck:
+      test: ["CMD", "replicant-projector", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  eval-worker:
+    profiles: [core]
+    <<: *python-service
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/eval-worker:${REPLICANT_IMAGE_TAG:-dev}
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}", dockerfile: workers/eval-worker/Dockerfile, args: *replicant-build-args}
+    depends_on:
+      <<: *requires-db-temporal
+      langfuse-web: {condition: service_healthy}
+    environment:
+      <<: [*common-env, *run-grant-signer-env]
+      REPLICANT_WORKER_DEPLOYMENT_NAME: eval-worker
+      REPLICANT_WORKER_BUILD_ID: ${REPLICANT_WORKER_BUILD_ID:-b20261024-000000000000}
+      REPLICANT_WORKER_SET_CURRENT_ON_START: "true"
+      # Polls replicant-eval (fixed in code).
+      REPLICANT_DB_DSN: postgresql+psycopg://svc_eval_worker@postgres-replicant:5432/replicant
+      REPLICANT_DB_PASSWORD_FILE: /run/secrets/db_svc_eval_worker
+      REPLICANT_RUNNER_URL: ${REPLICANT_RUNNER_URL:-http://runner-local:8480}
+      REPLICANT_RUNNER_TOKEN_FILE: /run/secrets/runner_eval_token
+      REPLICANT_GATEWAY_URL: http://gateway-shim:8420
+      REPLICANT_GATEWAY_SERVICE_TOKEN_FILE: /run/secrets/gateway_service_token
+    secrets: [db_svc_eval_worker, runner_eval_token, temporal_codec_key, langfuse_secret_key, run_grant_signing_key, gateway_service_token, s3_services_credentials]
+    healthcheck:
+      test: ["CMD", "eval-worker", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  ops-worker:
+    # Polls replicant-ops (C-IDS 2.0.0): LeakPurge (WS-08) and other operational workflows. WS-01 hosts it.
+    profiles: [core]
+    <<: *python-service
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/ops-worker:${REPLICANT_IMAGE_TAG:-dev}
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}", dockerfile: workers/ops-worker/Dockerfile, args: *replicant-build-args}
+    depends_on: *requires-db-temporal
+    environment:
+      <<: *common-env
+      REPLICANT_WORKER_DEPLOYMENT_NAME: ops-worker
+      REPLICANT_WORKER_BUILD_ID: ${REPLICANT_WORKER_BUILD_ID:-b20261024-000000000000}
+      REPLICANT_WORKER_SET_CURRENT_ON_START: "true"
+      # LeakPurge (WS-08, CCR-08-06) runs here; prod storage role replicant-<env>-leak-purge (no governance bypass).
+      # The legal bucket is not created locally (parity.md P-42); a purge never meets a legal hold locally.
+    secrets: [temporal_codec_key, s3_services_credentials]
+    healthcheck:
+      test: ["CMD", "ops-worker", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  retention-sweeper:
+    # Polls replicant-retention (C-IDS 2.0.0): session-state purge and history export of closed jobs
+    # (WS-10 object-storage.md §6, WS-08 audit.md §2). Own login svc_retention_sweeper (audit.emit only).
+    profiles: [core]
+    <<: *python-service
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/retention-sweeper:${REPLICANT_IMAGE_TAG:-dev}
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}", dockerfile: services/retention-sweeper/Dockerfile, args: *replicant-build-args}
+    depends_on: *requires-db-temporal
+    environment:
+      <<: *common-env
+      REPLICANT_DB_DSN: postgresql+psycopg://svc_retention_sweeper@postgres-replicant:5432/replicant
+      REPLICANT_DB_PASSWORD_FILE: /run/secrets/db_svc_retention_sweeper
+    secrets: [db_svc_retention_sweeper, temporal_codec_key, s3_services_credentials]
+
+  # ---------------------------------------------------------------------------------------------
+  # Context and memory
+  # ---------------------------------------------------------------------------------------------
+  memory-service:
+    profiles: [core]
+    <<: *python-service
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/memory-service:${REPLICANT_IMAGE_TAG:-dev}
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}", dockerfile: services/memory-service/Dockerfile, args: *replicant-build-args}
+    depends_on:
+      <<: *requires-db
+      identity-service: {condition: service_healthy}
+    environment:
+      <<: [*common-env, *run-token-verifier-env]
+      REPLICANT_HTTP_PORT: "8080"            # internal API + admin curation backend (D-25)
+      REPLICANT_MCP_PORT: "8081"             # memory MCP for sandboxes (run-token auth, audience memory-mcp)
+      REPLICANT_DB_DSN: postgresql+psycopg://svc_memory_service@postgres-replicant:5432/replicant
+      REPLICANT_DB_PASSWORD_FILE: /run/secrets/db_svc_memory_service
+      # Embeddings through the shim (XD-FIX-R2-057): POST /embeddings/v1/embeddings, X-Replicant-Purpose: embedding,
+      # X-Replicant-Tenant-Id; backfills add X-Replicant-Pipeline-Id. No provider key in memory-service.
+      REPLICANT_EMBEDDINGS_URL: http://gateway-shim:8420/embeddings/v1/embeddings
+      REPLICANT_EMBEDDINGS_MODEL: voyage/voyage-code-4
+      REPLICANT_EMBEDDINGS_DIMENSIONS: "1024"
+      REPLICANT_GATEWAY_SERVICE_TOKEN_FILE: /run/secrets/gateway_service_token
+    secrets: [db_svc_memory_service, gateway_service_token, runner_revocations_token, s3_services_credentials]
+    healthcheck: *http-healthcheck
+
+  context-mcp:
+    profiles: [core]
+    <<: *python-service
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/context-mcp:${REPLICANT_IMAGE_TAG:-dev}
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}", dockerfile: services/context-mcp/Dockerfile, args: *replicant-build-args}
+    depends_on:
+      <<: *requires-db
+      zoekt-webserver: {condition: service_started}
+    environment:
+      <<: [*common-env, *run-token-verifier-env]
+      REPLICANT_HTTP_PORT: "8080"
+      REPLICANT_ZOEKT_URL: http://zoekt-webserver:6070
+      # context-mcp is a C-PG reader of `ecosystem` (SELECT only) with its own role.
+      REPLICANT_DB_DSN: postgresql+psycopg://svc_context_mcp@postgres-replicant:5432/replicant
+      REPLICANT_DB_PASSWORD_FILE: /run/secrets/db_svc_context_mcp
+    secrets: [db_svc_context_mcp, runner_revocations_token]
+    healthcheck: *http-healthcheck
+
+  ecosystem-indexer:
+    profiles: [core]
+    <<: *python-service
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/ecosystem-indexer:${REPLICANT_IMAGE_TAG:-dev}
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}", dockerfile: services/ecosystem-indexer/Dockerfile, args: *replicant-build-args}
+    depends_on:
+      <<: *requires-db
+      ecosystem-stubs: {condition: service_healthy}
+    environment:
+      <<: *common-env
+      REPLICANT_HTTP_PORT: "8080"
+      REPLICANT_DB_DSN: postgresql+psycopg://svc_ecosystem_indexer@postgres-replicant:5432/replicant
+      REPLICANT_DB_PASSWORD_FILE: /run/secrets/db_svc_ecosystem_indexer
+      REPLICANT_BACKSTAGE_URL: http://ecosystem-stubs:7007/api/catalog
+      REPLICANT_CI_CONTRACTS_URL: http://ecosystem-stubs:7008/contracts
+      REPLICANT_TEMPO_URL: http://tempo:3200
+      REPLICANT_INDEXER_SCHEDULE: "*/10 * * * *"      # CronJob in prod; in-process scheduler locally (parity.md P-21)
+      REPLICANT_INDEXER_RUN_ON_START: "true"
+    secrets: [db_svc_ecosystem_indexer]
+    healthcheck: *http-healthcheck
+
+  ecosystem-stubs:
+    profiles: [core]
+    <<: *python-service
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/ecosystem-stubs:${REPLICANT_IMAGE_TAG:-dev}
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}", dockerfile: tools/ecosystem-stubs/Dockerfile, args: *replicant-build-args}
+    environment:
+      ECOSTUB_CATALOG_PORT: "7007"     # Backstage-shaped /api/catalog/entities for the sample repos
+      ECOSTUB_CONTRACTS_PORT: "7008"   # CI-extracted contract artifacts (OpenAPI, protobuf, AsyncAPI)
+      ECOSTUB_DATA_DIR: /data
+    volumes: ["${REPLICANT_REPO_ROOT:-../..}/dev/ecosystem:/data:ro"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:7007/healthz',timeout=3)"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+
+  zoekt-indexserver:
+    profiles: [core]
+    image: ghcr.io/sourcegraph/zoekt:0.0.0-20260812144518-c6cd01494dc0
+    restart: unless-stopped
+    networks: [core]
+    depends_on:
+      gitea: {condition: service_healthy}
+    # Mirrors every repo of Gitea org acme-payments (GiteaURL/GiteaOrg mirror config) and indexes it.
+    command: ["zoekt-indexserver", "-mirror_config", "/config/mirror.json", "-data_dir", "/data", "-interval", "2m"]
+    volumes:
+      - zoekt-data:/data
+      - ./config/zoekt/mirror.json:/config/mirror.json:ro
+      # read:repository token for the replicant-bot user, minted by `replicant dev seed` (prod: broker-issued).
+      - ${REPLICANT_DEV_HOME:-./.replicant-dev}/generated/zoekt-gitea-read-token:/run/zoekt/gitea-read-token:ro
+
+  zoekt-webserver:
+    profiles: [core]
+    image: ghcr.io/sourcegraph/zoekt:0.0.0-20260812144518-c6cd01494dc0
+    restart: unless-stopped
+    networks:
+      core:
+        aliases: [zoekt.replicant.localhost]
+    command: ["zoekt-webserver", "-index", "/data/index", "-listen", ":6070", "-rpc"]
+    volumes: [zoekt-data:/data]
+    ports: ["127.0.0.1:6070:6070"]
+
+  # ---------------------------------------------------------------------------------------------
+  # Local Git server (Gitea; ADR-11-002)
+  # ---------------------------------------------------------------------------------------------
+  gitea:
+    profiles: [core]
+    image: gitea/gitea:28.1.0-rootless
+    restart: unless-stopped
+    networks:
+      core:
+        aliases: [git.replicant.localhost]
+    environment:
+      GITEA__server__HTTP_PORT: "3300"
+      GITEA__server__ROOT_URL: http://git.replicant.localhost:3300/
+      GITEA__server__DOMAIN: git.replicant.localhost
+      GITEA__server__DISABLE_SSH: "true"
+      GITEA__database__DB_TYPE: sqlite3
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__security__ALLOWED_HOST_LIST: private
+      GITEA__service__DISABLE_REGISTRATION: "true"
+      GITEA__service__REQUIRE_SIGNIN_VIEW: "true"
+      GITEA__repository__DEFAULT_BRANCH: main
+      GITEA__actions__ENABLED: "false"
+      GITEA__webhook__DELIVER_TIMEOUT: "10"
+      GITEA__log__LEVEL: Info
+    volumes: [gitea-data:/var/lib/gitea, gitea-config:/etc/gitea]
+    ports: ["127.0.0.1:3300:3300"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3300/api/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 40
+      start_period: 10s
+
+  gitea-bootstrap:
+    profiles: [core]
+    image: gitea/gitea:28.1.0-rootless
+    networks: [core]
+    depends_on:
+      gitea: {condition: service_healthy}
+    # Creates the Gitea site admin `gitea-admin` and the `replicant-bot` user with the CLI (the only step
+    # that cannot go through the API). Users, orgs, repos and webhooks are created by `replicant dev seed`.
+    entrypoint: ["/bin/sh", "/scripts/bootstrap.sh"]
+    environment:
+      GITEA_ADMIN_PASSWORD_FILE: /run/secrets/gitea_admin_password
+      GITEA_BOT_PASSWORD_FILE: /run/secrets/gitea_bot_password
+    secrets: [gitea_admin_password, gitea_bot_password]
+    volumes:
+      - gitea-data:/var/lib/gitea
+      - gitea-config:/etc/gitea
+      - ./config/gitea/bootstrap.sh:/scripts/bootstrap.sh:ro
+    restart: "no"
+
+  # ---------------------------------------------------------------------------------------------
+  # Execution: runner-local (Runner API over Docker/Podman, includes the notifier), repo-mirror,
+  # gateway stub, sandbox edge, egress control
+  # ---------------------------------------------------------------------------------------------
+  runner-local:
+    profiles: [core]
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/runner-local:${REPLICANT_IMAGE_TAG:-dev}
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}", dockerfile: go/cmd/runner-local/Dockerfile, args: *replicant-build-args}
+    restart: unless-stopped
+    networks: [core]
+    depends_on:
+      s3-init: {condition: service_completed_successfully}
+      temporal-bootstrap: {condition: service_completed_successfully}
+      run-grants: {condition: service_healthy}
+    environment:
+      RUNNER_CONFIG: /etc/runner-local/runner-local.yaml
+      RUNNER_ORCHESTRATION_LISTEN: 0.0.0.0:8480
+      RUNNER_SANDBOX_LISTEN: 0.0.0.0:8490
+      RUNNER_ISSUER: http://runner-local:8480
+      RUNNER_SIGNING_KEY_FILE: /run/secrets/run_token_signing_key     # ES256 PEM; KMS in prod (parity.md P-04)
+      RUNNER_WORKER_TOKENS_FILE: /run/secrets/runner_worker_tokens    # static dev keys -> subjects
+      RUNNER_CONTAINER_HOST: ${REPLICANT_CONTAINER_HOST:-unix:///var/run/docker.sock}
+      RUNNER_SANDBOX_NETWORK: replicant-sbx
+      RUNNER_SANDBOX_DNS: 172.31.250.2
+      RUNNER_LOCAL_RUNTIME: ${REPLICANT_LOCAL_RUNTIME:-runc}       # runc | runsc | kata (Linux hosts)
+      RUNNER_MAX_CONCURRENT_RUNS: ${REPLICANT_MAX_CONCURRENT_RUNS:-2}
+      RUNNER_TEMPORAL_ADDRESS: temporal:7233                     # notifier component (Signal only)
+      RUNNER_TEMPORAL_NAMESPACE: replicant-local
+      # The notifier encodes Signal payloads with the tenant codec and never decodes (C-ARCH 2.0.0 fourth exec
+      # role run-notifier, encrypt-only). Locally the codec key is one symmetric file key (parity.md P-35).
+      RUNNER_TEMPORAL_CODEC_KEY_FILE: /run/secrets/temporal_codec_key
+      # Run-grant verification at admission (C-RUNNER 3.0.0): 422 run_grant_invalid on any failure.
+      RUNNER_GRANTS_ISSUER: replicant-local-core
+      RUNNER_GRANTS_JWKS_URL: http://grants.replicant.localhost:8403/.well-known/jwks.json
+      RUNNER_GRANTS_REVOCATION_URL: http://grants.replicant.localhost:8403/grants/revoked
+      # Exec revocation feed (C-RUNNER 3.0.0, C-ART 2.0.0): served at GET /v1/revocations and persisted as
+      # exec_revocation_feed objects in the ops bucket, prefix exec-revocations/local/ (90-day expiry).
+      RUNNER_REVOCATIONS_BUCKET: local-replicant-local-ops
+      RUNNER_REVOCATIONS_PREFIX: exec-revocations/local/
+      RUNNER_REVOCATIONS_READERS_FILE: /run/secrets/runner_revocations_readers   # static dev tokens of the four verifiers
+      RUNNER_S3_ENDPOINT: http://s3.replicant.localhost:8333
+      RUNNER_S3_STS_ENDPOINT: http://s3.replicant.localhost:8333
+      RUNNER_S3_ACCESS_KEY_ID: runner-local
+      RUNNER_S3_SECRET_ACCESS_KEY_FILE: /run/secrets/s3_runner_secret
+      RUNNER_REGISTRY_BUCKET: local-replicant-local-registry
+      RUNNER_AGENTRUN_RETENTION: 1080h      # 45 days, same as prod GC (C-CRD §5)
+      RUNNER_STATE_DIR: /var/lib/runner-local
+    secrets: [run_token_signing_key, runner_worker_tokens, s3_runner_secret, temporal_codec_key, runner_revocations_readers]
+    volumes:
+      - ${REPLICANT_CONTAINER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      - runner-local-state:/var/lib/runner-local
+      - ./config/runner-local/runner-local.yaml:/etc/runner-local/runner-local.yaml:ro
+    ports: ["127.0.0.1:8480:8480"]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/runner-local", "healthcheck", "--url", "http://127.0.0.1:8480/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  repo-mirror:
+    profiles: [core]
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/repo-mirror:${REPLICANT_IMAGE_TAG:-dev}
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}", dockerfile: go/cmd/repo-mirror/Dockerfile, args: *replicant-build-args}
+    restart: unless-stopped
+    networks: [core, egress]
+    depends_on:
+      github-token-broker: {condition: service_healthy}
+      gitea: {condition: service_healthy}
+    environment:
+      MIRROR_LISTEN: 0.0.0.0:8080
+      MIRROR_CACHE_DIR: /var/cache/repo-mirror
+      MIRROR_BROKER_URL: http://github-token-broker:8080
+      MIRROR_BROKER_TOKEN_FILE: /run/secrets/broker_mirror_token
+      MIRROR_RUN_TOKEN_JWKS_URLS: http://runner-local:8490/.well-known/jwks.json,http://replicant-local-control-plane:30490/.well-known/jwks.json
+      MIRROR_RUN_TOKEN_ISSUERS: http://runner-local:8480,http://runner-api.replicant-runner.svc:8480
+      MIRROR_RUN_GRANT_ISSUER: replicant-local-core
+      MIRROR_RUN_GRANT_JWKS_URL: http://grants.replicant.localhost:8403/.well-known/jwks.json
+      MIRROR_RUN_GRANT_REVOCATION_URL: http://grants.replicant.localhost:8403/grants/revoked
+      MIRROR_EXEC_REVOCATIONS_URLS: http://runner-local:8480/v1/revocations,http://replicant-local-control-plane:30480/v1/revocations
+      MIRROR_EXEC_REVOCATIONS_TOKEN_FILE: /run/secrets/runner_revocations_token
+      MIRROR_UPSTREAMS: gitea=http://git.replicant.localhost:3300,github=https://github.com
+      HTTPS_PROXY: http://egress-proxy:3128
+      NO_PROXY: git.replicant.localhost,github-token-broker,runner-local
+    secrets: [broker_mirror_token, runner_revocations_token]
+    volumes: [repo-mirror-cache:/var/cache/repo-mirror]
+
+  gateway-shim:
+    # WS-03 replicant-gateway-shim, the production binary, with a local upstream backend (gateway.md §8, XD-03-16):
+    # passthrough | record | replay | script. Auth, run-grant checks, run policy, budgets and usage events are the
+    # production code path. Replaces WS-11's earlier Python gateway-stub (R1-255).
+    profiles: [core]
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/replicant-gateway-shim:${REPLICANT_IMAGE_TAG:-dev}
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}", dockerfile: go/cmd/replicant-gateway-shim/Dockerfile, args: *replicant-build-args}
+    restart: unless-stopped
+    networks:
+      core:
+        aliases: [gateway.replicant.localhost]
+      egress: {}
+    depends_on:
+      gateway-state: {condition: service_healthy}
+      run-grants: {condition: service_healthy}
+    command:
+      - replicant-gateway-shim
+      - --config=/etc/gateway-shim/gateway-shim.yaml
+      - --upstream-backend=${REPLICANT_GATEWAY_MODE:-passthrough}
+      - --replay-match=${REPLICANT_GATEWAY_REPLAY_MATCH:-sequence}
+    environment:
+      <<: *run-token-verifier-env          # audience ai-gateway
+      REPLICANT_ENV: local
+      REPLICANT_GATEWAY_STATE_ADDR: gateway-state:6379
+      REPLICANT_GATEWAY_USAGE_URL: http://usage-ingestor:8080/internal/v1/usage-events
+      REPLICANT_GATEWAY_USAGE_TOKEN_FILE: /run/secrets/usage_ingest_token
+      REPLICANT_GATEWAY_SERVICE_TOKENS_FILE: /run/secrets/gateway_service_tokens   # prod: projected SA tokens
+      REPLICANT_GATEWAY_CASSETTE_ROOTS: tests=/cassettes/tests,evals=/cassettes/evals,scripts=/cassettes/scripts
+      # Tenant quotas (WS-03 gateway.md §6.1): GET /internal/v1/tenants/{tenant_id}/gateway-quota as caller
+      # svc_replicant-gateway-shim, cached <= 60 s; 404 => 402 tenant_quota_unset. Prod: projected SA token (P-26).
+      REPLICANT_CONTROL_PLANE_URL: http://control-plane-api:8401
+      REPLICANT_CONTROL_PLANE_TOKEN_FILE: /run/secrets/control_plane_shim_token
+      # Platform usage copies to artifacts `platform/gateway-usage/` (C-ART 2.0.0), S3 identity `gateway-shim`.
+      REPLICANT_GATEWAY_USAGE_S3_URI: s3://local-replicant-local-artifacts/platform/gateway-usage/
+      REPLICANT_S3_ENDPOINT: http://s3.replicant.localhost:8333
+      REPLICANT_S3_FORCE_PATH_STYLE: "true"
+      AWS_SHARED_CREDENTIALS_FILE: /run/secrets/s3_gateway_shim_credentials
+      HTTPS_PROXY: http://egress-proxy:3128
+      NO_PROXY: usage-ingestor,runner-local,grants.replicant.localhost,gateway-state,replicant-local-control-plane,s3.replicant.localhost,control-plane-api
+    # Developer provider keys for passthrough/record (WS-03 gateway.md §8): never committed, optional.
+    env_file:
+      - path: ${HOME:-/nonexistent}/.config/replicant/dev-keys.env
+        required: false
+    secrets: [usage_ingest_token, gateway_service_tokens, runner_revocations_token, s3_gateway_shim_credentials, control_plane_shim_token]
+    volumes:
+      - ./config/gateway-shim:/etc/gateway-shim:ro
+      - "${REPLICANT_REPO_ROOT:-../..}/tests/fixtures/cassettes:/cassettes/tests"
+      - "${REPLICANT_REPO_ROOT:-../..}/evals/smoke-local/cassettes:/cassettes/evals:ro"
+      - "${REPLICANT_REPO_ROOT:-../..}/tests/fixtures/gateway-scripts:/cassettes/scripts:ro"
+    ports: ["127.0.0.1:8420:8420"]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/replicant-gateway-shim", "healthcheck", "--url", "http://127.0.0.1:8420/readyz"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+
+  gateway-state:
+    # The shim's Valkey (budgets, run policies, revocations; WS-03 gateway.md §4.1). Single node locally.
+    profiles: [core]
+    image: valkey/valkey:8.1.10-alpine
+    restart: unless-stopped
+    networks: [core]
+    command: ["valkey-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes: [gateway-state-data:/data]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  sbx-edge:
+    # The only HTTP endpoint sandboxes can reach (besides the egress proxy). Mirrors the prod PrivateLink/NLB
+    # endpoints for the gateway shim, memory-mcp, context-mcp, runner-sandbox (runner-local and, for kind runs,
+    # the kind runner-api), repo-mirror, S3 (VPC endpoint) and OTLP. Only agentd and the WS-02 sidecars talk to it;
+    # the CLI talks to agentd on 127.0.0.1:7800-7803 (WS-03 cli-invocation.md decision 7).
+    profiles: [core]
+    image: nginx:1.30.5
+    restart: unless-stopped
+    networks:
+      core: {}
+      sbx:
+        ipv4_address: 172.31.250.10
+        aliases:
+          - gateway.sbx.local
+          - memory-mcp.sbx.local
+          - context-mcp.sbx.local
+          - runner-sandbox.sbx.local
+          - runner-sandbox-k8s.sbx.local
+          - git.sbx.local
+          - s3.sbx.local
+          - otlp.sbx.local
+    depends_on:
+      gateway-shim: {condition: service_healthy}
+      runner-local: {condition: service_healthy}
+    environment:
+      # Rendered into /etc/nginx/nginx.conf by the image's envsubst entrypoint (only these variables are replaced).
+      NGINX_ENVSUBST_OUTPUT_DIR: /etc/nginx
+      REPLICANT_SBX_EDGE_S3_UPSTREAM: http://s3.replicant.localhost:8333
+      REPLICANT_SBX_EDGE_K8S_SANDBOX_UPSTREAM: http://replicant-local-control-plane:30490
+    volumes: [./config/sbx-edge/nginx.conf.template:/etc/nginx/templates/nginx.conf.template:ro]
+    healthcheck:
+      test: ["CMD-SHELL", "nginx -t -q"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  sbx-dns:
+    # Authoritative only for sbx.local and the egress proxy; NXDOMAIN for everything else, so DNS cannot be
+    # used as an exfiltration channel from sandboxes (test-strategy.md SEC-EGRESS-05).
+    profiles: [core]
+    image: coredns/coredns:1.14.7
+    restart: unless-stopped
+    networks:
+      sbx:
+        ipv4_address: 172.31.250.2
+    command: ["-conf", "/etc/coredns/Corefile"]
+    volumes: [./config/sbx-dns/Corefile:/etc/coredns/Corefile:ro]
+
+  egress-proxy:
+    profiles: [core]
+    image: ubuntu/squid:6.6-24.04_edge
+    restart: unless-stopped
+    networks:
+      sbx:
+        ipv4_address: 172.31.250.3
+      core: {}
+      egress: {}
+    volumes:
+      - ./config/squid/squid.conf:/etc/squid/squid.conf:ro
+      - squid-cache:/var/spool/squid
+    healthcheck:
+      test: ["CMD-SHELL", "squid -k check || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  pkg-npm:
+    profiles: [core]
+    image: verdaccio/verdaccio:6.10.5
+    restart: unless-stopped
+    networks:
+      sbx:
+        ipv4_address: 172.31.250.30
+      egress: {}
+    environment:
+      VERDACCIO_PORT: "4873"
+    volumes:
+      - ./config/verdaccio/config.yaml:/verdaccio/conf/config.yaml:ro
+      - pkg-npm-storage:/verdaccio/storage
+
+  pkg-go:
+    profiles: [core]
+    image: gomods/athens:v0.19.2
+    restart: unless-stopped
+    networks:
+      sbx:
+        ipv4_address: 172.31.250.31
+      egress: {}
+    environment:
+      ATHENS_STORAGE_TYPE: disk
+      ATHENS_DISK_STORAGE_ROOT: /var/lib/athens
+      ATHENS_PORT: ":3000"
+      ATHENS_NETWORK_MODE: strict
+      ATHENS_GOGET_WORKERS: "4"
+    volumes: [pkg-go-storage:/var/lib/athens]
+
+  pkg-pypi:
+    profiles: [core]
+    image: epicwink/proxpi:1.3.0
+    restart: unless-stopped
+    networks:
+      sbx:
+        ipv4_address: 172.31.250.32
+      egress: {}
+    environment:
+      PROXPI_INDEX_URL: https://pypi.org/simple/
+      PROXPI_CACHE_SIZE: "10000000000"
+      PROXPI_CACHE_DIR: /var/cache/proxpi
+    volumes: [pkg-pypi-cache:/var/cache/proxpi]
+
+  # ---------------------------------------------------------------------------------------------
+  # Langfuse v4 (core: prompt management is behavioral config resolved into bundles; ADR-11-005)
+  # ---------------------------------------------------------------------------------------------
+  clickhouse:
+    profiles: [core]
+    image: clickhouse/clickhouse-server:25.12.11.4-alpine
+    restart: unless-stopped
+    user: "101:101"
+    networks: [core]
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${REPLICANT_CLICKHOUSE_PASSWORD:-clickhouse-local}
+    ulimits:
+      nofile: {soft: 262144, hard: 262144}
+    volumes: [clickhouse-data:/var/lib/clickhouse, clickhouse-logs:/var/log/clickhouse-server]
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  valkey:
+    profiles: [core]
+    image: valkey/valkey:8.1.10-alpine
+    restart: unless-stopped
+    networks: [core]
+    command: ["valkey-server", "--requirepass", "${REPLICANT_VALKEY_PASSWORD:-valkey-local}", "--maxmemory-policy", "noeviction"]
+    volumes: [valkey-data:/data]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "-a", "${REPLICANT_VALKEY_PASSWORD:-valkey-local}", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+  langfuse-worker:
+    profiles: [core]
+    image: langfuse/langfuse-worker:4.50.0
+    restart: unless-stopped
+    networks: [core]
+    depends_on: &langfuse-deps
+      postgres-langfuse: {condition: service_healthy}
+      clickhouse: {condition: service_healthy}
+      valkey: {condition: service_healthy}
+      s3-init: {condition: service_completed_successfully}
+    environment: &langfuse-env
+      NEXTAUTH_URL: http://langfuse.replicant.localhost:3000
+      DATABASE_URL: postgresql://langfuse:${REPLICANT_PG_LANGFUSE_PASSWORD:-langfuse-local}@postgres-langfuse:5432/langfuse
+      SALT: ${REPLICANT_LANGFUSE_SALT:-replicant-local-salt}
+      ENCRYPTION_KEY: ${REPLICANT_LANGFUSE_ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000001}
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${REPLICANT_CLICKHOUSE_PASSWORD:-clickhouse-local}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_HOST: valkey
+      REDIS_PORT: "6379"
+      REDIS_AUTH: ${REPLICANT_VALKEY_PASSWORD:-valkey-local}
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: local-langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: us-east-1
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${REPLICANT_S3_LANGFUSE_SECRET:-langfuse-local-secret}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://s3.replicant.localhost:8333
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: local-langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: us-east-1
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${REPLICANT_S3_LANGFUSE_SECRET:-langfuse-local-secret}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://s3.replicant.localhost:8333
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+
+  langfuse-web:
+    profiles: [core]
+    image: langfuse/langfuse:4.50.0
+    restart: unless-stopped
+    networks:
+      core:
+        aliases: [langfuse.replicant.localhost]
+    depends_on: *langfuse-deps
+    environment:
+      <<: *langfuse-env
+      NEXTAUTH_SECRET: ${REPLICANT_LANGFUSE_NEXTAUTH_SECRET:-replicant-local-nextauth}
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+      AUTH_DISABLE_SIGNUP: "true"
+      # Headless init: org, project and API keys exist before any replicant service starts.
+      LANGFUSE_INIT_ORG_ID: replicant-local
+      LANGFUSE_INIT_ORG_NAME: Replicant (local)
+      LANGFUSE_INIT_PROJECT_ID: replicant-local
+      LANGFUSE_INIT_PROJECT_NAME: replicant-local
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-replicant-local
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${REPLICANT_LANGFUSE_SECRET_KEY:-sk-lf-replicant-local}
+      LANGFUSE_INIT_USER_EMAIL: carol@acme.test
+      LANGFUSE_INIT_USER_NAME: Carol Admin
+      LANGFUSE_INIT_USER_PASSWORD: ${REPLICANT_LANGFUSE_ADMIN_PASSWORD:-replicant-local}
+    ports: ["127.0.0.1:3000:3000"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/api/public/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------------------------
+  # Observability profile
+  # ---------------------------------------------------------------------------------------------
+  alloy:
+    profiles: [observability]
+    # WS-08's local.alloy (generated from the production pipelines, XD-08-11), at WS-08's target version.
+    image: grafana/alloy:v1.21.2
+    restart: unless-stopped
+    networks: [core]
+    command: ["run", "--server.http.listen-addr=0.0.0.0:12345", "--storage.path=/var/lib/alloy/data", "/etc/alloy/local.alloy"]
+    environment:
+      REPLICANT_ENV: local
+      REPLICANT_CLUSTER: local
+      REPLICANT_REDACTION_DIR: /etc/replicant/redaction
+      TEMPO_OTLP_ENDPOINT: tempo:4317
+      LANGFUSE_OTLP_TRACES_URL: http://langfuse-web:3000/api/public/otel/v1/traces
+      LANGFUSE_BASIC_AUTH: ${REPLICANT_LANGFUSE_BASIC_AUTH:-cGstbGYtZmFjdG9yeS1sb2NhbDpzay1sZi1mYWN0b3J5LWxvY2Fs}
+      MIMIR_PUSH_URL: http://prometheus:9090/api/v1/write
+      LOKI_PUSH_URL: http://loki:3100/loki/api/v1/push
+      OTLP_TLS_DIR: /dev/null
+    volumes:
+      - "${REPLICANT_REPO_ROOT:-../..}/deploy/observability/alloy/local.alloy:/etc/alloy/local.alloy:ro"
+      - "${REPLICANT_REPO_ROOT:-../..}/deploy/observability/redaction:/etc/replicant/redaction:ro"
+      - ${REPLICANT_CONTAINER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+    ports: ["127.0.0.1:12345:12345"]
+    depends_on:
+      loki: {condition: service_started}
+      tempo: {condition: service_started}
+      prometheus: {condition: service_started}
+
+  loki:
+    profiles: [observability]
+    image: grafana/loki:3.7.8
+    restart: unless-stopped
+    networks: [core]
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    volumes:
+      - ./config/loki/loki.yaml:/etc/loki/loki.yaml:ro
+      # WS-08 per-tenant overrides (tenants platform, sandbox, audit; ADR-08-002), unmodified.
+      - "${REPLICANT_REPO_ROOT:-../..}/deploy/observability/loki/runtime-overrides.yaml:/etc/loki/runtime/runtime-overrides.yaml:ro"
+      - loki-data:/loki
+    ports: ["127.0.0.1:3100:3100"]
+
+  tempo:
+    profiles: [observability]
+    image: grafana/tempo:2.10.8
+    restart: unless-stopped
+    networks: [core]
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes: [./config/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro, tempo-data:/var/tempo]
+    ports: ["127.0.0.1:3200:3200"]
+
+  prometheus:
+    profiles: [observability]
+    image: prom/prometheus:v3.13.4
+    restart: unless-stopped
+    networks: [core]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-remote-write-receiver
+      - --web.enable-otlp-receiver
+      - --enable-feature=exemplar-storage
+      - --web.listen-address=0.0.0.0:9090
+    volumes: [./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro, prometheus-data:/prometheus]
+    ports: ["127.0.0.1:9090:9090"]
+
+  grafana:
+    profiles: [observability]
+    image: grafana/grafana:13.0.10
+    restart: unless-stopped
+    networks:
+      core:
+        aliases: [grafana.replicant.localhost]
+    depends_on:
+      migrate: {condition: service_completed_successfully, required: false}   # observability can run alone
+    environment:
+      GF_SERVER_HTTP_PORT: "3001"
+      GF_SERVER_ROOT_URL: http://grafana.replicant.localhost:3001
+      GF_AUTH_GENERIC_OAUTH_ENABLED: "true"
+      GF_AUTH_GENERIC_OAUTH_NAME: Dex (local Okta stub)
+      GF_AUTH_GENERIC_OAUTH_CLIENT_ID: grafana
+      GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET: grafana-local-secret
+      GF_AUTH_GENERIC_OAUTH_SCOPES: openid profile email groups
+      GF_AUTH_GENERIC_OAUTH_AUTH_URL: http://dex.replicant.localhost:5556/dex/auth
+      GF_AUTH_GENERIC_OAUTH_TOKEN_URL: http://dex.replicant.localhost:5556/dex/token
+      GF_AUTH_GENERIC_OAUTH_API_URL: http://dex.replicant.localhost:5556/dex/userinfo
+      GF_AUTH_GENERIC_OAUTH_GROUPS_ATTRIBUTE_PATH: groups
+      GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH: "contains(groups[*], 'replicant-operators') && 'Admin' || 'Viewer'"
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_FEATURE_TOGGLES_ENABLE: traceToMetrics
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+      REPLICANT_GRAFANA_RO_PASSWORD: ${REPLICANT_GRAFANA_RO_PASSWORD:-grafana-ro-local}
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - "${REPLICANT_REPO_ROOT:-../..}/deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro"
+      - grafana-data:/var/lib/grafana
+    ports: ["127.0.0.1:3001:3001"]
+
+  # ---------------------------------------------------------------------------------------------
+  # k8s profile: kind cluster with the real AgentRun CRD and controller (walkthrough 10)
+  # ---------------------------------------------------------------------------------------------
+  k8s-provisioner:
+    profiles: [k8s]
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/dev-k8s-tools:${REPLICANT_IMAGE_TAG:-dev}
+    build: {context: "${REPLICANT_REPO_ROOT:-../..}", dockerfile: dev/k8s-tools/Dockerfile}
+    networks: [core]
+    depends_on:
+      runner-local: {condition: service_healthy}
+      run-grants: {condition: service_healthy}
+    environment:
+      KIND_CLUSTER_NAME: replicant-local
+      KIND_NODE_IMAGE: kindest/node:v1.36.4
+      REPLICANT_KATA: ${REPLICANT_KATA:-auto}            # auto | on | off (auto = on when /dev/kvm exists in the VM/host)
+      REPLICANT_COMPOSE_NETWORKS: replicant-core,replicant-sbx
+      # Exec-side images plus every image a seeded run can reference (R1-256): CLI images (they carry
+      # replicant-entrypoint and replicant-agentd, WS-03 decision 2), environment images, QA service images, the probe.
+      REPLICANT_IMAGES_TO_LOAD: >-
+        runner-api,agentrun-controller,run-notifier,sandbox-sidecars,cli-claude-code,cli-codex,
+        env-go-service,env-python-service,env-node-service,env-nextjs-app,env-docs-site,env-web-frontend,
+        qa-svc-postgres,qa-svc-s3mock,qa-builder,contract-probe
+      REPLICANT_IMAGES_TO_LOAD_EXTRA: ${REPLICANT_IMAGES_TO_LOAD_EXTRA:-}
+      REPLICANT_GVISOR: ${REPLICANT_GVISOR:-off}          # off = replicant-gvisor maps to the degraded runc class
+      REPLICANT_IMAGE_REGISTRY: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}
+      REPLICANT_IMAGE_TAG: ${REPLICANT_IMAGE_TAG:-dev}
+      DOCKER_HOST: ${REPLICANT_CONTAINER_HOST:-unix:///var/run/docker.sock}
+    command: ["/bin/bash", "/kind/bootstrap.sh"]
+    volumes:
+      - ${REPLICANT_CONTAINER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      - ./kind:/kind:ro
+      - "${REPLICANT_REPO_ROOT:-../..}/deploy/helm:/helm:ro"
+      - "${REPLICANT_REPO_ROOT:-../..}/contracts:/contracts:ro"
+      - "${REPLICANT_REPO_ROOT:-../..}/deploy/security/kubernetes:/security/kubernetes:ro"   # WS-09 VAPs
+      - k8s-kubeconfig:/root/.kube
+    secrets: [run_token_signing_key, runner_worker_tokens, s3_runner_secret, temporal_codec_key, runner_revocations_readers]
+    restart: "no"
+
+  # ---------------------------------------------------------------------------------------------
+  # github-dev profile: Cloudflare quick tunnel for dev GitHub App webhooks (walkthrough 11; ADR-07-004,
+  # which supersedes ADR-11-006's smee default). Only POST /github/webhook is reachable through it.
+  # ---------------------------------------------------------------------------------------------
+  webhook-ingress:
+    profiles: [github-dev]
+    image: nginx:1.30.5
+    restart: unless-stopped
+    networks: [core]
+    depends_on:
+      github-integration: {condition: service_healthy}
+    volumes: [./config/webhook-ingress/nginx.conf:/etc/nginx/nginx.conf:ro]
+
+  webhook-forwarder:
+    profiles: [github-dev]
+    image: cloudflare/cloudflared:2026.10.3
+    restart: unless-stopped
+    networks: [core, egress]
+    depends_on:
+      webhook-ingress: {condition: service_started}
+    # Quick tunnel: no account, new *.trycloudflare.com hostname on every start. `replicant dev github-app forward`
+    # reads the hostname from the metrics endpoint and has the broker PATCH /app/hook/config with
+    # <hostname>/github/webhook (WS-07 github-app.md §5.2).
+    command: ["tunnel", "--no-autoupdate", "--metrics", "0.0.0.0:20241", "--url", "http://webhook-ingress:8088"]
+    ports: ["127.0.0.1:20241:20241"]
+
+  # ---------------------------------------------------------------------------------------------
+  # chaos profile: network fault injection (test-strategy.md §7). Clients are pointed at toxiproxy by the
+  # override file compose.chaos.yaml (R1-270); without it the proxies carry no traffic.
+  # ---------------------------------------------------------------------------------------------
+  toxiproxy:
+    profiles: [chaos]
+    image: ghcr.io/shopify/toxiproxy:2.13.0
+    restart: unless-stopped
+    networks: [core]
+    command: ["-host=0.0.0.0", "-config=/etc/toxiproxy/proxies.json"]
+    volumes: [./config/runner-local/toxiproxy.json:/etc/toxiproxy/proxies.json:ro]
+    ports: ["127.0.0.1:8474:8474"]
+
+  # ---------------------------------------------------------------------------------------------
+  # s3-minio profile: MinIO built from the last community source tag (ADR-11-004 fallback)
+  # ---------------------------------------------------------------------------------------------
+  s3-minio:
+    profiles: [s3-minio]
+    image: ${REPLICANT_IMAGE_REGISTRY:-localhost/replicant}/minio-src:RELEASE.2025-10-15T17-29-55Z
+    build:
+      context: "${REPLICANT_REPO_ROOT:-../..}/dev/minio-src"
+      args: {MINIO_RELEASE: RELEASE.2025-10-15T17-29-55Z}
+    restart: unless-stopped
+    networks:
+      core:
+        aliases: [s3.replicant.localhost, minio.replicant.localhost]
+    command: ["server", "/data", "--address", ":8333", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: replicant-admin
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/s3_admin_secret
+    secrets: [s3_admin_secret]
+    volumes: [minio-data:/data]
+    ports: ["127.0.0.1:8333:8333"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8333/minio/health/ready || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 40
+
+networks:
+  core:
+    name: replicant-core
+  sbx:
+    name: replicant-sbx
+    internal: true          # no route off the host; members: sbx-edge, sbx-dns, egress-proxy, package mirrors, sandboxes
+    ipam:
+      config:
+        - subnet: 172.31.250.0/24
+          ip_range: 172.31.250.128/25    # sandbox containers get dynamic IPs from the upper half
+  egress:
+    name: replicant-egress
+
+volumes:
+  pg-replicant-data: {}
+  pg-temporal-data: {}
+  pg-langfuse-data: {}
+  s3-data: {}
+  minio-data: {}
+  gitea-data: {}
+  gitea-config: {}
+  zoekt-data: {}
+  runner-local-state: {}
+  repo-mirror-cache: {}
+  squid-cache: {}
+  pkg-npm-storage: {}
+  pkg-go-storage: {}
+  pkg-pypi-cache: {}
+  clickhouse-data: {}
+  clickhouse-logs: {}
+  valkey-data: {}
+  alloy-data: {}
+  loki-data: {}
+  tempo-data: {}
+  prometheus-data: {}
+  grafana-data: {}
+  k8s-kubeconfig: {}
+  gateway-state-data: {}
+
+# All secret files are generated by `replicant dev up` (first run) under $REPLICANT_DEV_HOME/secrets
+# with mode 0600. None are committed. `replicant dev secrets rotate` regenerates them.
+secrets:
+  pg_replicant_superuser: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/pg_replicant_superuser"}
+  db_replicant_migrator: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/db_replicant_migrator"}
+  db_svc_control_plane_api: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/db_svc_control_plane_api"}
+  db_svc_identity_service: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/db_svc_identity_service"}
+  db_svc_github_integration: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/db_svc_github_integration"}
+  db_svc_slack_integration: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/db_svc_slack_integration"}
+  db_svc_replicant_projector: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/db_svc_replicant_projector"}
+  db_svc_memory_service: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/db_svc_memory_service"}
+  db_svc_ecosystem_indexer: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/db_svc_ecosystem_indexer"}
+  db_svc_context_mcp: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/db_svc_context_mcp"}
+  db_svc_usage_ingestor: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/db_svc_usage_ingestor"}
+  db_svc_eval_worker: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/db_svc_eval_worker"}
+  db_svc_replicant_worker: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/db_svc_replicant_worker"}
+  db_svc_publisher_worker: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/db_svc_publisher_worker"}
+  db_svc_github_token_broker: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/db_svc_github_token_broker"}
+  db_svc_retention_sweeper: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/db_svc_retention_sweeper"}
+  db_grafana_ro: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/db_grafana_ro"}
+  s3_admin_secret: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/s3_admin_secret"}
+  s3_runner_secret: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/s3_runner_secret"}
+  temporal_codec_key: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/temporal_codec_key"}
+  oidc_replicant_web: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/oidc_replicant_web"}
+  scim_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/scim_token"}
+  dev_seed_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/dev_seed_token"}
+  langfuse_secret_key: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/langfuse_secret_key"}
+  gitea_admin_password: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/gitea_admin_password"}
+  gitea_bot_password: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/gitea_bot_password"}
+  gitea_webhook_secret: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/gitea_webhook_secret"}
+  slack_signing_secret: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/slack_signing_secret"}
+  slack_bot_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/slack_bot_token"}
+  usage_ingest_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/usage_ingest_token"}
+  run_token_signing_key: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/run_token_signing_key"}
+  run_grant_signing_key: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/run_grant_signing_key"}
+  runner_revocations_readers: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/runner_revocations_readers"}
+  runner_revocations_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/runner_revocations_token"}
+  s3_services_credentials: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/s3_services_credentials"}
+  s3_gateway_shim_credentials: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/s3_gateway_shim_credentials"}
+  runner_worker_tokens: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/runner_worker_tokens"}
+  runner_worker_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/runner_worker_token"}
+  runner_eval_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/runner_eval_token"}
+  broker_mirror_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/broker_mirror_token"}
+  gateway_service_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/gateway_service_token"}
+  gateway_service_tokens: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/gateway_service_tokens"}
+  control_plane_shim_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/control_plane_shim_token"}
+  control_plane_internal_callers: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/control_plane_internal_callers"}

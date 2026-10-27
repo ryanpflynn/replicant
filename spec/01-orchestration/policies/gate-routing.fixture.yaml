@@ -1,0 +1,62 @@
+# TEST FIXTURE, NOT A POLICY DOCUMENT (R1-026). It has no Policy envelope (apiVersion/kind/metadata/spec)
+# on purpose: the authoritative `gate_rules` Policy shape is WS-07's
+# spec/07-control-plane-and-ux/schemas/policy-gate-rules.schema.json, which WS-07 evaluates inside
+# activity gates.resolve_routing. This file is the reference tests' stand-in for that evaluation: per gate
+# kind, the GateRouting values (schemas/gate-routing.v1.json) the stub returns. Timing values are seconds.
+# Mapping to WS-07's shape: always_for -> when.any_of[workflow_type_in]; risk_at_least -> when.risk_at_least;
+# approvers/requester_may_decide -> eligible; *_seconds -> timing (ISO 8601 durations).
+fixture: gate_routing
+gates:
+  plan_approval:
+    always_for: [feature, api_change]
+    risk_at_least: high
+    channels: [ui, slack, cli]
+    approvers: {codeowners: true, okta_groups: [], min_repo_permission: write}
+    requester_may_decide: false
+    reminder_seconds: [14400, 86400]   # 4 h, then 24 h after opening
+    reminder_repeat_seconds: 86400     # then daily
+    escalation_seconds: [86400, 259200]  # 24 h -> team lead group, 72 h -> tenant admins
+    expiry_seconds: 604800             # 7 d
+    on_expiry: expire                  # job ends `expired` (outcome gate_expired)
+  publish_approval:
+    always_for: [feature, api_change, hotfix]
+    risk_at_least: high
+    channels: [ui, slack, github, cli]
+    approvers: {codeowners: true, okta_groups: [], min_repo_permission: write}
+    requester_may_decide: false
+    reminder_seconds: [14400, 86400]
+    reminder_repeat_seconds: 86400
+    escalation_seconds: [86400]
+    expiry_seconds: 604800
+    on_expiry: expire
+    reapprove_after_rebase: on_conflict_or_risk_change   # or: always
+  clarification:
+    always_for: []
+    channels: [ui, slack, github, cli]
+    approvers: {requester_only: true}
+    requester_may_decide: true
+    reminder_seconds: [86400]
+    reminder_repeat_seconds: 172800
+    escalation_seconds: []
+    expiry_seconds: 1209600            # 14 d
+    on_expiry: expire
+  budget_extension:
+    always_for: []
+    channels: [ui, slack]
+    approvers: {okta_groups: [payments-leads], min_repo_permission: write}
+    requester_may_decide: true
+    reminder_seconds: [14400]
+    reminder_repeat_seconds: 86400
+    escalation_seconds: []
+    expiry_seconds: 259200
+    on_expiry: expire
+  bundle_migration:
+    always_for: []
+    channels: [ui, slack]
+    approvers: {requester_only: true}
+    requester_may_decide: true
+    reminder_seconds: [86400]
+    reminder_repeat_seconds: 259200
+    escalation_seconds: []
+    expiry_seconds: 1209600
+    on_expiry: decline

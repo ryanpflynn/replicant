@@ -1,0 +1,279 @@
+# v0 (M1) override, always used together with compose.yaml, compose.v0.deps.yaml and `--profile v0`:
+#   podman-compose -f compose.yaml -f compose.v0.yaml -f compose.v0.deps.yaml --profile v0 up -d
+# (`replicant dev up --profile v0` does exactly this). podman-compose 1.6 fails with KeyError on a depends_on entry
+# naming a service outside the active profiles (even with `required: false`), so this file resets depends_on on
+# the services whose spec dependencies include non-v0 services, and compose.v0.deps.yaml re-adds the v0 subset
+# (podman-compose's `!override` cannot express a nested depends_on mapping). Every difference from the spec stack is recorded in
+# replicant/docs/v0/DEVIATIONS.md (PLATFORM-D*). Names, ports, env vars and secret paths are unchanged.
+services:
+  # PLATFORM-D1: Temporal CLI dev server (server 1.32.0, SQLite file persisted in a volume) instead of
+  # temporalio/server 1.32.1 on postgres-temporal + temporal-schema. Same address temporal:7233, same namespace,
+  # same dynamic config keys as config/temporal/dynamicconfig.yaml (passed as --dynamic-config-value).
+  temporal:
+    image: temporalio/admin-tools:1.32.1
+    user: "0:0"
+    entrypoint:
+      - temporal
+      - server
+      - start-dev
+      - --ip=0.0.0.0
+      - --port=7233
+      - --headless
+      - --db-filename=/var/lib/temporal-dev/temporal.db
+      - --namespace=replicant-local
+      - --log-level=warn
+      - --dynamic-config-value=limit.maxIDLength=255
+      - --dynamic-config-value=system.forceSearchAttributesCacheRefreshOnRead=true
+      - --dynamic-config-value=frontend.enableUpdateWorkflowExecution=true
+      - --dynamic-config-value=frontend.enableUpdateWorkflowExecutionAsyncAccepted=true
+      - --dynamic-config-value=system.enableDeploymentVersions=true
+      - --dynamic-config-value=frontend.workerVersioningWorkflowAPIs=true
+      - --dynamic-config-value=frontend.namespaceRPS=2400
+      - --dynamic-config-value=history.maximumSignalsPerExecution=10000
+      - --dynamic-config-value=limit.historyCount.warn=10240
+      - --dynamic-config-value=limit.historyCount.error=51200
+    # The base service's DB_*/POSTGRES_* env vars and its dynamicconfig mount stay in the merged config; the dev
+    # server ignores them (podman-compose 1.6 cannot `!reset` an environment mapping).
+    depends_on: !reset {}
+    volumes:
+      - temporal-dev-data:/var/lib/temporal-dev
+
+  # Namespace + the 14 C-IDS search attributes (spec bootstrap.sh, unmodified), then v0 checks: Worker
+  # Deployment APIs answer on the dev server, and the C-IDS task queue names are printed (task queues need no
+  # registration in Temporal; they exist once a worker polls).
+  temporal-bootstrap:
+    entrypoint: ["/bin/sh", "/scripts/bootstrap-v0.sh"]
+    volumes:
+      - ./config/temporal/bootstrap-v0.sh:/scripts/bootstrap-v0.sh:ro
+
+  # PLATFORM-D8: s3-init applies WS-10's default bucket encryption (SSE-S3); SeaweedFS 4.48 then fails every PUT with
+  # InternalError unless it has an SSE key. The key comes from the generated .env (third-party image, no *_FILE).
+  s3:
+    environment:
+      WEED_S3_SSE_KEY: ${REPLICANT_S3_SSE_KEY:?run replicant dev up to generate dev/compose/.env}
+
+  # PLATFORM-D2: dex and temporal-codec-server are not in v0, so the UI runs without OIDC and without the codec.
+  temporal-ui:
+    depends_on: !reset {}
+    environment:
+      TEMPORAL_AUTH_ENABLED: "false"
+      TEMPORAL_CODEC_ENDPOINT: ""
+      TEMPORAL_CODEC_PASS_ACCESS_TOKEN: "false"
+
+  # PLATFORM-D6: v0 Gitea bootstrap also does the Gitea part of seed step 4 (org, sample repo push, org webhook to
+  # github-integration, the `replicant` label) because identity-service and the full seeder are not in M1.
+  gitea-bootstrap:
+    entrypoint: ["/bin/sh", "/scripts/bootstrap-v0.sh"]
+    environment:
+      GITEA_URL: http://gitea:3300    # not git.replicant.localhost: curl resolves *.localhost to 127.0.0.1 itself
+      GITEA_WEBHOOK_SECRET_FILE: /run/secrets/gitea_webhook_secret
+      GITEA_WEBHOOK_URL: http://github-integration:8080/webhooks/gitea
+      GITEA_ORG: acme-payments
+      GITEA_SAMPLE_REPOS: ledger-api
+    secrets: [gitea_webhook_secret]          # merged with the base service's two secrets
+    volumes:
+      - ./config/gitea/bootstrap-v0.sh:/scripts/bootstrap-v0.sh:ro
+      - "${REPLICANT_REPO_ROOT:-../..}/dev/sample-repos:/sample-repos:ro"
+
+  # M3 (X0-10): sandboxes sit on the internal replicant-sbx network as in the spec stack (ADR-11-007). They reach only
+  # sbx-edge (gateway, runner sandbox listener, git = repo-mirror upload-pack, s3, otlp), sbx-dns (sbx.local only,
+  # NXDOMAIN otherwise), the egress proxy (sbx.local allowlist) and the package mirrors. Values requested by RUNNER
+  # (RUNNER-01, RUNNER-05) stay; the endpoints in bootstrap.json are the sbx.local names.
+  runner-local:
+    security_opt: [label=disable]
+    environment:
+      OTEL_SDK_DISABLED: ${REPLICANT_OTEL_DISABLED:-true}
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://alloy:4318/v1/traces
+      RUNNER_SANDBOX_NETWORK: replicant-sbx
+      RUNNER_SANDBOX_DIRECT_EGRESS: "false"
+      RUNNER_SANDBOX_RUNNER_URL: http://runner-sandbox.sbx.local
+      RUNNER_SANDBOX_GATEWAY_URL: http://gateway.sbx.local
+      RUNNER_SANDBOX_REPO_MIRROR_URL: http://git.sbx.local
+      RUNNER_SANDBOX_S3_ENDPOINT: http://s3.sbx.local
+      RUNNER_SANDBOX_OTLP_URL: http://otlp.sbx.local
+      # No package mirrors in v0 (PLATFORM-D18): Go modules via https://proxy.golang.org through the egress proxy
+      # (allowlisted for sandboxes in squid.conf). npm/PyPI mirror variables keep their sbx.local values (unused).
+      RUNNER_SANDBOX_EXTRA_ENV: GOPROXY=https://proxy.golang.org
+      # Sandbox S3 credentials: STS AssumeRole with the per-run session policy (SeaweedFS advanced IAM, iam.json).
+      RUNNER_S3_STS_ROLE_ARN: arn:aws:iam::000000000000:role/replicant-sandbox-artifacts
+      RUNNER_STATE_VOLUME: replicant_runner-local-state
+      RUNNER_S3_CREDENTIALS_FILE: /run/secrets/s3_services_credentials
+      # M3: per-run sandbox log flush into Alloy (deploy/observability/alloy/v0-sandbox-flush.alloy); a no-op
+      # (retried, then dropped) when the observability profile is not up.
+      RUNNER_LOG_FLUSH_URL: http://alloy:3500/loki/api/v1/push
+      # Test hook for RC-CAN-01 only: runs whose logical activity ID starts with `holdpending` stay Pending. No
+      # replicant workflow uses that prefix (logical IDs are <node_key>.c<n>.n<n>.<effect>, node keys from graphs).
+      RUNNER_TEST_HOOKS: "${RUNNER_TEST_HOOKS:-false}"   # set RUNNER_TEST_HOOKS=true when running RC-CAN-01
+    secrets: [s3_services_credentials]
+
+  sbx-edge:
+    volumes:
+      - ./config/sbx-edge/05-resolver.envsh:/docker-entrypoint.d/05-resolver.envsh:ro
+
+  # GATEWAY-01: script backend in M1, default script set, in-memory state (gateway-state stays, unused).
+  gateway-shim:
+    command:
+      - replicant-gateway-shim
+      - --config=/etc/gateway-shim/gateway-shim.yaml
+      - --upstream-backend=${REPLICANT_GATEWAY_MODE:-script}
+      - --replay-match=${REPLICANT_GATEWAY_REPLAY_MATCH:-sequence}
+    environment:
+      OTEL_SDK_DISABLED: ${REPLICANT_OTEL_DISABLED:-true}
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://alloy:4318/v1/traces
+      REPLICANT_GATEWAY_SCRIPT_DEFAULT_SET: walkthrough-ledger-api
+      REPLICANT_GATEWAY_LOCAL_QUOTA: monthly=100,daily=10,platform_daily=50,platform_monthly=500
+      # M2 passthrough: the key comes from secret anthropic_api_key (imported from replicant/dev/.env by
+      # `replicant dev up --gateway passthrough`; empty file in script mode). No egress-proxy in v0, so no proxy.
+      ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_api_key
+      HTTPS_PROXY: ""
+    secrets: [anthropic_api_key]
+
+  # CONTROL-02: static caller tokens for control-plane-api /internal/v1/** and the token broker (M1, local only).
+  github-integration:
+    environment:
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://alloy:4318/v1/traces
+      REPLICANT_CONTROL_PLANE_TOKEN_FILE: /run/secrets/github_integration_cp_token
+      REPLICANT_TOKEN_BROKER_TOKEN_FILE: /run/secrets/broker_github_integration_token
+      REPLICANT_DEV_SEED_TOKEN_FILE: /run/secrets/dev_seed_token     # admin/scm-installations for `replicant dev seed`
+      REPLICANT_NOTIFY_CALLER_TOKEN_FILE: /run/secrets/notify_delivery_token   # notify dispatcher -> issue comments
+    secrets: [github_integration_cp_token, broker_github_integration_token, dev_seed_token, notify_delivery_token]
+  github-token-broker:
+    environment:
+      REPLICANT_BROKER_CALLER_TOKENS_FILE: /run/secrets/broker_caller_tokens
+    secrets: [broker_caller_tokens]
+  publisher-worker:
+    environment:
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://alloy:4318/v1/traces
+      REPLICANT_TOKEN_BROKER_TOKEN_FILE: /run/secrets/broker_publisher_token
+      # `gitea`, not git.replicant.localhost: git uses libcurl, which resolves *.localhost to 127.0.0.1 (PLATFORM-03).
+      REPLICANT_GITEA_BASE_URL: http://gitea:3300
+    secrets: [broker_publisher_token]
+
+  # Same libcurl *.localhost issue for repo-mirror's upstream git fetches (integration fix INT-01).
+  repo-mirror:
+    environment:
+      MIRROR_UPSTREAMS: gitea=http://gitea:3300,github=https://github.com
+      NO_PROXY: gitea,git.replicant.localhost,github-token-broker,runner-local
+
+  # WORKER-02: control-plane-api caller token (POST /internal/v1/notifications) and the gateway script set.
+  replicant-worker:
+    depends_on: !reset {}
+    environment:
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://alloy:4318/v1/traces
+      REPLICANT_CONTROL_PLANE_TOKEN_FILE: /run/secrets/replicant_worker_cp_token
+      REPLICANT_GATEWAY_SCRIPT_SET: ${REPLICANT_GATEWAY_SCRIPT_SET:-walkthrough-ledger-api}
+      REPLICANT_METRICS_BIND: "off"
+    secrets: [replicant_worker_cp_token]
+
+  # CONTROL-05: run-grants polls the exec revocation feed of runner-local.
+  # NOTIFY (DEVIATIONS NOTIFY-*): notification fan-out, dispatcher and reminder scheduler. Links in comments and DMs
+  # point at the browser addresses of the local stack. Thresholds: REPLICANT_NOTIFY_PR_IDLE_SECONDS (first PR-waiting
+  # reminder), ..._PR_REMIND_EVERY_SECONDS (then at most once per period), ..._JOB_MAX_AGE_DAYS and
+  # ..._LIFETIME_LEAD_SECONDS (escalation to tenant admins), ..._QUIET_HOURS (default 20:00-08:00,weekends).
+  control-plane-api:
+    depends_on: !reset {}
+    environment:
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://alloy:4318/v1/traces
+      REPLICANT_NOTIFY_WEB_URL: ${REPLICANT_NOTIFY_WEB_URL:-http://127.0.0.1:8400}
+      REPLICANT_NOTIFY_SCM_WEB_URLS: git.replicant.localhost:3300=http://127.0.0.1:3300
+      REPLICANT_NOTIFY_PR_IDLE_SECONDS: ${REPLICANT_NOTIFY_PR_IDLE_SECONDS:-86400}
+      REPLICANT_NOTIFY_PR_REMIND_EVERY_SECONDS: ${REPLICANT_NOTIFY_PR_REMIND_EVERY_SECONDS:-86400}
+      REPLICANT_NOTIFY_JOB_MAX_AGE_DAYS: ${REPLICANT_NOTIFY_JOB_MAX_AGE_DAYS:-60}
+      REPLICANT_NOTIFY_LIFETIME_LEAD_SECONDS: ${REPLICANT_NOTIFY_LIFETIME_LEAD_SECONDS:-604800}
+      REPLICANT_NOTIFY_SWEEP_SECONDS: ${REPLICANT_NOTIFY_SWEEP_SECONDS:-30}
+      REPLICANT_NOTIFY_QUIET_HOURS: ${REPLICANT_NOTIFY_QUIET_HOURS:-20:00-08:00,weekends}
+      REPLICANT_NOTIFY_DELIVERY_TOKEN_FILE: /run/secrets/notify_delivery_token
+      REPLICANT_SLACK_INTEGRATION_URL: http://slack-integration:8080
+    secrets: [notify_delivery_token]
+  replicant-projector:
+    environment:
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://alloy:4318/v1/traces
+
+  run-grants:
+    environment:
+      REPLICANT_EXEC_REVOCATIONS_URLS: http://runner-local:8480/v1/revocations
+      REPLICANT_EXEC_REVOCATIONS_TOKEN_FILE: /run/secrets/runner_revocations_token
+    secrets: [runner_revocations_token]
+
+  # WEB-01: the management UI joins the v0 profile (spec: profile core; compose.yaml now lists v0 too, RENAME-D6).
+  # Same image, port 8400, /healthz and REPLICANT_API_UPSTREAM as compose.yaml; local identity is the
+  # X-Replicant-Dev-User header (no Dex/BFF in v0).
+  control-plane-web:
+    profiles: [core, v0]
+
+  # NOTIFY: Slack DMs through slack-integration against slack-mock (spec services, profile v0 added in compose.yaml).
+  slack-integration:
+    environment:
+      REPLICANT_NOTIFY_CALLER_TOKEN_FILE: /run/secrets/notify_delivery_token
+      REPLICANT_CONTROL_PLANE_TOKEN_FILE: /run/secrets/slack_integration_cp_token   # gate decisions, App Home list
+      REPLICANT_WEB_URL: http://127.0.0.1:8400
+    secrets: [notify_delivery_token, slack_integration_cp_token]
+
+  # ---------------------------------------------------------------------------------------------------------
+  # M2 observability (profile `observability`, `replicant dev up --with-observability`): WS-08 local.alloy, Loki
+  # multi-tenant with WS-08 overrides, Tempo, Prometheus, Grafana with the WS-08 dashboards. No dex in v0, so
+  # Grafana runs with anonymous Viewer access instead of the Dex OAuth login (PLATFORM-D15). Langfuse deferred.
+  # ---------------------------------------------------------------------------------------------------------
+  alloy:
+    security_opt: [label=disable]          # read the Podman socket (container discovery) in the VM
+    # M3: WS-08's local.alloy plus the v0 sandbox log-flush receiver, loaded as one config directory.
+    command: ["run", "--server.http.listen-addr=0.0.0.0:12345", "--storage.path=/var/lib/alloy/data", "/etc/alloy-v0"]
+    volumes:
+      - "${REPLICANT_REPO_ROOT:-../..}/deploy/observability/alloy/local.alloy:/etc/alloy-v0/local.alloy:ro"
+      - "${REPLICANT_REPO_ROOT:-../..}/deploy/observability/alloy/v0-sandbox-flush.alloy:/etc/alloy-v0/v0-sandbox-flush.alloy:ro"
+  # Container metrics (CPU, memory, network, state, restarts) for every container of the Podman engine, sandbox
+  # containers (ar-*) included; Prometheus job "podman". Reads the rootless Podman socket like alloy (root in the
+  # rootless user namespace = the VM user that owns the socket). Dashboard: deploy/grafana/dashboards/containers.json.
+  podman-exporter:
+    profiles: [observability]
+    image: quay.io/navidys/prometheus-podman-exporter:v1.19.0      # arm64 + amd64 index, released 2025-10-04
+    restart: unless-stopped
+    networks: [core]
+    user: "0:0"
+    security_opt: [label=disable]
+    command:
+      - --collector.enhance-metrics        # name/image/labels on every podman_container_* series, not only _info
+      - --collector.whitelisted_labels=com.docker.compose.service,replicant.example.com/run-id,replicant.example.com/tenant,replicant.example.com/role
+      - --collector.cache_duration=300     # container size (rootfs) is expensive; refresh every 5 min
+      - --web.disable-exporter-metrics
+      - --web.max-requests=4
+    environment:
+      CONTAINER_HOST: unix:///run/podman/podman.sock
+    volumes:
+      - ${REPLICANT_CONTAINER_SOCKET:-/var/run/docker.sock}:/run/podman/podman.sock:ro
+    mem_limit: 96m
+    cpus: 0.25
+  grafana:
+    environment:
+      GF_AUTH_GENERIC_OAUTH_ENABLED: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "false"
+      GF_SECURITY_ADMIN_PASSWORD: ${REPLICANT_GRAFANA_ADMIN_PASSWORD:-replicant-local-admin}
+
+  # Spec dependencies outside v0 removed here, v0 subset re-added in compose.v0.deps.yaml.
+  s3-init:                 # s3-minio (profile s3-minio)
+    depends_on: !reset {}
+  # control-plane-api (dex, langfuse-web) and replicant-worker (memory-service, langfuse-web; WORKER-02) reset their
+  # depends_on in their own blocks above: a second mapping key for the same service silently replaced the first
+  # (YAML duplicate key), which dropped their environment overrides (NOTIFY-D7).
+
+# Sandboxes resolve through sbx-dns only (sbx.local, NXDOMAIN otherwise). Podman's aardvark-dns would otherwise
+# answer for the network (container names, and --dns is only its upstream), so DNS is disabled on replicant-sbx.
+networks:
+  sbx:
+    x-podman.disable_dns: true
+
+volumes:
+  temporal-dev-data: {}
+
+# v0-only secret files (CONTROL-02), generated by `replicant dev up` like the spec ones.
+secrets:
+  github_integration_cp_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/github_integration_cp_token"}
+  broker_caller_tokens: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/broker_caller_tokens"}
+  broker_publisher_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/broker_publisher_token"}
+  broker_github_integration_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/broker_github_integration_token"}
+  anthropic_api_key: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/anthropic_api_key"}
+  replicant_worker_cp_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/replicant_worker_cp_token"}
+  notify_delivery_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/notify_delivery_token"}
+  slack_integration_cp_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/slack_integration_cp_token"}

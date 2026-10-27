@@ -1,0 +1,86 @@
+{
+  "Version": "2012-10-17",
+  "Id": "replicant-prod-legal",
+  "Statement": [
+    {
+      "Sid": "MetadataForAccount",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::111111111111:root"
+      },
+      "Action": [
+        "kms:DescribeKey",
+        "kms:GetKeyPolicy",
+        "kms:ListResourceTags"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AdminWithoutUse",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::111111111111:role/replicant-prod-platform-deployer"
+      },
+      "Action": [
+        "kms:Create*",
+        "kms:Describe*",
+        "kms:Enable*",
+        "kms:List*",
+        "kms:Put*",
+        "kms:Update*",
+        "kms:Disable*",
+        "kms:Get*",
+        "kms:TagResource",
+        "kms:UntagResource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "LegalHoldAndLeakPurgeUseViaS3OnLegalBucket",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": [
+          "arn:aws:iam::111111111111:role/replicant-prod-legal-hold",
+          "arn:aws:iam::111111111111:role/replicant-prod-leak-purge"
+        ]
+      },
+      "Action": [
+        "kms:GenerateDataKey",
+        "kms:Decrypt"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "s3.us-east-1.amazonaws.com"
+        },
+        "StringLike": {
+          "kms:EncryptionContext:aws:s3:arn": [
+            "arn:aws:s3:::acme-replicant-prod-legal",
+            "arn:aws:s3:::acme-replicant-prod-legal/*"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "NoOneElseUsesTheLegalKey",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "kms:Decrypt",
+        "kms:GenerateDataKey*",
+        "kms:ReEncrypt*",
+        "kms:Encrypt",
+        "kms:CreateGrant"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ArnNotLike": {
+          "aws:PrincipalArn": [
+            "arn:aws:iam::111111111111:role/replicant-prod-legal-hold",
+            "arn:aws:iam::111111111111:role/replicant-prod-leak-purge"
+          ]
+        }
+      }
+    }
+  ]
+}

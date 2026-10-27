@@ -1,0 +1,9 @@
+[
+  {
+    "GiteaURL": "http://git.replicant.localhost:3300",
+    "GiteaOrg": "acme-payments",
+    "CredentialPath": "/run/zoekt/gitea-read-token",
+    "DisableTLS": true,
+    "Name": "acme-payments"
+  }
+]

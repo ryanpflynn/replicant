@@ -1,0 +1,14 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ConnectAsOwnDbUserOnAnyReplicantClusterIncarnation",
+      "Effect": "Allow",
+      "Action": "rds-db:connect",
+      "Resource": [
+        "arn:aws:rds-db:us-east-1:111111111111:dbuser:cluster-*/svc_control_plane_api",
+        "arn:aws:rds-db:us-west-2:111111111111:dbuser:cluster-*/svc_control_plane_api"
+      ]
+    }
+  ]
+}

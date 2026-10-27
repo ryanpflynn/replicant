@@ -1,0 +1,38 @@
+[project]
+name = "slack-integration"
+version = "0.1.0"
+description = "Replicant slack-integration: notification DMs (POST /internal/v1/notifications/deliver) and signed Slack ingress."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "replicant-telemetry",
+  "fastapi==0.162.0",
+  "uvicorn==0.54.0",
+  "sqlalchemy[asyncio]==2.1.6",
+  "psycopg[binary]==3.3.6",
+  "slack-sdk==3.45.0",
+  "aiohttp==3.14.5",
+  "httpx==0.28.1",
+  "replicant-ids",
+]
+
+[project.scripts]
+slack-integration = "slack_integration.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=1.0", "slack-mock"]
+
+[tool.uv.sources]
+replicant-telemetry = { workspace = true }
+slack-mock = { workspace = true }
+replicant-ids = { workspace = true }
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/slack_integration"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

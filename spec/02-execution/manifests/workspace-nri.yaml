@@ -1,0 +1,58 @@
+# replicant-workspace-nri: containerd NRI plugin that provisions the workspace hard limit
+# (workspace-storage.md section 4). Runs as an external NRI plugin connecting to /var/run/nri/nri.sock.
+# Privileged node agent: it is platform code, never runs tenant code, and is admitted only in
+# namespace replicant-node-agents (WS-09 VAP exempts it by namespace).
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: replicant-workspace-nri
+  namespace: replicant-node-agents
+spec:
+  selector:
+    matchLabels: {app: replicant-workspace-nri}
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 1}
+  template:
+    metadata:
+      labels: {app: replicant-workspace-nri}
+    spec:
+      priorityClassName: system-node-critical
+      serviceAccountName: replicant-workspace-nri        # RBAC: patch nodes (remove its startup taint) only
+      nodeSelector:
+        replicant.example.com/sandbox: "true"
+      tolerations:
+        - operator: Exists                             # must run before startup taints are removed
+      hostPID: false
+      containers:
+        - name: nri
+          image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/workspace-nri@sha256:4b6d8f0a2c4e6b8d1f3a5c7e9b0d2f4a6c8e1b3d5f7a9c0e2b4d6f8a1c3e5b7d
+          args:
+            - --nri-socket=/var/run/nri/nri.sock
+            - --plugin-name=replicant-workspace
+            - --plugin-index=10
+            - --kubelet-root=/var/lib/kubelet
+            - --quota-mount=/mnt/k8s-disks/0
+            - --projid-base=1073741824
+            - --kata-ctl=/opt/kata/bin/kata-ctl
+            - --remove-startup-taint=replicant.example.com/workspace-nri-not-ready
+          env:
+            - name: NODE_NAME
+              valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
+          securityContext:
+            privileged: true                           # quotactl, mkfs on host paths, kata-ctl direct-volume
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          volumeMounts:
+            - {name: nri, mountPath: /var/run/nri}
+            - {name: kubelet, mountPath: /var/lib/kubelet, mountPropagation: HostToContainer}
+            - {name: disks, mountPath: /mnt/k8s-disks}
+            - {name: kata-run, mountPath: /run/kata-containers}
+            - {name: kata-opt, mountPath: /opt/kata, readOnly: true}
+      volumes:
+        - {name: nri, hostPath: {path: /var/run/nri, type: Directory}}
+        - {name: kubelet, hostPath: {path: /var/lib/kubelet, type: Directory}}
+        - {name: disks, hostPath: {path: /mnt/k8s-disks, type: Directory}}
+        - {name: kata-run, hostPath: {path: /run/kata-containers, type: DirectoryOrCreate}}
+        - {name: kata-opt, hostPath: {path: /opt/kata, type: Directory}}

@@ -1,0 +1,68 @@
+# Exec egress firewall (network.md section 6.1; R1-240 assigns ownership to WS-02; XD-FIX-R1-211).
+# CloudFormation resources for the AWS Network Firewall in the egress VPC replicant-<env>-egress
+# (10.43.0.0/24). Rendered per environment by the platform IaC; <env> and the firewall subnet IDs
+# are filled in at render time. Plain values only (no intrinsic functions) so the file stays
+# parseable as data; the IaC wraps it.
+AWSTemplateFormatVersion: "2010-09-09"
+Description: replicant exec egress firewall (domain allowlists per source subnet group)
+Resources:
+  AllowRepoMirrorGithub:
+    Type: AWS::NetworkFirewall::RuleGroup
+    Properties:
+      RuleGroupName: replicant-prod-allow-repo-mirror-github
+      Type: STATEFUL
+      Capacity: 100
+      RuleGroup:
+        StatefulRuleOptions:
+          RuleOrder: STRICT_ORDER
+        RuleVariables:
+          IPSets:
+            HOME_NET:
+              Definition: ["10.41.12.0/22"]        # exec-mirror subnets (repo-mirror nodes and pods)
+        RulesSource:
+          RulesSourceList:
+            GeneratedRulesType: ALLOWLIST
+            TargetTypes: [TLS_SNI, HTTP_HOST]
+            Targets: [github.com, api.github.com, codeload.github.com]
+  AllowExecSystemOidc:
+    Type: AWS::NetworkFirewall::RuleGroup
+    Properties:
+      RuleGroupName: replicant-prod-allow-exec-system-oidc
+      Type: STATEFUL
+      Capacity: 50
+      RuleGroup:
+        StatefulRuleOptions:
+          RuleOrder: STRICT_ORDER
+        RuleVariables:
+          IPSets:
+            HOME_NET:
+              Definition: ["10.41.16.0/20"]        # exec-system subnets (runner-api verifies core SA tokens)
+        RulesSource:
+          RulesSourceList:
+            GeneratedRulesType: ALLOWLIST
+            TargetTypes: [TLS_SNI, HTTP_HOST]
+            Targets: [oidc.eks.us-east-1.amazonaws.com]
+  EgressPolicy:
+    Type: AWS::NetworkFirewall::FirewallPolicy
+    Properties:
+      FirewallPolicyName: replicant-prod-egress
+      FirewallPolicy:
+        StatelessDefaultActions: ["aws:forward_to_sfe"]
+        StatelessFragmentDefaultActions: ["aws:forward_to_sfe"]
+        StatefulEngineOptions:
+          RuleOrder: STRICT_ORDER
+        StatefulDefaultActions: ["aws:drop_established", "aws:alert_established"]
+        StatefulRuleGroupReferences:
+          - {ResourceArn: "arn:aws:network-firewall:us-east-1:222222222222:stateful-rulegroup/replicant-prod-allow-repo-mirror-github", Priority: 10}
+          - {ResourceArn: "arn:aws:network-firewall:us-east-1:222222222222:stateful-rulegroup/replicant-prod-allow-exec-system-oidc", Priority: 20}
+  EgressFirewall:
+    Type: AWS::NetworkFirewall::Firewall
+    Properties:
+      FirewallName: replicant-prod-egress
+      VpcId: vpc-egress-prod                      # replicant-prod-egress, 10.43.0.0/24
+      FirewallPolicyArn: "arn:aws:network-firewall:us-east-1:222222222222:firewall-policy/replicant-prod-egress"
+      DeleteProtection: true
+      SubnetMappings:
+        - {SubnetId: subnet-egress-fw-a}           # 10.43.0.0/28
+        - {SubnetId: subnet-egress-fw-b}           # 10.43.0.16/28
+        - {SubnetId: subnet-egress-fw-c}           # 10.43.0.32/28

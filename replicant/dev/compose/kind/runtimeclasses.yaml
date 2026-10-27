@@ -1,0 +1,11 @@
+# Replicant RuntimeClass names (C-RUNNER Isolation enum -> replicant-*), applied when Kata is available.
+# Production decision (WS-02 R-1..R-3): Kata 4.3.1 runtime-rs + Cloud Hypervisor for every class, gVisor standby,
+# Firecracker disabled. kata-deploy is installed with only the clh-runtime-rs shim, whose handler is
+# kata-clh-runtime-rs. replicant-kata-fc and replicant-gvisor have no working local handler and are therefore
+# the labelled degraded runc classes (runtimeclasses-fallback.yaml, applied for those two names as well).
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata: {name: replicant-kata-clh}
+handler: kata-clh-runtime-rs
+scheduling:
+  nodeSelector: {replicant.example.com/sandbox: "true"}

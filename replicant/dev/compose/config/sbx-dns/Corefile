@@ -1,0 +1,21 @@
+# Sandbox resolver. Answers only the names sandboxes may reach; everything else is NXDOMAIN (no forwarder),
+# so DNS tunnelling and lookups of external hosts fail inside the sandbox (SEC-EGRESS-05).
+sbx.local:53 {
+    hosts {
+        172.31.250.10 gateway.sbx.local memory-mcp.sbx.local context-mcp.sbx.local runner-sandbox.sbx.local
+        172.31.250.10 git.sbx.local s3.sbx.local otlp.sbx.local runner-sandbox-k8s.sbx.local
+        172.31.250.3  egress.sbx.local
+        172.31.250.30 npm.sbx.local
+        172.31.250.31 goproxy.sbx.local
+        172.31.250.32 pypi.sbx.local
+        fallthrough
+    }
+    log
+    errors
+}
+.:53 {
+    template ANY ANY {
+        rcode NXDOMAIN
+    }
+    log
+}

@@ -1,0 +1,6 @@
+[
+  {"name": "runner", "listen": "0.0.0.0:18480", "upstream": "runner-local:8480", "enabled": true},
+  {"name": "temporal", "listen": "0.0.0.0:17233", "upstream": "temporal:7233", "enabled": true},
+  {"name": "postgres-replicant", "listen": "0.0.0.0:15432", "upstream": "postgres-replicant:5432", "enabled": true},
+  {"name": "s3", "listen": "0.0.0.0:18333", "upstream": "s3:8333", "enabled": true}
+]

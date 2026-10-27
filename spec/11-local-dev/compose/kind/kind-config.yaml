@@ -1,0 +1,22 @@
+# kind cluster for the `k8s` profile. bootstrap.sh renders the /dev/kvm mount only when Kata is enabled.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: replicant-local
+networking:
+  disableDefaultCNI: true        # Cilium, so CiliumNetworkPolicy egress rules are the real ones (WS-02)
+  kubeProxyMode: none
+  podSubnet: 10.244.0.0/16
+  serviceSubnet: 10.96.0.0/16
+nodes:
+  - role: control-plane
+    labels:
+      replicant.example.com/pool: exec-system
+    extraPortMappings:
+      - {containerPort: 30480, hostPort: 8481, listenAddress: 127.0.0.1}   # runner-api orchestration listener
+  - role: worker
+    labels:
+      replicant.example.com/pool: sbx
+      replicant.example.com/sandbox: "true"
+    # KVM_MOUNT (rendered by bootstrap.sh when REPLICANT_KATA resolves to on):
+    #   extraMounts: [{hostPath: /dev/kvm, containerPath: /dev/kvm}]
+featureGates: {}

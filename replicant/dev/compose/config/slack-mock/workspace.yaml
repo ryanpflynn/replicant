@@ -1,0 +1,15 @@
+# Slack mock workspace (slack-mock implements the Web API subset slack-integration uses:
+# auth.test, chat.postMessage, chat.update, chat.postEphemeral, users.info, conversations.info, conversations.open,
+# views.open). DM channels are D + the user id without its leading U (U0ALICE01 -> D0ALICE01).
+team: {id: T0LOCAL01, name: acme-local, domain: acme-local}
+users:
+  - {id: U0ALICE01, name: alice, email: alice@acme.test}
+  - {id: U0BOB0001, name: bob, email: bob@acme.test}
+  - {id: U0CAROL01, name: carol, email: carol@acme.test}
+  - {id: U0DAVE001, name: dave, email: dave@acme.test}
+  - {id: U0ERIN001, name: erin, email: erin@acme.test}
+  - {id: U0GRACE01, name: grace, email: grace@acme.test}
+  - {id: U0FACTBOT, name: replicant, is_bot: true}
+channels:
+  - {id: C0PAYAPPR1, name: payments-approvals}
+  - {id: C0PAYENG01, name: payments-eng}

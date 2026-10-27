@@ -1,0 +1,250 @@
+# Rendered by agentrun-controller for the C-CRD example AgentRun ar-gj3h3ep3phjfs9e23v768zrca5
+# (tenant payments, role implementer, workload class coding, replicant-kata-clh, guestBlockDevice).
+# Template rules: controller.md section 4. Process model agreed with WS-03 (cli-invocation.md 1.1, XD-03-01)
+# and WS-09 control review G-01/G-12/G-22/G-26:
+#   * run tokens (one per audience, CCR-09-01) are mounted ONLY into replicant-agentd;
+#   * the agent container holds no credential of any kind;
+#   * no runtime-control annotations (containerd forwards none to Kata);
+#   * the uploader gets S3 session credentials from agentd over a private socket the agent cannot reach.
+# Parsed with PyYAML in CI; schema-validated with kubeconform against Kubernetes 1.36. Digests are
+# illustrative placeholders of the right shape.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ar-gj3h3ep3phjfs9e23v768zrca5            # bare Pod named like the AgentRun (ADR-02-002)
+  namespace: sbx-payments
+  labels:
+    app.kubernetes.io/managed-by: agentrun-controller
+    replicant.example.com/tenant: payments
+    replicant.example.com/job-id: job_01m5p7x7r0bt69j0h0fbxepw90
+    replicant.example.com/run-id: run_gj3h3ep3phjfs9e23v768zrca5
+    replicant.example.com/role: implementer
+    replicant.example.com/workload-class: coding
+    replicant.example.com/isolation: kata-clh
+    replicant.example.com/bundle: rb_ds5p3wmcj4dag2e9a8ncp4py6k
+    replicant.example.com/network-profile: coding-default
+    replicant.example.com/workflow-type: bugfix                 # spec.workflowType (CCR-08-03)
+    replicant.example.com/acting-for: usr_01knk8dfr0fvjc7v0b9vhvkzbp   # from the verified spec.runGrant
+    # Read by the node-local NRI plugin replicant-workspace-nri (workspace-storage.md section 4).
+    replicant.example.com/workspace-enforcement: guestBlockDevice
+    replicant.example.com/workspace-bytes: "42949672960"       # 40Gi exactly (the hard limit)
+  annotations:
+    karpenter.sh/do-not-disrupt: "true"          # no voluntary disruption (consolidation) while running
+    # For `kubectl logs` only. No role in the exec cluster may exec into sandboxes (WS-09 G-26).
+    kubectl.kubernetes.io/default-container: agent
+    # Set by the controller immediately before a graceful delete; read by the entrypoint through the
+    # downward API file /etc/podinfo/annotations (XD-03-04). Shown here with its initial value.
+    replicant.example.com/cancel-reason: none
+  ownerReferences:
+    - apiVersion: replicant.example.com/v1alpha1
+      kind: AgentRun
+      name: ar-gj3h3ep3phjfs9e23v768zrca5
+      uid: 6b1f3d2e-9a4c-4e8b-8f0a-1c2d3e4f5a6b
+      controller: true
+      blockOwnerDeletion: true
+  finalizers:
+    - replicant.example.com/pod-status                # keeps terminal statuses until recorded
+spec:
+  runtimeClassName: replicant-kata-clh             # nodeSelector/tolerations merged from the RuntimeClass
+  priorityClassName: replicant-run-normal
+  serviceAccountName: sbx-runner
+  automountServiceAccountToken: false            # no Kubernetes API access from sandboxes
+  enableServiceLinks: false
+  hostNetwork: false
+  hostPID: false
+  hostIPC: false
+  shareProcessNamespace: false                   # agent cannot see or signal sidecar processes
+  restartPolicy: Never
+  activeDeadlineSeconds: 4200                    # backstop: startup 300 + active 3600 + finalize 300
+  terminationGracePeriodSeconds: 315             # finalizeSeconds + 15
+  dnsPolicy: ClusterFirst
+  dnsConfig:
+    options:
+      - name: ndots
+        value: "1"
+    searches: []                                 # no search-domain expansion (WS-09 agent-capabilities.md section 3)
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10002                               # replicant-io group shared by agent and trusted readers
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile:
+      type: RuntimeDefault
+  volumes:
+    - name: workspace                            # D-07 workspace
+      emptyDir:
+        sizeLimit: 43Gi                          # 40Gi hard limit + H (ceil_Gi(0.05 x 40 + 1) = 3Gi): ENOSPC fires before eviction
+    - name: home
+      emptyDir: {sizeLimit: 2Gi}
+    - name: tools
+      emptyDir: {sizeLimit: 1Gi}
+    - name: managed
+      emptyDir: {sizeLimit: 16Mi}
+    - name: inputs
+      emptyDir: {sizeLimit: 2Gi}
+    - name: out
+      emptyDir: {sizeLimit: 5Gi}                 # O = ceil_Gi(maxOutputBytes 4 GiB) + 1Gi (controller.md §4.1)
+    - name: spool
+      emptyDir: {sizeLimit: 2Gi}
+    - name: ipc                                  # agentd IPC socket and status markers (agent can reach it)
+      emptyDir: {medium: Memory, sizeLimit: 1Mi}
+    - name: uploader-ipc                         # private agentd <-> uploader socket (NOT mounted in agent)
+      emptyDir: {medium: Memory, sizeLimit: 1Mi}
+    - name: agentd-state                         # agentd private tmpfs (refreshed tokens)
+      emptyDir: {medium: Memory, sizeLimit: 4Mi}
+    - name: run-tokens                           # Secret ar-<body>-creds: one token per audience (CCR-09-01)
+      secret:
+        secretName: ar-gj3h3ep3phjfs9e23v768zrca5-creds
+        defaultMode: 0400
+    - name: config
+      configMap:
+        name: ar-gj3h3ep3phjfs9e23v768zrca5-config
+        defaultMode: 0444
+    - name: replicant-ca                           # replicant CA bundle for otel-sandbox TLS (R1-041)
+      configMap:
+        name: replicant-ca-bundle
+        defaultMode: 0444
+    - {name: prompt, emptyDir: {medium: Memory, sizeLimit: 4Mi}}   # agent only; joined system prompt, never uploaded (XD-W2-03-01)
+    - name: podinfo
+      downwardAPI:
+        items:
+          - path: annotations
+            fieldRef: {fieldPath: metadata.annotations}
+  initContainers:
+    - name: workspace-guard                      # WS-02: fail closed if the hard limit is not in force
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/sandbox-utils@sha256:7a1c3e5b9d2f4a6c8e0b1d3f5a7c9e2b4d6f8a0c3e5b7d9f1a2c4e6b8d0f3a5c
+      args: ["guard", "--path=/workspace", "--limit-bytes=42949672960", "--tolerance=0.01"]
+      securityContext: &restricted
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests: {cpu: 50m, memory: 32Mi, ephemeral-storage: 16Mi}
+        limits: {cpu: 200m, memory: 64Mi, ephemeral-storage: 16Mi}
+      volumeMounts:
+        - {name: workspace, mountPath: /workspace}
+    - name: replicant-agentd                       # WS-03 native sidecar: the only credential holder
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/cli-claude-code@sha256:5d7f9b1a3c4e6d8f0b2a4c6e8d1f2b4a6c8e0d2f3b5a7c9e1d3f4b6a8c0e2d4f
+      restartPolicy: Always
+      command: ["/opt/replicant/bin/replicant-agentd"]
+      args: ["--config=/etc/replicant/bootstrap.json"]
+      env:
+        - {name: REPLICANT_RUN_TOKEN_SEED_DIR, value: /run/replicant/token-seed}   # read-only Secret mount (CCR-02-08)
+        - {name: REPLICANT_RUN_TOKEN_DIR, value: /run/replicant/tokens}            # C-IDS §7: /run/replicant/tokens/<audience>, refreshed in place
+        - {name: REPLICANT_UPLOADER_SOCKET, value: /run/replicant/uploader-ipc/agentd.sock}
+      securityContext:
+        <<: *restricted
+        runAsUser: 10000
+        runAsGroup: 10000
+      startupProbe:
+        httpGet: {host: 127.0.0.1, path: /readyz, port: 7800}
+        periodSeconds: 1
+        failureThreshold: 30
+      resources:
+        requests: {cpu: 100m, memory: 96Mi, ephemeral-storage: 16Mi}
+        limits: {cpu: "1", memory: 256Mi, ephemeral-storage: 16Mi}
+      volumeMounts:
+        - {name: run-tokens, mountPath: /run/replicant/token-seed, readOnly: true}
+        - {name: agentd-state, mountPath: /run/replicant/tokens}
+        - {name: ipc, mountPath: /run/replicant/ipc}
+        - {name: uploader-ipc, mountPath: /run/replicant/uploader-ipc}
+        - {name: config, mountPath: /etc/replicant, readOnly: true}
+    - name: watchdog                             # WS-02 native sidecar
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/sandbox-utils@sha256:7a1c3e5b9d2f4a6c8e0b1d3f5a7c9e2b4d6f8a0c3e5b7d9f1a2c4e6b8d0f3a5c
+      restartPolicy: Always
+      args: ["watchdog", "--path=/workspace", "--limit-bytes=42949672960", "--warn=0.85", "--stop=0.98", "--interval=2s", "--status-dir=/run/replicant/ipc/status"]
+      securityContext:
+        <<: *restricted
+        runAsUser: 10003
+        runAsGroup: 10003
+      resources:
+        requests: {cpu: 20m, memory: 32Mi, ephemeral-storage: 16Mi}
+        limits: {cpu: 200m, memory: 64Mi, ephemeral-storage: 16Mi}
+      volumeMounts:
+        - {name: workspace, mountPath: /workspace, readOnly: true}
+        - {name: ipc, mountPath: /run/replicant/ipc}
+    - name: prepare                              # WS-03: tools copy, inputs, git (via agentd), diff, session
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/cli-claude-code@sha256:5d7f9b1a3c4e6d8f0b2a4c6e8d1f2b4a6c8e0d2f3b5a7c9e1d3f4b6a8c0e2d4f
+      command: ["/opt/replicant/bin/replicant-entrypoint", "prepare"]
+      securityContext: *restricted
+      resources:
+        requests: {cpu: "1", memory: 1Gi, ephemeral-storage: 64Mi}
+        limits: {cpu: "2", memory: 2Gi, ephemeral-storage: 64Mi}
+      volumeMounts:
+        - {name: tools, mountPath: /replicant/tools-dest}
+        - {name: inputs, mountPath: /replicant/inputs}
+        - {name: managed, mountPath: /replicant/managed}
+        - {name: home, mountPath: /home/agent}
+        - {name: workspace, mountPath: /workspace}
+        - {name: ipc, mountPath: /run/replicant/ipc}
+        - {name: config, mountPath: /etc/replicant, readOnly: true}
+  containers:
+    - name: agent
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/env-go-service@sha256:1c2e4a6b8d0f1e3a5c7b9d1f3e5a7c9b0d2f4e6a8c1b3d5f7e9a0c2b4d6f8e1a
+      command: ["/opt/replicant/bin/replicant-entrypoint", "run"]
+      workingDir: /workspace/repo
+      env:
+        - {name: REPLICANT_ENV, value: prod}
+        - {name: REPLICANT_TENANT_ID, value: payments}
+        - {name: REPLICANT_JOB_ID, value: job_01m5p7x7r0bt69j0h0fbxepw90}
+        - {name: REPLICANT_RUN_ID, value: run_gj3h3ep3phjfs9e23v768zrca5}
+        - {name: REPLICANT_ROLE, value: implementer}
+        - {name: REPLICANT_RELEASE_BUNDLE_ID, value: rb_ds5p3wmcj4dag2e9a8ncp4py6k}
+        - {name: REPLICANT_ARTIFACT_PREFIX, value: "s3://acme-replicant-prod-artifacts/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/"}
+        - {name: REPLICANT_INPUTS_URI, value: "s3://acme-replicant-prod-artifacts/tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/inputs/manifest.json"}
+        - {name: REPLICANT_WORKSPACE_DIR, value: /workspace}
+        - {name: REPLICANT_WORKSPACE_LIMIT_BYTES, value: "42949672960"}
+        - {name: REPLICANT_WORKFLOW_TYPE, value: bugfix}
+        - {name: REPLICANT_WORKFLOW_ID, value: job_01m5p7x7r0bt69j0h0fbxepw90}
+        - {name: REPLICANT_LOGICAL_ACTIVITY_ID, value: implementer.c0.n1.run}
+        - {name: HOME, value: /home/agent}
+        - {name: TMPDIR, value: /workspace/.tmp}
+        - {name: TRACEPARENT, value: 00-fc0575170c8597ce9805552723c08d6e-a3c1e5f7092b4d6e-01}
+        - {name: OTEL_RESOURCE_ATTRIBUTES, value: "service.name=replicant-sandbox,replicant.env=prod,replicant.tenant_id=payments,replicant.job_id=job_01m5p7x7r0bt69j0h0fbxepw90,replicant.run_id=run_gj3h3ep3phjfs9e23v768zrca5,replicant.role=implementer,replicant.release_bundle_id=rb_ds5p3wmcj4dag2e9a8ncp4py6k"}
+        - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "https://otel-sandbox.prod.replicant.internal:4318"}
+        - {name: OTEL_EXPORTER_OTLP_CERTIFICATE, value: /etc/replicant-ca/ca.crt}
+        # No REPLICANT_RUN_TOKEN_FILE / REPLICANT_RUN_TOKEN_DIR here: the agent holds no token (G-01).
+      securityContext: *restricted
+      startupProbe:                              # passes when the entrypoint reports agent-started
+        exec:
+          command: ["test", "-f", "/run/replicant/ipc/status/agent-started"]   # XD-03-02
+        periodSeconds: 1
+        failureThreshold: 300
+        timeoutSeconds: 1
+      terminationMessagePath: /dev/termination-log
+      terminationMessagePolicy: FallbackToLogsOnError
+      resources:
+        requests: {cpu: "4", memory: 12Gi, ephemeral-storage: 30Gi}
+        limits: {cpu: "6", memory: 16Gi, ephemeral-storage: 56Gi}   # spec 40Gi + H 3Gi + F 8Gi + O 5Gi (controller.md §4.1)
+      volumeMounts:
+        - {name: workspace, mountPath: /workspace}
+        - {name: tools, mountPath: /opt/replicant, readOnly: true}
+        - {name: managed, mountPath: /etc/claude-code, readOnly: true}   # no subPath (unsupported by Kata)
+        - {name: managed, mountPath: /etc/replicant, readOnly: true}
+        - {name: inputs, mountPath: /replicant/inputs, readOnly: true}
+        - {name: home, mountPath: /home/agent}
+        - {name: out, mountPath: /replicant/out}
+        - {name: spool, mountPath: /replicant/spool}
+        - {name: ipc, mountPath: /run/replicant/ipc}
+        - {name: podinfo, mountPath: /etc/podinfo, readOnly: true}
+        - {name: prompt, mountPath: /run/replicant/prompt}
+        - {name: replicant-ca, mountPath: /etc/replicant-ca, readOnly: true}
+    - name: uploader                             # WS-02 regular container: must outlive the agent (ADR-02-003)
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/sandbox-uploader@sha256:9e1a3c5b7d9f0e2a4c6b8d0f2e4a6c8b0d1f3e5a7c9b2d4f6e8a0c3b5d7f9e2a
+      args: ["--config=/etc/replicant/bootstrap.json", "--credentials-socket=/run/replicant/uploader-ipc/agentd.sock"]
+      securityContext:
+        <<: *restricted
+        runAsUser: 10003
+        runAsGroup: 10003
+      resources:
+        requests: {cpu: 200m, memory: 256Mi, ephemeral-storage: 64Mi}
+        limits: {cpu: "1", memory: 512Mi, ephemeral-storage: 64Mi}
+      volumeMounts:
+        - {name: out, mountPath: /replicant/out, readOnly: true}
+        - {name: spool, mountPath: /replicant/spool, readOnly: true}
+        - {name: ipc, mountPath: /run/replicant/ipc}
+        - {name: uploader-ipc, mountPath: /run/replicant/uploader-ipc}
+        - {name: config, mountPath: /etc/replicant, readOnly: true}

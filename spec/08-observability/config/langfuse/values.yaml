@@ -1,0 +1,157 @@
+# Helm values for chart langfuse/langfuse 2.1.6 (repo https://langfuse.github.io/langfuse-k8s), Langfuse v4.
+# Owner WS-08. Production (core cluster, namespace langfuse). Key names checked against the chart's values.yaml at
+# tag langfuse-2.1.6 (2026-10-24). Secrets come from External Secrets Operator (WS-09) as Kubernetes Secrets.
+langfuse:
+  logging:
+    level: info
+    format: json
+  salt:
+    secretKeyRef: {name: langfuse-app, key: salt}
+  encryptionKey:
+    secretKeyRef: {name: langfuse-app, key: encryption-key}
+  features:
+    telemetryEnabled: false          # D-17: no data leaves the environment
+  nextauth:
+    url: https://langfuse.prod.replicant.internal
+    secret:
+      secretKeyRef: {name: langfuse-app, key: nextauth-secret}
+  auth:
+    disableUsernamePassword: true    # AUTH_DISABLE_USERNAME_PASSWORD
+    providers:
+      okta:                          # rendered as AUTH_OKTA_CLIENT_ID / _CLIENT_SECRET / _ISSUER / _CHECKS
+        clientId: 0oa9replicantlangfuse
+        clientSecret:
+          secretKeyRef: {name: langfuse-okta, key: client-secret}
+        issuer: https://acme.okta.com/oauth2/default
+        checks: pkce,state
+  additionalEnv:
+    # Prisma migrations at web startup run as langfuse_migrator (WS-10 XD-FIX-R1-235); the app runs as langfuse_app.
+    - name: DIRECT_URL
+      valueFrom:
+        secretKeyRef: {name: langfuse-postgres-migrator, key: direct-url}
+    - name: AUTH_DOMAINS_WITH_SSO_ENFORCEMENT
+      value: acme.com
+    - name: LANGFUSE_DEFAULT_ORG_ID
+      value: replicant
+    - name: LANGFUSE_DEFAULT_ORG_ROLE
+      value: VIEWER                  # everyone the Okta app admits lands as viewer; admins elevate (platform.md 2.5)
+    - name: LANGFUSE_DEFAULT_PROJECT_ID
+      value: replicant-prod
+    - name: LANGFUSE_DEFAULT_PROJECT_ROLE
+      value: VIEWER
+    - name: LANGFUSE_INIT_ORG_ID
+      value: replicant
+    - name: LANGFUSE_INIT_ORG_NAME
+      value: Replicant
+    - name: LANGFUSE_INIT_PROJECT_ID
+      value: replicant-prod            # the single project per environment (ADR-003)
+    - name: LANGFUSE_INIT_PROJECT_NAME
+      value: replicant-prod
+    - name: LANGFUSE_INIT_PROJECT_PUBLIC_KEY
+      valueFrom: {secretKeyRef: {name: langfuse-init, key: public-key}}
+    - name: LANGFUSE_INIT_PROJECT_SECRET_KEY
+      valueFrom: {secretKeyRef: {name: langfuse-init, key: secret-key}}
+    - name: LANGFUSE_INIT_USER_EMAIL
+      value: replicant-langfuse-admin@acme.com
+    - name: LANGFUSE_INIT_USER_PASSWORD
+      valueFrom: {secretKeyRef: {name: langfuse-init, key: admin-password}}
+    - name: LANGFUSE_MIGRATION_V4_WRITE_MODE
+      value: events_only             # new install: no v3 data, no dual write
+    - name: LANGFUSE_MIGRATION_V4_NATIVE_OTEL_BEHAVIOUR
+      value: direct
+    - name: LANGFUSE_BACKGROUND_MIGRATION_V4_ENABLE_HISTORIC_BACKFILL
+      value: "false"
+  web:
+    replicas: 3
+    resources:
+      requests: {cpu: "1", memory: 3Gi}
+      limits: {memory: 4Gi}
+    hpa:
+      enabled: true
+      minReplicas: 3
+      maxReplicas: 6
+      targetCPUUtilizationPercentage: 70
+    pdb:
+      create: true
+      minAvailable: 2
+  worker:
+    replicas: 3
+    resources:
+      requests: {cpu: "2", memory: 4Gi}
+      limits: {memory: 6Gi}
+    hpa:
+      enabled: true
+      minReplicas: 3
+      maxReplicas: 8
+      targetCPUUtilizationPercentage: 70
+    pdb:
+      create: true
+      minAvailable: 2
+  nodeSelector:
+    replicant.example.com/pool: platform
+
+postgresql:
+  deploy: false                      # Aurora PostgreSQL 16 cluster "langfuse-<env>" (WS-10 XD-FIX-R1-235, D-09, C-PG)
+  host: langfuse-prod.cluster-cxyz.us-east-1.rds.amazonaws.com   # Aurora cluster (writer) endpoint
+  port: 5432
+  args: sslmode=verify-full
+  auth:
+    username: langfuse_app             # DATABASE_URL role; migrations use langfuse_migrator via DIRECT_URL below
+    existingSecret: langfuse-postgres  # password rotated by Secrets Manager every 30 days (WS-10)
+    secretKeys: {userPasswordKey: password}
+    database: langfuse
+  migration:
+    autoMigrate: true                # LANGFUSE_AUTO_POSTGRES_MIGRATION_DISABLED=false (resolves V00-40)
+
+redis:
+  deploy: false                      # Amazon ElastiCache for Valkey 8, 1 primary + 1 replica, Multi-AZ
+  host: master.langfuse-valkey.abcd12.use1.cache.amazonaws.com
+  port: 6379
+  tls:
+    enabled: true
+  auth:
+    username: langfuse
+    existingSecret: langfuse-valkey
+    existingSecretPasswordKey: password
+
+clickhouse:
+  deploy: true                       # ClickHouse operator: ClickHouseCluster + KeeperCluster
+  cluster:
+    enabled: true
+    replicas: 2                      # one shard, two replicas across AZs
+    image:
+      repository: clickhouse/clickhouse-server
+      tag: "26.4"                    # chart default; Langfuse v4 minimum 25.12, recommended 26.4
+    storage:
+      size: 500Gi
+      className: gp3-encrypted
+    resources:
+      requests: {cpu: "4", memory: 32Gi}
+      limits: {memory: 48Gi}
+    nodeSelector:
+      replicant.example.com/pool: platform-memory   # r7i.2xlarge
+  keeper:
+    enabled: true
+    replicas: 3
+  auth:
+    username: default            # chart validation: operator CR provisions only the built-in default user
+    existingSecret: langfuse-clickhouse
+    existingSecretKey: password
+  migration:
+    autoMigrate: true
+
+s3:
+  deploy: false                      # Amazon S3 (IRSA/Pod Identity role langfuse-s3; no static keys)
+  storageProvider: s3
+  bucket: acme-replicant-prod-obs-langfuse
+  region: us-east-1
+  endpoint: https://s3.us-east-1.amazonaws.com
+  forcePathStyle: false
+  eventUpload:
+    bucket: acme-replicant-prod-obs-langfuse
+    prefix: events/                  # lifecycle: expire after 30 d (platform.md 2.6)
+    region: us-east-1
+  mediaUpload:
+    enabled: false                   # Replicant never sends media to Langfuse (screenshots stay in S3 artifacts)
+  batchExport:
+    enabled: false                   # exports would copy transcript-derived content outside retention control

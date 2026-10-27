@@ -1,0 +1,32 @@
+# v0 local bundle request (stack.md §5 step 10, reduced to M1: bugfix only). Validated by
+# spec/06-releases-and-evals/schemas/release-bundle-request.schema.json. Built by `replicant dev seed`
+# (POST /v1/registry/bundles:build) after the documents under ../../definitions are published.
+apiVersion: replicant.example.com/v1
+kind: ReleaseBundleRequest
+metadata:
+  name: local
+  owners: [replicant-platform]
+  description: v0 local default (M1 walking skeleton; only bugfix runs).
+spec:
+  mode: full
+  changeSummary: v0 local bootstrap bundle (bugfix on ledger-api).
+  full:
+    workerDeployment: {deploymentName: replicant-worker, buildId: b20261024-000000000000}
+    router: policy/router-rules
+    graphs:                       # the schema requires all eight; only bugfix runs in v0
+      bugfix: graph/bugfix
+      feature: graph/feature
+      api_change: graph/api-change
+      docs: graph/docs-low-risk
+      hotfix: graph/hotfix
+      maintenance: graph/maintenance-repo
+      pr_repair: graph/pr-repair
+      qa_only: graph/qa-only
+    policies:
+      - policy/budgets
+      - policy/codebase-bindings
+      - policy/repair-limits
+      - policy/runner-polling
+    memorySnapshotPolicy: policy/memory-snapshot-default
+  evaluation:
+    tierFloor: T1

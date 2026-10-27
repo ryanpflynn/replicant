@@ -1,0 +1,99 @@
+# Loki ruler rule groups (LogQL). Owner WS-08. One file per Loki tenant namespace in the ruler store:
+#   lokitool rules sync --address=http://loki-ruler.observability.svc:3100 --id=<tenant> <file>
+# Recording rules remote-write into Mimir tenant "replicant" (loki.yaml ruler.remote_write).
+# The groups below are keyed by Loki tenant in the "tenants" map for documentation; the sync job splits them.
+# Validated with lokitool (Loki 3.7.9) `rules lint` per tenant file, 2026-10-24.
+tenants:
+  platform:
+    groups:
+      - name: replicant-platform-logs
+        interval: 1m
+        rules:
+          - record: replicant:log_errors:rate5m
+            expr: sum by (service, tenant) (rate({source="app", level="error"}[5m]))
+          - alert: ReplicantServicePanics
+            expr: |
+              sum by (service) (count_over_time({source="app", level="error"} |~ "(?i)(panic:|Traceback \\(most recent call last\\)|fatal error:)" [10m])) > 3
+            for: 5m
+            labels: {severity: ticket, owner: ws-08}
+            annotations:
+              summary: "{{ $labels.service }} logged {{ $value }} panics or tracebacks in 10 minutes"
+              runbook_url: https://runbooks.replicant.internal/observability/service-crashes
+          - alert: ReplicantErrorLogSpike
+            expr: |
+              sum by (service) (rate({source="app", level="error"}[10m]))
+                > 5 * sum by (service) (rate({source="app", level="error"}[6h] offset 1d))
+              and sum by (service) (rate({source="app", level="error"}[10m])) > 0.2
+            for: 10m
+            labels: {severity: ticket, owner: ws-08}
+            annotations:
+              summary: "{{ $labels.service }} error log rate is 5x its rate at the same time yesterday"
+              runbook_url: https://runbooks.replicant.internal/observability/error-spike
+          - alert: ReplicantDbRoleConnectionLimitHit
+            # Services log the PostgreSQL error when a role's connection limit is reached (WS-10 postgres.md).
+            expr: |
+              sum by (service) (count_over_time({source="app", level="error"} |= "too many connections for role" [10m])) > 0
+            labels: {severity: ticket, owner: ws-10}
+            annotations:
+              summary: "{{ $labels.service }} hit its database role connection limit"
+              runbook_url: https://runbooks.replicant.internal/data/connections-high
+          - alert: ReplicantSandboxDeniedEgress
+            # Name from WS-02 network.md; source is the Hubble denied-flow stream (service="hubble", Loki tenant
+            # platform). run_id stays in structured metadata, never a label.
+            expr: |
+              sum by (tenant) (count_over_time({service="hubble", namespace=~"sbx-.+"} [15m])) > 20
+            labels: {severity: ticket, owner: ws-09}
+            annotations:
+              summary: "{{ $value }} denied egress flows from sandboxes in {{ $labels.tenant }}: a package mirror gap or an injection attempt"
+              runbook_url: https://runbooks.replicant.internal/security/egress-denials
+          - alert: KubernetesSandboxOOMEvents
+            expr: |
+              sum by (tenant) (count_over_time({source="k8s-events", namespace=~"sbx-.+"} |= "OOMKill" [30m])) > 5
+            labels: {severity: ticket, owner: ws-02}
+            annotations:
+              summary: "{{ $value }} sandbox OOM events in tenant {{ $labels.tenant }} in 30 minutes"
+              runbook_url: https://runbooks.replicant.internal/observability/resource-profile
+  sandbox:
+    groups:
+      - name: replicant-sandbox-logs
+        interval: 1m
+        rules:
+          - record: replicant:sandbox_transcript_lines:rate5m
+            expr: sum by (tenant, role) (rate({source="transcript"}[5m]))
+          - record: replicant:sandbox_redaction_markers:rate5m
+            expr: sum by (tenant) (rate({source="transcript"} |= "[REDACTED:" [5m]))
+          - alert: ReplicantSandboxGatewayErrors
+            expr: |
+              sum by (tenant) (count_over_time({service="replicant-sandbox", source="transcript"} | json event="event" | event="api_retry" [15m])) > 50
+            labels: {severity: ticket, owner: ws-03}
+            annotations:
+              summary: "Sandboxes in {{ $labels.tenant }} retried model API calls {{ $value }} times in 15 minutes"
+              runbook_url: https://runbooks.replicant.internal/observability/gateway-errors
+  audit:
+    groups:
+      - name: replicant-audit-logs
+        interval: 1m
+        rules:
+          - record: replicant:audit_events:rate5m
+            expr: sum by (tenant) (rate({source="audit"}[5m]))
+          - alert: ReplicantAuthorizationDenialSpike
+            expr: |
+              sum by (tenant) (count_over_time({source="audit"} | json event_type="event_type", outcome="outcome" | outcome="denied" [15m])) > 25
+            labels: {severity: ticket, owner: ws-09}
+            annotations:
+              summary: "{{ $value }} denied actions in tenant {{ $labels.tenant }} in 15 minutes"
+              runbook_url: https://runbooks.replicant.internal/security/authz-denials
+          - alert: ReplicantMemoryAdminDenied
+            expr: |
+              sum(count_over_time({source="audit"} | json event_type="event_type", outcome="outcome", permission="details.permission" | (event_type=~"memory\\..*" and outcome="denied") or (event_type="authz.denied" and permission="memory:admin") [15m])) > 0
+            labels: {severity: ticket, owner: ws-09}
+            annotations:
+              summary: "Non-admin attempted a memory-management action (D-25)"
+              runbook_url: https://runbooks.replicant.internal/security/memory-admin
+          - alert: ReplicantBreakGlassUsed
+            expr: |
+              sum(count_over_time({source="audit"} | json event_type="event_type" | event_type="breakglass.session_started" [5m])) > 0
+            labels: {severity: page, owner: ws-09}
+            annotations:
+              summary: "A break-glass database session started (D-26)"
+              runbook_url: https://runbooks.replicant.internal/security/break-glass

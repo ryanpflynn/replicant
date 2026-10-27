@@ -1,0 +1,38 @@
+# Multi-tenant as in production (WS-08 ADR-08-002, XD-08-11): tenants platform, sandbox, audit via X-Scope-OrgID.
+auth_enabled: true
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+schema_config:
+  configs:
+    - from: "2026-01-01"
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+limits_config:
+  allow_structured_metadata: true
+  max_label_names_per_series: 15
+  retention_period: 168h
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+runtime_config:
+  file: /etc/loki/runtime/runtime-overrides.yaml     # WS-08 per-tenant overrides, mounted unmodified
+  period: 30s
+analytics:
+  reporting_enabled: false

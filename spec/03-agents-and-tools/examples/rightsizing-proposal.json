@@ -1,0 +1,145 @@
+{
+  "schema": "replicant.rightsizing-proposal/v1",
+  "proposal_id": "rsp_01m5qa7b8c9d0e1f2g3h4j5k6m",
+  "created_at": "2026-10-24T05:00:12Z",
+  "environment": {
+    "name": "nextjs-app",
+    "version": 9,
+    "digest": "sha256:0c2e4a6b8d1f3a5c7e9b2d4f6a8c0e1b3d5f7a9c2e4b6d8f0a3c5e7b9d1f2a4c"
+  },
+  "profile": "default",
+  "roles": [
+    "implementer",
+    "repair"
+  ],
+  "runtime_class": "replicant-kata-clh",
+  "trigger": "disk_failures",
+  "window": {
+    "start": "2026-10-10T00:00:00Z",
+    "end": "2026-10-24T00:00:00Z"
+  },
+  "samples": 171,
+  "current": {
+    "requests": {
+      "cpu": "2250m",
+      "memory": "12Gi",
+      "ephemeralStorage": "21Gi"
+    },
+    "limits": {
+      "cpu": "5",
+      "memory": "12Gi",
+      "ephemeralStorage": "43Gi"
+    },
+    "memoryRequestPolicy": "match_limit",
+    "workspace": {
+      "sizeLimit": "40Gi",
+      "overflow": {
+        "policy": "auto"
+      },
+      "watchdogThresholds": {
+        "warn": 0.85,
+        "fail": 0.98
+      }
+    },
+    "derivation": {
+      "method": "measured",
+      "proposalId": "rsp_01m5k2q8w3e4r5t6y7v8j9n0pa",
+      "baseline": {
+        "codebaseType": "nextjs_app",
+        "roles": [
+          "implementer",
+          "repair"
+        ],
+        "runtimeClass": "replicant-kata-clh",
+        "windowStart": "2026-09-29T00:00:00Z",
+        "windowEnd": "2026-10-13T00:00:00Z",
+        "sampleCount": 146,
+        "formulaVersion": "rp-2",
+        "stats": {
+          "hostFootprintBytesP50": 11166914969,
+          "cpuMillicoresP50": 2100,
+          "cpuMillicoresP95": 3600,
+          "memoryBytesP50": 5583457484,
+          "memoryBytesP95": 9556302233,
+          "workspaceBytesP50": 19327352832,
+          "workspaceBytesP95": 32749125632,
+          "ephemeralBytesP50": 22011707392,
+          "ephemeralBytesP95": 35433480192
+        }
+      }
+    }
+  },
+  "proposed": {
+    "requests": {
+      "cpu": "2500m",
+      "memory": "14848Mi",
+      "ephemeralStorage": "24Gi"
+    },
+    "limits": {
+      "cpu": "5500m",
+      "memory": "14848Mi",
+      "ephemeralStorage": "50Gi"
+    },
+    "memoryRequestPolicy": "match_limit",
+    "workspace": {
+      "sizeLimit": "46Gi",
+      "overflow": {
+        "policy": "auto"
+      },
+      "watchdogThresholds": {
+        "warn": 0.85,
+        "fail": 0.98
+      }
+    },
+    "derivation": {
+      "method": "measured",
+      "proposalId": "rsp_01m5qa7b8c9d0e1f2g3h4j5k6m",
+      "baseline": {
+        "codebaseType": "nextjs_app",
+        "roles": [
+          "implementer",
+          "repair"
+        ],
+        "runtimeClass": "replicant-kata-clh",
+        "windowStart": "2026-10-10T00:00:00Z",
+        "windowEnd": "2026-10-24T00:00:00Z",
+        "sampleCount": 171,
+        "formulaVersion": "rp-2",
+        "stats": {
+          "cpuMillicoresP50": 2300,
+          "cpuMillicoresP95": 3900,
+          "memoryBytesP50": 6012954214,
+          "memoryBytesP95": 11703785881,
+          "workspaceBytesP50": 22548578304,
+          "workspaceBytesP95": 37366215475,
+          "ephemeralBytesP50": 25232932864,
+          "ephemeralBytesP95": 40694815129,
+          "hostFootprintBytesP50": 13529146982
+        }
+      }
+    }
+  },
+  "formula_version": "rp-2",
+  "evidence": {
+    "stats": {
+      "cpuMillicoresP50": 2300,
+      "cpuMillicoresP95": 3900,
+      "memoryBytesP50": 6012954214,
+      "memoryBytesP95": 11703785881,
+      "workspaceBytesP50": 22548578304,
+      "workspaceBytesP95": 37366215475,
+      "ephemeralBytesP50": 25232932864,
+      "ephemeralBytesP95": 40694815129,
+      "hostFootprintBytesP50": 13529146982
+    },
+    "failures": {
+      "oom_killed": 0,
+      "workspace_disk_exceeded": 3,
+      "pod_evicted": 0
+    },
+    "cpu_throttled_ratio_p95": 0.07,
+    "estimated_monthly_cost_delta_usd": 412.5,
+    "grafana_url": "https://grafana.replicant.internal/d/replicant-rightsizing?var-environment=nextjs-app&var-profile=default"
+  },
+  "state": "open"
+}

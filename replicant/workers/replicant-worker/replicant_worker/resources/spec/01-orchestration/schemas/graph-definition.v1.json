@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/kinds/graph-definition/v1.json",
+  "title": "GraphDefinition spec (kind schema, WS-01)",
+  "description": "Validates the `spec` of a GraphDefinition registry document (envelope: C-DEF definition-envelope). Semantics: extensibility.md. Structural validity is necessary but not sufficient: the registry also compiles the graph against the NodeCatalog of every worker build it declares compatibility with and runs the invariants I-1..I-7 (extensibility.md section 4).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["workflowType", "fglVersion", "entry", "nodes", "edges"],
+  "properties": {
+    "workflowType": {"enum": ["bugfix", "feature", "api_change", "docs", "hotfix", "maintenance", "pr_repair", "qa_only"]},
+    "fglVersion": {"description": "Replicant Guard Language version the guards are written in. The NodeCatalog advertises the versions a build evaluates.", "const": 1},
+    "params": {
+      "description": "Graph-level parameters, visible to guards as `params.<name>`. Scalars and lists of scalars only.",
+      "type": "object",
+      "maxProperties": 32,
+      "propertyNames": {"pattern": "^[a-z][a-z0-9_]{0,40}$"},
+      "additionalProperties": {
+        "anyOf": [
+          {"type": ["string", "integer", "boolean"]},
+          {"type": "array", "maxItems": 50, "items": {"type": ["string", "integer", "boolean"]}}
+        ]
+      }
+    },
+    "entry": {"$ref": "#/$defs/nodeKey"},
+    "nodes": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$ref": "#/$defs/node"}},
+    "edges": {"type": "array", "minItems": 1, "maxItems": 128, "items": {"$ref": "#/$defs/edge"}},
+    "boundaries": {
+      "description": "Continue-As-New boundaries. phase: when entering the node from a different phase. repair_cycle: always, and the repair cycle counter increments.",
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "before"],
+        "properties": {"kind": {"enum": ["phase", "repair_cycle"]}, "before": {"$ref": "#/$defs/nodeKey"}}
+      }
+    }
+  },
+  "$defs": {
+    "nodeKey": {
+      "description": "Becomes the node_key of logical activity IDs (C-IDS section 2): <node_key>.c<cycle>.n<ordinal>.<effect>.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,40}$"
+    },
+    "target": {
+      "description": "A node key, or a terminal `end:<outcome>` (outcome vocabulary: graphs/README.md section 6).",
+      "type": "string",
+      "pattern": "^([a-z][a-z0-9_]{0,40}|end:[a-z][a-z_]{1,63})$"
+    },
+    "guard": {
+      "description": "FGL v1 expression (extensibility.md section 3). At most 512 characters and 64 AST nodes.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "phase": {
+      "description": "C-IDS section 6 phase vocabulary plus the values requested in CCR-01-02.",
+      "enum": ["intake", "routing", "clarification", "context", "planning", "plan_gate", "implementing", "qa", "review", "verify", "publish_gate", "rebase_reverify", "publishing", "pr_review", "repairing", "memory", "finalizing", "done", "pre_checks", "fan_out", "budget_gate", "migrating", "takeover"]
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "type", "phase"],
+      "properties": {
+        "key": {"$ref": "#/$defs/nodeKey"},
+        "type": {"description": "A NodeCatalog nodeType of the pinned worker build.", "type": "string", "pattern": "^[a-z][a-z0-9_]{1,40}$"},
+        "phase": {"$ref": "#/$defs/phase"},
+        "config": {"description": "Validated against the node type's configSchema from the NodeCatalog. Fields marked x-replicant-ref are registry references collected into the bundle closure.", "type": "object"},
+        "when": {"$ref": "#/$defs/guard", "description": "Node presence guard. Not allowed on protected node types, except human_gate where it can only ADD a gate (OR with the policy decision)."},
+        "maxVisits": {"description": "Upper bound on visits per repair cycle (invariant I-4 needs one per cycle in the graph unless a node type is `bounded`).", "type": "integer", "minimum": 1, "maximum": 20}
+      }
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from"],
+      "properties": {
+        "from": {
+          "description": "One node, or a list of 2..4 nodes for a join (wait-for-all) edge.",
+          "oneOf": [
+            {"$ref": "#/$defs/nodeKey"},
+            {"type": "array", "minItems": 2, "maxItems": 4, "uniqueItems": true, "items": {"$ref": "#/$defs/nodeKey"}}
+          ]
+        },
+        "to": {"$ref": "#/$defs/target"},
+        "switch": {
+          "description": "Ordered branches; the first guard that is true wins.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["when", "to"],
+            "properties": {"when": {"$ref": "#/$defs/guard"}, "to": {"$ref": "#/$defs/target"}}
+          }
+        },
+        "default": {"$ref": "#/$defs/target"}
+      },
+      "oneOf": [
+        {"required": ["to"], "not": {"anyOf": [{"required": ["switch"]}, {"required": ["default"]}]}},
+        {"required": ["switch", "default"], "not": {"required": ["to"]}}
+      ]
+    },
+    "graphModifier": {
+      "description": "One entry of a codebase binding's `graphModifiers` list (WS-03 owns the binding document; WS-01 owns this sub-schema). Applied in order by graph.compose for the job's repository.",
+      "type": "object",
+      "required": ["op"],
+      "properties": {
+        "op": {"enum": ["insertBefore", "insertAfter", "replace", "setConfig", "skipWhen", "requireGateWhen"]},
+        "source": {"description": "Pinned reference of the binding that contributed this modifier (provenance; filled in by the bundle builder).", "type": "string", "maxLength": 200}
+      },
+      "allOf": [
+        {"if": {"properties": {"op": {"enum": ["insertBefore", "insertAfter"]}}},
+         "then": {"required": ["anchor", "node"], "properties": {
+           "anchor": {"$ref": "#/$defs/nodeKey"},
+           "node": {"$ref": "#/$defs/node"},
+           "branches": {"type": "array", "maxItems": 6, "items": {"type": "object", "additionalProperties": false, "required": ["when", "to"],
+                        "properties": {"when": {"$ref": "#/$defs/guard"}, "to": {"$ref": "#/$defs/target"}}}}}}},
+        {"if": {"properties": {"op": {"const": "replace"}}},
+         "then": {"required": ["target", "with"], "properties": {"target": {"$ref": "#/$defs/nodeKey"},
+           "with": {"type": "object", "required": ["type"], "properties": {"type": {"type": "string"}, "config": {"type": "object"}}}}}},
+        {"if": {"properties": {"op": {"const": "setConfig"}}},
+         "then": {"required": ["target", "config"], "properties": {"target": {"$ref": "#/$defs/nodeKey"}, "config": {"type": "object"}}}},
+        {"if": {"properties": {"op": {"enum": ["skipWhen", "requireGateWhen"]}}},
+         "then": {"required": ["target", "when"], "properties": {"target": {"$ref": "#/$defs/nodeKey"}, "when": {"$ref": "#/$defs/guard"}}}}
+      ]
+    }
+  }
+}

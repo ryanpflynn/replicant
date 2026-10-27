@@ -1,0 +1,290 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/kinds/policy-risk_rules/v1.json",
+  "title": "Policy spec: risk_rules",
+  "description": "WS-07 (semantics jointly with WS-09). Validates Policy.spec when policyType=risk_rules (C-DEF section 2). Deterministic risk classification (D-19): every rule is a pure predicate over facts computed by the risk.classify activity from the diff bundle, the service catalog (WS-04 ecosystem), CODEOWNERS, and data classification labels. The resulting level is the maximum over fired rules. An LLM may raise the level (never lower it) only within llm_raise bounds. A tenant-scoped risk_rules document is merged with the global one by union of rules (tightening only; ADR-013). Built-in, non-removable rules (evaluated even if a document omits them): ci.executed_paths (critical) and tests.changed (at least medium), R2-001.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ci_executed_paths",
+    "default_level",
+    "never_publish_paths",
+    "policyType",
+    "rules"
+  ],
+  "properties": {
+    "policyType": {
+      "const": "risk_rules"
+    },
+    "default_level": {
+      "$ref": "#/$defs/level"
+    },
+    "rules": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 500,
+      "items": {
+        "$ref": "#/$defs/rule"
+      }
+    },
+    "llm_raise": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "max_level": {
+          "$ref": "#/$defs/level"
+        },
+        "require_rationale": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "never_publish_paths": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "$ref": "#/$defs/glob"
+      },
+      "description": "Paths the Publisher refuses to publish regardless of approval (WS-09 agent-capabilities §6 never_publish). The base layer must include .github/workflows/** and .github/actions/**; tenant layers may only add (tightening check)."
+    },
+    "ci_executed_paths": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 300,
+      "items": {
+        "$ref": "#/$defs/glob"
+      },
+      "description": "Paths that target-repo CI executes (R2-001). Non-removable: the base layer's list is a floor and tenant layers may only add (ADR-013 tightening check). Any change touching one of them is classified `critical` by the built-in rule `ci.executed_paths` and needs an approval bound to the exact diff on every publish, repair push, and takeover push (github-app.md §10.1)."
+    }
+  },
+  "$defs": {
+    "level": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ]
+    },
+    "glob": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "when",
+        "level",
+        "description"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
+          "maxLength": 128
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "level": {
+          "$ref": "#/$defs/level"
+        },
+        "when": {
+          "$ref": "#/$defs/predicate"
+        },
+        "evidence_template": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "Rendered with matched facts only, e.g. 'changed {path} matches {glob}'. Never interpolates untrusted text."
+        }
+      }
+    },
+    "predicate": {
+      "description": "All present conditions must hold (AND). Use any_of / all_of / not for composition.",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "paths_any": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/glob"
+          },
+          "maxItems": 100
+        },
+        "paths_all_within": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/glob"
+          },
+          "maxItems": 100,
+          "description": "true iff every changed path matches one of these globs (used for low-risk docs rules)"
+        },
+        "repos_any": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/glob"
+          },
+          "maxItems": 100
+        },
+        "service_tier_in": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "tier0",
+              "tier1",
+              "tier2",
+              "tier3"
+            ]
+          }
+        },
+        "data_classification_any": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "confidential",
+              "pii",
+              "pci",
+              "phi",
+              "secrets"
+            ]
+          }
+        },
+        "codeowners_any": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^@[A-Za-z0-9-]+(/[A-Za-z0-9._-]+)?$"
+          },
+          "maxItems": 50
+        },
+        "diff_lines_changed_gt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "diff_files_changed_gt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "binary_files_changed": {
+          "type": "boolean"
+        },
+        "dependency_manifest_changed": {
+          "type": "boolean"
+        },
+        "new_external_dependency": {
+          "type": "boolean"
+        },
+        "api_contract_changed": {
+          "type": "string",
+          "enum": [
+            "any",
+            "breaking"
+          ]
+        },
+        "migration_files_changed": {
+          "type": "boolean"
+        },
+        "workflow_type_in": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "bugfix",
+              "feature",
+              "api_change",
+              "docs",
+              "hotfix",
+              "maintenance",
+              "pr_repair",
+              "qa_only"
+            ]
+          }
+        },
+        "target_branch_protected": {
+          "type": "boolean"
+        },
+        "requester_repo_permission_below": {
+          "type": "string",
+          "enum": [
+            "maintain",
+            "write"
+          ]
+        },
+        "any_of": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/predicate"
+          },
+          "minItems": 2,
+          "maxItems": 20
+        },
+        "all_of": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/predicate"
+          },
+          "minItems": 2,
+          "maxItems": 20
+        },
+        "not": {
+          "$ref": "#/$defs/predicate"
+        },
+        "deleted_or_skipped_tests": {
+          "type": "boolean",
+          "description": "QA harness reports tests deleted or newly skipped vs base_sha"
+        },
+        "outside_plan_paths": {
+          "type": "boolean",
+          "description": "Changed files the approved plan did not name"
+        },
+        "secret_scan_finding": {
+          "type": "boolean",
+          "description": "Secret scanner finding in the diff (publish is blocked separately; this raises the level for the record)"
+        },
+        "ci_executed_paths_touched": {
+          "type": "boolean",
+          "description": "Any changed path matches ci_executed_paths"
+        },
+        "test_files_changed": {
+          "type": "boolean",
+          "description": "Any changed path matches the codebase binding's test globs; default = WS-09 agent-capabilities.md §6 raise_to_medium list (**/test/**, **/tests/**, **/testdata/**, **/__tests__/**, **/*_test.go, **/test_*.py, **/*_test.py, **/*.test.ts, **/*.test.js, **/*.spec.ts, **/*.spec.js, **/src/test/**; R1V-171)"
+        },
+        "blast_radius_at_least": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "description": "WS-04 briefing blast_radius.level (XD-04-06); may only raise risk"
+        },
+        "contract_breaking_with_consumers": {
+          "type": "boolean",
+          "description": "WS-05 qa_report.contract_compat found a breaking change with known consumers (XD-04-06)"
+        },
+        "diff_unicode_controls": {
+          "type": "boolean",
+          "description": "An added line contains a bidi control (U+202A–U+202E, U+2066–U+2069) or a zero-width character (U+200B–U+200D, U+2060, U+FEFF); the same scan that draws the packet's fact chips (approvals.md A-10; R2-007, R1V-175)"
+        }
+      }
+    }
+  }
+}

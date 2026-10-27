@@ -1,0 +1,397 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/qa/activities-io/v1.json",
+  "title": "QA activity inputs and outputs (qa.stage_contract_stubs, qa.classify, qa.index_results)",
+  "description": "WS-05 (R1-118). Exact payloads of the three QA activities the WS-01 qa_run node calls. Routing is NOT decided by any activity: the node runs route_after_qa (stage-design.md section 6) with its own counters and the classify output below, so the decision recorded in node exports, the projection, the packet, and the PR comment is one value.",
+  "$defs": {
+    "job_id": {
+      "type": "string",
+      "pattern": "^job_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^run_[0-9a-hjkmnp-tv-z]{26}$"
+    },
+    "tenant_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+      "minLength": 3,
+      "maxLength": 32
+    },
+    "s3_uri": {
+      "type": "string",
+      "maxLength": 1100,
+      "pattern": "^s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/.+"
+    },
+    "step_id": {
+      "type": "string",
+      "pattern": "^qa(_repair)?\\.c[0-9]{1,3}\\.n[0-9]{1,3}$"
+    },
+    "StageContractStubsInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "job_id",
+        "tenant_id",
+        "step_id",
+        "run_id",
+        "environment_definition_digest",
+        "targets"
+      ],
+      "properties": {
+        "job_id": {
+          "$ref": "#/$defs/job_id"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/tenant_id"
+        },
+        "step_id": {
+          "$ref": "#/$defs/step_id"
+        },
+        "run_id": {
+          "description": "Precomputed (ADR-008) so contracts are copied into this run's inputs/ prefix.",
+          "$ref": "#/$defs/run_id"
+        },
+        "environment_definition_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "targets": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "string",
+            "maxLength": 455
+          }
+        },
+        "briefing_uri": {
+          "$ref": "#/$defs/s3_uri"
+        }
+      }
+    },
+    "StageContractStubsOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "staged",
+        "missing"
+      ],
+      "properties": {
+        "staged": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "stub",
+              "digest",
+              "resolved_from"
+            ],
+            "properties": {
+              "stub": {
+                "type": "string",
+                "maxLength": 63
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "resolved_from": {
+                "type": "string",
+                "enum": [
+                  "deployed_prod",
+                  "default_branch",
+                  "pinned"
+                ]
+              }
+            }
+          }
+        },
+        "missing": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "maxLength": 63
+          }
+        },
+        "compat_checks_staged": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "ClassifyInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "job_id",
+        "tenant_id",
+        "step_id",
+        "run_id",
+        "workflow_type",
+        "run_phase",
+        "fix_iteration",
+        "previous_blocking"
+      ],
+      "properties": {
+        "job_id": {
+          "$ref": "#/$defs/job_id"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/tenant_id"
+        },
+        "step_id": {
+          "$ref": "#/$defs/step_id"
+        },
+        "run_id": {
+          "$ref": "#/$defs/run_id"
+        },
+        "workflow_type": {
+          "type": "string",
+          "enum": [
+            "bugfix",
+            "feature",
+            "api_change",
+            "docs",
+            "hotfix",
+            "maintenance",
+            "pr_repair",
+            "qa_only"
+          ]
+        },
+        "run_phase": {
+          "type": "string",
+          "enum": [
+            "Succeeded",
+            "Failed",
+            "Cancelled",
+            "NotCreated"
+          ]
+        },
+        "failure_reason": {
+          "description": "C-CRD failure reason when run_phase is Failed; 'AdmissionDenied' also when runner.start_run returned 422 admission_denied (run_phase NotCreated).",
+          "type": "string",
+          "maxLength": 64
+        },
+        "result_uri": {
+          "$ref": "#/$defs/s3_uri"
+        },
+        "qa_report_uri": {
+          "$ref": "#/$defs/s3_uri"
+        },
+        "fix_iteration": {
+          "description": "QA-driven fix iterations already used in this cycle (node counter), used only to label feedback.json.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "previous_blocking": {
+          "description": "test_ids blocking in earlier QA runs of this cycle (node state), for oscillation detection.",
+          "type": "array",
+          "maxItems": 40,
+          "items": {
+            "type": "string",
+            "maxLength": 512
+          }
+        }
+      }
+    },
+    "ClassifyOutput": {
+      "description": "Small, history-safe return value (≤ 4 KiB). The full classified report is written to S3 and referenced.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verdict",
+        "reason_code",
+        "oscillation",
+        "env_signature_transient",
+        "agentrun_exit_class",
+        "risk_floor_hint",
+        "classified_report_uri",
+        "blocking",
+        "test_inventory_delta"
+      ],
+      "properties": {
+        "verdict": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "pass_with_warnings",
+            "fail",
+            "inconclusive",
+            "not_applicable"
+          ]
+        },
+        "reason_code": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "oscillation": {
+          "type": "boolean"
+        },
+        "env_signature_transient": {
+          "type": "boolean"
+        },
+        "first_env_signature": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "agentrun_exit_class": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "pass_with_warnings",
+            "fail",
+            "inconclusive_other",
+            "not_applicable",
+            "environment_setup",
+            "environment_services"
+          ],
+          "description": "Harness exit class (WS-03 cli-invocation.md section 4.10; orchestrator ruling on R1V-023): pass, pass_with_warnings, fail, inconclusive_other, not_applicable → entrypoint exit 0; environment_setup (prepare, install, build tooling) → 44; environment_services (services, stubs, seed) → 45 (EnvironmentSetupFailed, run_result still written, verdict inconclusive)."
+        },
+        "risk_floor_hint": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "classified_report_uri": {
+          "description": "steps/<step_id>/qa_report/classified.json. When there is no sandbox report (run not created, or failed before writing it) classify synthesizes a minimal classified report: verdict inconclusive, reason unsupported_runtime (AdmissionDenied), environment_failure (EnvironmentSetupFailed without a report), or unknown_failure.",
+          "$ref": "#/$defs/s3_uri"
+        },
+        "feedback_uri": {
+          "description": "Present when verdict is fail.",
+          "$ref": "#/$defs/s3_uri"
+        },
+        "blocking": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "test_inventory_delta": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tests_removed",
+            "tests_skipped_added",
+            "deleted_or_skipped"
+          ],
+          "properties": {
+            "tests_removed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "tests_skipped_added": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "deleted_or_skipped": {
+              "type": "boolean"
+            }
+          }
+        },
+        "history_available": {
+          "type": "boolean"
+        },
+        "env_failure": {
+          "description": "Present when the verdict is inconclusive with an environment cause: everything the node needs for the notify.operator payload (R1-119, XD-W2-05-05).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "stage",
+            "check_id",
+            "signature",
+            "evidence_key",
+            "definition_ref"
+          ],
+          "properties": {
+            "stage": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "check_id": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "signature": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "evidence_key": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "definition_ref": {
+              "type": "string",
+              "maxLength": 200,
+              "pattern": "^[a-z0-9][a-z0-9-]*@[0-9]+\\.[0-9]+\\.[0-9]+$"
+            },
+            "proposed_patch_uri": {
+              "type": "string",
+              "maxLength": 1100
+            }
+          }
+        }
+      }
+    },
+    "IndexResultsInput": {
+      "description": "qa.index_results on task queue replicant-projections (replicant-projector, PROJECTION class, not awaited). Idempotent on (observed_at, run_id) in qa.indexed_runs.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "job_id",
+        "tenant_id",
+        "run_id",
+        "classified_report_uri",
+        "decision"
+      ],
+      "properties": {
+        "job_id": {
+          "$ref": "#/$defs/job_id"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/tenant_id"
+        },
+        "run_id": {
+          "$ref": "#/$defs/run_id"
+        },
+        "classified_report_uri": {
+          "$ref": "#/$defs/s3_uri"
+        },
+        "decision": {
+          "description": "The node's route_after_qa decision, recorded with the index entry for analytics.",
+          "type": "string",
+          "enum": [
+            "proceed",
+            "fix_loop",
+            "retry_qa",
+            "operator_and_gate",
+            "gate_with_failure",
+            "fail_job"
+          ]
+        }
+      }
+    },
+    "IndexResultsOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "indexed",
+        "tests_indexed"
+      ],
+      "properties": {
+        "indexed": {
+          "description": "false when the run was already indexed (no-op).",
+          "type": "boolean"
+        },
+        "tests_indexed": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,115 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ExecSystemRolesToRunBuckets",
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:PutObjectTagging",
+        "s3:AbortMultipartUpload",
+        "s3:ListMultipartUploadParts"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-artifacts/tenants/*",
+        "arn:aws:s3:::acme-replicant-prod-transcripts/tenants/*",
+        "arn:aws:s3:::acme-replicant-prod-session/tenants/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:PrincipalAccount": "222222222222"
+        }
+      }
+    },
+    {
+      "Sid": "ExecSystemRolesReadRegistry",
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "s3:GetObject",
+      "Resource": [
+        "arn:aws:s3:::acme-replicant-prod-registry/blobs/sha256/*",
+        "arn:aws:s3:::acme-replicant-prod-registry/bundles/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:PrincipalAccount": "222222222222"
+        }
+      }
+    },
+    {
+      "Sid": "RunnerApiReadsKillSwitchMirror",
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-ops/kill-switches/v1/state.json",
+      "Condition": {
+        "ArnEquals": {
+          "aws:PrincipalArn": "arn:aws:iam::222222222222:role/replicant-prod-runner-api"
+        }
+      }
+    },
+    {
+      "Sid": "RunnerApiOwnsRevocationFeed",
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging",
+        "s3:GetObject"
+      ],
+      "Resource": "arn:aws:s3:::acme-replicant-prod-ops/exec-revocations/prod/*",
+      "Condition": {
+        "ArnEquals": {
+          "aws:PrincipalArn": "arn:aws:iam::222222222222:role/replicant-prod-runner-api"
+        }
+      }
+    },
+    {
+      "Sid": "RunnerApiListsRevocationFeed",
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-ops",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": "exec-revocations/prod/*"
+        },
+        "ArnEquals": {
+          "aws:PrincipalArn": "arn:aws:iam::222222222222:role/replicant-prod-runner-api"
+        }
+      }
+    },
+    {
+      "Sid": "RunnerApiListsRunInboxes",
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-artifacts",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": "tenants/*/jobs/*/runs/*/inbox/*"
+        },
+        "ArnEquals": {
+          "aws:PrincipalArn": "arn:aws:iam::222222222222:role/replicant-prod-runner-api"
+        }
+      }
+    },
+    {
+      "Sid": "RunnerApiListsRunTranscripts",
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::acme-replicant-prod-transcripts",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": "tenants/*/jobs/*/runs/*"
+        },
+        "ArnEquals": {
+          "aws:PrincipalArn": "arn:aws:iam::222222222222:role/replicant-prod-runner-api"
+        }
+      }
+    }
+  ]
+}

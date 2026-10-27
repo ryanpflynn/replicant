@@ -1,0 +1,519 @@
+// otlp-gateway-sandbox.alloy - Grafana Alloy v1.21.x Deployment "alloy-sandbox-otlp" (3 replicas, HPA on CPU)
+// in the EXEC cluster, namespace replicant-observability. Owner WS-08.
+//
+// The only OTLP endpoint a sandbox can reach. The controller sets, per C-IDS section 7 and WS-02's bootstrap
+// (controller.md s.4.4 endpoints.otlp), OTEL_EXPORTER_OTLP_ENDPOINT=https://otel-sandbox.<env>.replicant.internal:4318,
+// a name that resolves to this Deployment's Service,
+// and a CiliumNetworkPolicy allows sbx-* pods to reach this Service on TCP 4318 only (WS-02/WS-09).
+//
+// Trust model (ADR-004): telemetry from a sandbox is untrusted. Identity attributes supplied by the sandbox are
+// deleted, then re-derived from the Kubernetes labels of the pod that owns the connection's source IP
+// (otelcol.processor.k8sattributes, pod_association from "connection"). Telemetry whose source is not an
+// agentrun-controller pod in an sbx-* namespace is dropped. Content attributes are redacted again (OTTL) after the
+// sandbox-side redactor.
+//
+// Output: OTLP/gRPC with mTLS to the core gateway (otlp-gateway-core.alloy) through AWS PrivateLink (exec account ->
+// core account, CCR-09-07).
+// Required environment: REPLICANT_ENV, CORE_OTLP_ENDPOINT (host:port; the PrivateLink interface endpoint for the
+// core account's otlp.obs.<env>.replicant.internal endpoint service, CCR-09-07), OTLP_TLS_DIR (client cert to core),
+// SANDBOX_OTLP_TLS_DIR (server cert), LOKI_PUSH_URL (PrivateLink endpoint loki-push.obs.<env>.replicant.internal, used
+// only by the OTLP log fallback below).
+
+logging {
+  level  = "info"
+  format = "json"
+}
+
+otelcol.receiver.otlp "sandbox" {
+  http {
+    endpoint              = "0.0.0.0:4318"
+    max_request_body_size = "8MiB"
+
+    // Server certificate for otel-sandbox.<env>.replicant.internal (cert-manager); sandboxes trust the replicant CA
+    // bundle mounted by the controller. No client authentication: identity comes from the connection (step 2).
+    tls {
+      cert_file = sys.env("SANDBOX_OTLP_TLS_DIR") + "/tls.crt"
+      key_file  = sys.env("SANDBOX_OTLP_TLS_DIR") + "/tls.key"
+    }
+  }
+
+  output {
+    traces  = [otelcol.processor.memory_limiter.default.input]
+    metrics = [otelcol.processor.memory_limiter.default.input]
+    logs    = [otelcol.processor.memory_limiter.default.input]
+  }
+}
+
+otelcol.processor.memory_limiter "default" {
+  check_interval         = "1s"
+  limit_percentage       = 80
+  spike_limit_percentage = 20
+
+  output {
+    traces  = [otelcol.processor.transform.strip_identity.input]
+    metrics = [otelcol.processor.transform.strip_identity.input]
+    logs    = [otelcol.processor.transform.strip_identity.input]
+  }
+}
+
+// 1. Remove every identity claim the sandbox made about itself.
+otelcol.processor.transform "strip_identity" {
+  error_mode = "ignore"
+
+  trace_statements {
+    context    = "resource"
+    statements = [
+      `delete_matching_keys(attributes, "^(replicant\\..*|k8s\\..*|deployment\\.environment.*|service\\.instance\\.id)$")`,
+    ]
+  }
+
+  trace_statements {
+    context    = "span"
+    statements = [
+      `delete_matching_keys(attributes, "^replicant\\.(env|tenant_id|job_id|run_id|agentrun|role|release_bundle_id|workflow_type|workflow_id|requester_id)$")`,
+    ]
+  }
+
+  metric_statements {
+    context    = "resource"
+    statements = [
+      `delete_matching_keys(attributes, "^(replicant\\..*|k8s\\..*|service\\.instance\\.id)$")`,
+    ]
+  }
+
+  log_statements {
+    context    = "resource"
+    statements = [
+      `delete_matching_keys(attributes, "^(replicant\\..*|k8s\\..*|service\\.instance\\.id)$")`,
+    ]
+  }
+
+  log_statements {
+    context    = "log"
+    statements = [
+      `delete_matching_keys(attributes, "^(sbx_.*|loki\\..*|container|namespace|pod)$")`,
+    ]
+  }
+
+  output {
+    traces  = [otelcol.processor.k8sattributes.sandbox.input]
+    metrics = [otelcol.processor.k8sattributes.sandbox.input]
+    logs    = [otelcol.processor.k8sattributes.sandbox.input]
+  }
+}
+
+// 2. Re-derive identity from the pod that owns the connection.
+otelcol.processor.k8sattributes "sandbox" {
+  auth_type                 = "serviceAccount"
+  wait_for_metadata         = true
+  wait_for_metadata_timeout = "30s"
+  pod_delete_grace_period   = "600s"
+
+  extract {
+    metadata = ["k8s.namespace.name", "k8s.pod.name", "k8s.pod.uid", "k8s.node.name"]
+
+    label {
+      from     = "pod"
+      key      = "replicant.example.com/tenant"
+      tag_name = "replicant.tenant_id"
+    }
+
+    label {
+      from     = "pod"
+      key      = "replicant.example.com/job-id"
+      tag_name = "replicant.job_id"
+    }
+
+    label {
+      from     = "pod"
+      key      = "replicant.example.com/run-id"
+      tag_name = "replicant.run_id"
+    }
+
+    label {
+      from     = "pod"
+      key      = "replicant.example.com/role"
+      tag_name = "replicant.role"
+    }
+
+    label {
+      from     = "pod"
+      key      = "replicant.example.com/workload-class"
+      tag_name = "replicant.workload_class"
+    }
+
+    label {
+      from     = "pod"
+      key      = "replicant.example.com/isolation"
+      tag_name = "replicant.isolation"
+    }
+
+    label {
+      from     = "pod"
+      key      = "replicant.example.com/bundle"
+      tag_name = "replicant.release_bundle_id"
+    }
+
+    // CCR-08-03 (accepted, C-IDS 1.9.0): pod label replicant.example.com/workflow-type.
+    label {
+      from     = "pod"
+      key      = "replicant.example.com/workflow-type"
+      tag_name = "replicant.workflow_type"
+    }
+
+    // CCR-08-03: set by the controller from the verified run grant's acting_for (C-CRD 2.0.0 spec.runGrant).
+    label {
+      from     = "pod"
+      key      = "replicant.example.com/acting-for"
+      tag_name = "replicant.requester_id"
+    }
+
+    label {
+      from     = "pod"
+      key      = "app.kubernetes.io/managed-by"
+      tag_name = "replicant.managed_by"
+    }
+  }
+
+  pod_association {
+    source {
+      from = "connection"
+    }
+  }
+
+  output {
+    traces  = [otelcol.processor.filter.only_sandboxes.input]
+    metrics = [otelcol.processor.filter.only_sandboxes.input]
+    logs    = [otelcol.processor.filter.only_sandboxes.input]
+  }
+}
+
+// 3. Drop anything that could not be attributed to a controller-managed sandbox pod.
+otelcol.processor.filter "only_sandboxes" {
+  error_mode = "ignore"
+
+  traces {
+    span = [
+      `resource.attributes["replicant.job_id"] == nil`,
+      `resource.attributes["replicant.managed_by"] != "agentrun-controller"`,
+      `not IsMatch(resource.attributes["k8s.namespace.name"], "^sbx-[a-z][a-z0-9-]{1,31}$")`,
+    ]
+  }
+
+  metrics {
+    metric = [
+      `resource.attributes["replicant.job_id"] == nil`,
+      `resource.attributes["replicant.managed_by"] != "agentrun-controller"`,
+      `not IsMatch(resource.attributes["k8s.namespace.name"], "^sbx-[a-z][a-z0-9-]{1,31}$")`,
+      // Only these families leave the sandbox (C-IDS 1.10.0 section 11: pod label only on replicant_sandbox_* and
+      // replicant_cli_*): the watchdog's replicant_sandbox_* gauges and the two Claude Code families renamed below.
+      `not (IsMatch(name, "^replicant_sandbox_") or name == "claude_code.cost.usage" or name == "claude_code.token.usage")`,
+    ]
+  }
+
+  logs {
+    log_record = [
+      `resource.attributes["replicant.job_id"] == nil`,
+      `resource.attributes["replicant.managed_by"] != "agentrun-controller"`,
+      `not IsMatch(resource.attributes["k8s.namespace.name"], "^sbx-[a-z][a-z0-9-]{1,31}$")`,
+    ]
+  }
+
+  output {
+    traces  = [otelcol.processor.transform.promote.input]
+    metrics = [otelcol.processor.transform.promote.input]
+    logs    = [otelcol.processor.transform.log_fallback.input]
+  }
+}
+
+// 4. Copy trusted identity onto every span (Langfuse filters need it on every span, C-IDS section 10), set the
+//    environment, and redact content attributes a second time.
+otelcol.processor.transform "promote" {
+  error_mode = "ignore"
+
+  trace_statements {
+    context    = "resource"
+    statements = [
+      `set(attributes["replicant.env"], "` + sys.env("REPLICANT_ENV") + `")`,
+      `set(attributes["deployment.environment.name"], "replicant-` + sys.env("REPLICANT_ENV") + `")`,
+      `set(attributes["replicant.agentrun"], Concat(["ar", Substring(attributes["replicant.run_id"], 4, 26)], "-")) where attributes["replicant.run_id"] != nil`,
+      `set(attributes["service.name"], "replicant-sandbox") where attributes["service.name"] == nil`,
+      `delete_key(attributes, "replicant.managed_by")`,
+      `delete_key(attributes, "k8s.pod.uid")`,
+    ]
+  }
+
+  trace_statements {
+    context    = "span"
+    statements = [
+      `set(attributes["replicant.tenant_id"], resource.attributes["replicant.tenant_id"])`,
+      `set(attributes["replicant.job_id"], resource.attributes["replicant.job_id"])`,
+      `set(attributes["replicant.run_id"], resource.attributes["replicant.run_id"])`,
+      `set(attributes["replicant.agentrun"], resource.attributes["replicant.agentrun"])`,
+      `set(attributes["replicant.role"], resource.attributes["replicant.role"])`,
+      `set(attributes["replicant.release_bundle_id"], resource.attributes["replicant.release_bundle_id"])`,
+      `set(attributes["replicant.workflow_type"], resource.attributes["replicant.workflow_type"]) where resource.attributes["replicant.workflow_type"] != nil`,
+      `set(attributes["replicant.requester_id"], resource.attributes["replicant.requester_id"]) where resource.attributes["replicant.requester_id"] != nil`,
+      `set(attributes["deployment.environment.name"], resource.attributes["deployment.environment.name"])`,
+      // CLI content that must never leave the sandbox, even if a CLI default changes (session-capture.md s.3).
+      `delete_matching_keys(attributes, "^(prompt|prompt_text|response|tool_input|tool_parameters|body|body_ref|user\\.email|user\\.account_uuid|user\\.account_id|organization\\.id)$")`,
+      // Second-pass redaction on the content attributes the entrypoint is allowed to send.
+      `replace_all_patterns(attributes, "value", "\\beyJ[A-Za-z0-9_-]{8,}\\.eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}", "[REDACTED:replicant-jwt]")`,
+      `replace_all_patterns(attributes, "value", "\\b(?:AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16}\\b", "[REDACTED:aws-access-key-id]")`,
+      `replace_all_patterns(attributes, "value", "\\bgh[pousr]_[0-9A-Za-z]{36,}\\b", "[REDACTED:github-token]")`,
+      `replace_all_patterns(attributes, "value", "\\bxox[abposr]-[0-9A-Za-z-]{10,}", "[REDACTED:slack-token]")`,
+      `replace_all_patterns(attributes, "value", "(?i)\\bbearer\\s+[A-Za-z0-9._~+/=-]{20,}", "Bearer [REDACTED:http-bearer-token]")`,
+      `replace_all_patterns(attributes, "value", "-----BEGIN[ A-Z0-9_-]{0,100}PRIVATE KEY-----", "[REDACTED:private-key]")`,
+      `replace_all_patterns(attributes, "value", "(?i)X-Amz-Signature=[0-9a-f]{64}", "X-Amz-Signature=[REDACTED]")`,
+    ]
+  }
+
+  trace_statements {
+    context    = "spanevent"
+    statements = [
+      `delete_matching_keys(attributes, "^(tool\\.output|prompt|response|body)$")`,
+    ]
+  }
+
+  metric_statements {
+    context    = "resource"
+    statements = [
+      `set(attributes["replicant.env"], "` + sys.env("REPLICANT_ENV") + `")`,
+      `set(attributes["service.name"], "replicant-sandbox")`,
+    ]
+  }
+
+  // CLI metrics (cumulative, one series set per pod) keep only bounded attributes; tenant/role/pod come from the
+  // trusted resource. Per-pod identity is preserved so counters never merge across processes.
+  metric_statements {
+    context    = "datapoint"
+    statements = [
+      `keep_keys(attributes, ["model", "type"])`,
+      `set(attributes["tenant"], resource.attributes["replicant.tenant_id"])`,
+      `set(attributes["role"], resource.attributes["replicant.role"])`,
+      `set(attributes["workload_class"], resource.attributes["replicant.workload_class"])`,
+      `set(attributes["isolation"], resource.attributes["replicant.isolation"])`,
+      `set(attributes["pod"], resource.attributes["k8s.pod.name"])`,
+    ]
+  }
+
+  output {
+    traces  = [otelcol.processor.batch.default.input]
+    metrics = [otelcol.processor.batch.default.input]
+  }
+}
+
+otelcol.processor.batch "default" {
+  timeout             = "2s"
+  send_batch_size     = 2048
+  send_batch_max_size = 4096
+
+  output {
+    traces  = [otelcol.exporter.otlp.core.input]
+    metrics = [otelcol.exporter.otlp.core.input]
+  }
+}
+
+otelcol.exporter.otlp "core" {
+  client {
+    endpoint    = sys.env("CORE_OTLP_ENDPOINT")
+    compression = "zstd"
+
+    tls {
+      ca_file   = sys.env("OTLP_TLS_DIR") + "/ca.crt"
+      cert_file = sys.env("OTLP_TLS_DIR") + "/tls.crt"
+      key_file  = sys.env("OTLP_TLS_DIR") + "/tls.key"
+    }
+  }
+
+  sending_queue {
+    enabled       = true
+    num_consumers = 8
+    queue_size    = 20000
+  }
+
+  retry_on_failure {
+    enabled          = true
+    max_elapsed_time = "10m"
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// OTLP log fallback (R2-039, benchmark B-LOG-01). Used only for RuntimeClasses where B-LOG-01 shows that sandbox
+// container stdout does not reach /var/log/pods on the host. For those, the controller sets bootstrap
+// endpoints.log_transport = "otlp" (XD-FIX-R2-039) and the uploader and entrypoint send the same JSON lines they
+// would print, as OTLP log records (body = the JSON line, attribute replicant.container = uploader | agent |
+// watchdog | agentd; agentd maps to the pod container name replicant-agentd, XD-W2-03-03), to this gateway. Identity is re-derived from the connection exactly as for traces; the lines are
+// converted to Loki entries carrying the same temporary labels node-logs.alloy derives from pod metadata, then run
+// through the identical sandbox stage set (stages are kept in sync by tests/gen_local.py's sibling check).
+// Trust note: in fallback mode the container name is sandbox-declared, so the "only the uploader may produce
+// source=transcript" rule (ADR-08-004) is weaker: a compromised agent could label lines of its own run as transcript.
+// Identity (tenant, job, run) is still pod-derived.
+// ---------------------------------------------------------------------------------------------------------------
+otelcol.processor.transform "log_fallback" {
+  error_mode = "ignore"
+
+  log_statements {
+    context    = "log"
+    statements = [
+      `set(attributes["namespace"], resource.attributes["k8s.namespace.name"])`,
+      `set(attributes["pod"], resource.attributes["k8s.pod.name"])`,
+      `set(attributes["container"], "otlp-fallback")`,
+      `set(attributes["container"], attributes["replicant.container"]) where attributes["replicant.container"] == "uploader" or attributes["replicant.container"] == "agent" or attributes["replicant.container"] == "watchdog"`,
+      `set(attributes["container"], "replicant-agentd") where attributes["replicant.container"] == "agentd"`,
+      `set(attributes["sbx_tenant"], resource.attributes["replicant.tenant_id"])`,
+      `set(attributes["sbx_job_id"], resource.attributes["replicant.job_id"])`,
+      `set(attributes["sbx_run_id"], resource.attributes["replicant.run_id"])`,
+      `set(attributes["sbx_role"], resource.attributes["replicant.role"])`,
+      `set(attributes["sbx_bundle"], resource.attributes["replicant.release_bundle_id"])`,
+      `set(attributes["sbx_workflow_type"], resource.attributes["replicant.workflow_type"]) where resource.attributes["replicant.workflow_type"] != nil`,
+      `set(attributes["sbx_acting_for"], resource.attributes["replicant.requester_id"]) where resource.attributes["replicant.requester_id"] != nil`,
+      `delete_key(attributes, "replicant.container")`,
+      `set(attributes["loki.attribute.labels"], "namespace, pod, container, sbx_tenant, sbx_job_id, sbx_run_id, sbx_role, sbx_bundle, sbx_workflow_type, sbx_acting_for")`,
+    ]
+  }
+
+  output {
+    logs = [otelcol.exporter.loki.fallback.input]
+  }
+}
+
+otelcol.exporter.loki "fallback" {
+  forward_to = [loki.process.sandbox_otlp.receiver]
+}
+
+loki.process "sandbox_otlp" {
+  forward_to = [loki.secretfilter.sandbox_otlp.receiver]
+
+  // otelcol.exporter.loki wraps the record as {"body": …, "resources": …, "attributes": …}; restore the original
+  // JSON line so the line format is identical to the stdout path.
+  stage.json {
+    expressions = {original_line = "body"}
+  }
+
+  stage.output {
+    source = "original_line"
+  }
+
+  stage.limit {
+    rate          = 300
+    burst         = 3000
+    by_label_name = "pod"
+    drop          = true
+  }
+
+  stage.json {
+    expressions = {
+      level    = "level",
+      stream   = "stream",
+      span_id  = "span_id",
+      node_key = "node_key",
+      cycle    = "cycle",
+      phase    = "phase",
+    }
+  }
+
+  stage.template {
+    source   = "trace_id"
+    template = `{{ if .sbx_job_id }}{{ printf "replicant.job.trace.v1:%s" .sbx_job_id | sha256sum | trunc 32 }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "span_id"
+    template = `{{ if regexMatch "^[0-9a-f]{16}$" (default "" .span_id) }}{{ .span_id }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "agentrun"
+    template = `{{ if .sbx_run_id }}{{ printf "ar-%s" (trimPrefix "run_" .sbx_run_id) }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "principal_id"
+    template = `{{ if regexMatch "^(usr_[0-9a-hjkmnp-tv-z]{26}|svc_[a-z][a-z0-9-]{2,40})$" (default "" .sbx_acting_for) }}{{ .sbx_acting_for }}{{ end }}`
+  }
+
+  stage.template {
+    source   = "level"
+    template = `{{ $l := lower (default "info" .level) }}{{ if has $l (list "debug" "info" "warn" "error") }}{{ $l }}{{ else if eq $l "warning" }}warn{{ else if has $l (list "fatal" "critical" "panic" "err") }}error{{ else }}info{{ end }}`
+  }
+
+  stage.template {
+    source   = "source_value"
+    template = `{{ if and (eq (default "" .stream) "transcript") (eq .container "uploader") }}transcript{{ else }}app{{ end }}`
+  }
+
+  stage.template {
+    source   = "service"
+    template = `{{ if eq .container "agent" }}replicant-sandbox{{ else if eq .container "uploader" }}replicant-sandbox-uploader{{ else if eq .container "watchdog" }}replicant-sandbox-watchdog{{ else }}replicant-sandbox-svc{{ end }}`
+  }
+
+  stage.template {
+    source   = "workflow_type_value"
+    template = `{{ $w := default "none" .sbx_workflow_type }}{{ if has $w (list "bugfix" "feature" "api_change" "docs" "hotfix" "maintenance" "pr_repair" "qa_only" "unrouted") }}{{ $w }}{{ else }}none{{ end }}`
+  }
+
+  stage.template {
+    source   = "role_value"
+    template = `{{ default "none" .sbx_role }}`
+  }
+
+  stage.structured_metadata {
+    values = {
+      job_id            = "sbx_job_id",
+      run_id            = "sbx_run_id",
+      agentrun          = "agentrun",
+      release_bundle_id = "sbx_bundle",
+      trace_id          = "trace_id",
+      span_id           = "span_id",
+      principal_id      = "principal_id",
+      pod               = "pod",
+    }
+  }
+
+  stage.labels {
+    values = {
+      tenant        = "sbx_tenant",
+      service       = "service",
+      level         = "level",
+      source        = "source_value",
+      workflow_type = "workflow_type_value",
+      role          = "role_value",
+    }
+  }
+
+  stage.static_labels {
+    values = {
+      env     = sys.env("REPLICANT_ENV"),
+      cluster = "exec",
+    }
+  }
+
+  stage.label_keep {
+    values = ["env", "cluster", "namespace", "service", "tenant", "workflow_type", "role", "level", "source"]
+  }
+
+  stage.tenant {
+    value = "sandbox"
+  }
+}
+
+loki.secretfilter "sandbox_otlp" {
+  forward_to         = [loki.write.fallback.receiver]
+  gitleaks_config    = "/etc/replicant/redaction/gitleaks-replicant.toml"
+  redact_with        = "[REDACTED:$SECRET_NAME:$SECRET_HASH]"
+  origin_label       = "service"
+  processing_timeout = "250ms"
+}
+
+loki.write "fallback" {
+  endpoint {
+    url = sys.env("LOKI_PUSH_URL")
+
+    tls_config {
+      ca_file   = sys.env("OTLP_TLS_DIR") + "/ca.crt"
+      cert_file = sys.env("OTLP_TLS_DIR") + "/tls.crt"
+      key_file  = sys.env("OTLP_TLS_DIR") + "/tls.key"
+    }
+  }
+}

@@ -1,0 +1,55 @@
+# Kyverno ImageValidatingPolicy (policies.kyverno.io/v1, stable as of Kyverno 1.19
+# [verified: https://kyverno.io/docs/policy-types/image-validating-policy/, 2026-10-24]) for both exec
+# and core clusters (XD-03-17, R1-224, SC-38).
+# Primary key source: the cosign PUBLIC key inline as PEM (fallback-first, R2-042). It is the public
+# half of KMS key alias/replicant/<env>/image-signing (ECC_NIST_P256, SIGN_VERIFY, core account) and is
+# rendered into this manifest by IaC; rotation = new KMS key, both PEMs listed for 7 days, then the old
+# one removed. The kms:// reference form is not used because AWS KMS URI support in the pinned Kyverno
+# is [unverified].
+apiVersion: policies.kyverno.io/v1
+kind: ImageValidatingPolicy
+metadata:
+  name: replicant-images-signed
+spec:
+  webhookConfiguration:
+    timeoutSeconds: 15
+  failurePolicy: Fail
+  validationActions: [Deny]
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+    namespaceSelector:
+      matchExpressions:
+        - key: replicant.example.com/zone
+          operator: In
+          values: ["sandbox", "system"]
+  matchImageReferences:
+    - glob: "*.dkr.ecr.us-east-1.amazonaws.com/replicant/*"
+    - glob: "*.dkr.ecr.us-east-1.amazonaws.com/mirror/*"
+  attestors:
+    - name: current
+      cosign:
+        key:
+          data: |
+            -----BEGIN PUBLIC KEY-----
+            MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEreplicantCurrentSigningKeyPlaceholderRenderedByIaC0000000000
+            000000000000000000000000000000000000000000000000==
+            -----END PUBLIC KEY-----
+    - name: previous
+      cosign:
+        key:
+          data: |
+            -----BEGIN PUBLIC KEY-----
+            MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEreplicantPreviousSigningKeyPlaceholderRenderedByIaC000000000
+            000000000000000000000000000000000000000000000000==
+            -----END PUBLIC KEY-----
+  validations:
+    - expression: >-
+        images.containers.map(image, verifyImageSignatures(image, [attestors.current, attestors.previous])).all(e, e > 0)
+      message: "Container image is not signed by the Replicant image-signing key."
+    - expression: >-
+        !has(images.initContainers) || images.initContainers.map(image, verifyImageSignatures(image, [attestors.current, attestors.previous])).all(e, e > 0)
+      message: "Init or sidecar container image is not signed by the Replicant image-signing key."

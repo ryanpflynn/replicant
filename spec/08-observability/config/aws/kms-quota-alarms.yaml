@@ -1,0 +1,102 @@
+# CloudFormation template: KMS request-quota alarms (WS-09 T-DOW-07, XD-W3-R1V-169). Owner WS-08.
+# Deploy once per account and region that holds replicant KMS keys (core and exec), by the platform IaC pipeline.
+# Shape decided by WS-09: AWS/Usage CallCount (Service KMS, Type API) divided by SERVICE_QUOTA() at >= 30 % for 5 min,
+# one alarm per quota class Replicant uses (symmetric cryptographic operations; ECC Sign).
+# CallCount is a per-minute Sum; the KMS quotas are per second, hence the division by 60
+# [unverified: re-check against the CloudWatch "visualize usage" example for KMS in the target account].
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Replicant KMS request-quota usage alarms (30 % of the shared quota)
+Parameters:
+  Env:
+    Type: String
+    AllowedValues: [dev, staging, prod]
+  AlarmTopicArn:
+    Type: String
+    Description: SNS topic subscribed by the replicant-security on-call webhook
+Resources:
+  KmsSymmetricQuota:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: {"Fn::Sub": "replicant-${Env}-kms-symmetric-quota-30pct"}
+      AlarmDescription: KMS symmetric cryptographic operations above 30 % of the shared request quota (T-DOW-07)
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 0.30
+      EvaluationPeriods: 5
+      DatapointsToAlarm: 5
+      TreatMissingData: notBreaching
+      AlarmActions: [{"Ref": "AlarmTopicArn"}]
+      OKActions: [{"Ref": "AlarmTopicArn"}]
+      Metrics:
+        - Id: gdk
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Usage
+              MetricName: CallCount
+              Dimensions:
+                - {Name: Service, Value: KMS}
+                - {Name: Type, Value: API}
+                - {Name: Resource, Value: GenerateDataKey}
+                - {Name: Class, Value: None}
+            Period: 60
+            Stat: Sum
+        - Id: dec
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Usage
+              MetricName: CallCount
+              Dimensions:
+                - {Name: Service, Value: KMS}
+                - {Name: Type, Value: API}
+                - {Name: Resource, Value: Decrypt}
+                - {Name: Class, Value: None}
+            Period: 60
+            Stat: Sum
+        - Id: enc
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Usage
+              MetricName: CallCount
+              Dimensions:
+                - {Name: Service, Value: KMS}
+                - {Name: Type, Value: API}
+                - {Name: Resource, Value: Encrypt}
+                - {Name: Class, Value: None}
+            Period: 60
+            Stat: Sum
+        - Id: usage
+          Label: share of the symmetric cryptographic-operations quota
+          ReturnData: true
+          Expression: "(FILL(gdk, 0) + FILL(dec, 0) + FILL(enc, 0)) / 60 / SERVICE_QUOTA(gdk)"
+  KmsEccSignQuota:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: {"Fn::Sub": "replicant-${Env}-kms-ecc-sign-quota-30pct"}
+      AlarmDescription: KMS ECC Sign (run tokens, run grants) above 30 % of the shared request quota (T-DOW-07)
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 0.30
+      EvaluationPeriods: 5
+      DatapointsToAlarm: 5
+      TreatMissingData: notBreaching
+      AlarmActions: [{"Ref": "AlarmTopicArn"}]
+      OKActions: [{"Ref": "AlarmTopicArn"}]
+      Metrics:
+        - Id: sign
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Usage
+              MetricName: CallCount
+              Dimensions:
+                - {Name: Service, Value: KMS}
+                - {Name: Type, Value: API}
+                - {Name: Resource, Value: Sign}
+                - {Name: Class, Value: None}
+            Period: 60
+            Stat: Sum
+        - Id: usage
+          Label: share of the ECC Sign quota
+          ReturnData: true
+          Expression: "FILL(sign, 0) / 60 / SERVICE_QUOTA(sign)"

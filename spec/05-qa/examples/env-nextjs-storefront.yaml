@@ -1,0 +1,321 @@
+# EnvironmentDefinition: Next.js 16 web app with Postgres sidecar, OpenAPI stub, Playwright 1.64.1 (WS-05 example).
+# Non-QA fields follow WS-03's kind schema; spec.qa follows replicant.env-qa/v1.
+# Validated by spec/05-qa/tools/validate_examples.py. Image digests are illustrative.
+apiVersion: replicant.example.com/v1
+kind: EnvironmentDefinition
+metadata:
+  name: nextjs-storefront
+  scope:
+    level: tenant
+    tenant_id: commerce
+  owners:
+    - commerce-web
+  description: Next.js 16 App Router storefronts (storefront-web) backed by Postgres via Prisma, calling pricing-service over REST.
+  labels:
+    replicant.codebase-type: nextjs_app
+spec:
+  codebaseType: nextjs_app
+  image:
+    build:
+      base: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/base-node@sha256:12952b19333b4fb41a188320aafce8577750c86ec247701173292b38ea5c0ad0
+      platform: linux/amd64
+      packages:
+        apt: [postgresql-client, jq, zstd, fonts-noto-core, fonts-noto-cjk, fonts-noto-color-emoji]
+        npmGlobal:
+          - '@playwright/test@1.64.1'
+      steps:
+        - name: playwright-browsers
+          run: |
+            PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright PLAYWRIGHT_SKIP_BROWSER_GC=1 \
+              npx --yes playwright@1.64.1 install --with-deps --only-shell chromium
+            chmod -R a+rX /opt/ms-playwright
+          workingDir: /tmp
+          timeoutSeconds: 1200
+        - name: replicant-qa-web
+          run: |
+            mkdir -p /opt/replicant-qa/web && cd /opt/replicant-qa/web
+            npm install --no-audit --no-fund @replicant/qa-web@1.0.0 @axe-core/playwright@4.14.0 @playwright/test@1.64.1
+          workingDir: /tmp
+          timeoutSeconds: 600
+    resolved:
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/env-nextjs-storefront@sha256:f405c6727fe30e152bb3ae4e2e84e42b362a272e32ce40bff5261198348a4548
+      buildSpecDigest: sha256:48a464fcacc65d2b217e7a5fdbe6532a3fc2c04ea395aa73bbe16f433dd7dcbb
+      builtAt: '2026-10-22T11:40:52Z'
+  repo:
+    fetchDepth: 50
+  env:
+    NEXT_TELEMETRY_DISABLED: '1'
+    PLAYWRIGHT_BROWSERS_PATH: /opt/ms-playwright
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+  packageMirrors: [npm, oci]
+  bootstrap:
+    forRoles: [implementer, repair, reviewer]
+    steps:
+      - name: install-npm
+        run: npm ci --no-audit --no-fund --prefer-offline
+        when:
+          pathsExist: [package-lock.json]
+        timeoutSeconds: 900
+      - name: prisma-generate
+        run: npx --no-install prisma generate
+        when:
+          pathsExist: [prisma/schema.prisma]
+        timeoutSeconds: 300
+  caches:
+    - name: npm-cache
+      path: /workspace/.cache/npm
+      kind: workspace
+      env: npm_config_cache
+    - name: next-cache
+      path: /workspace/repo/.next/cache
+      kind: workspace
+    - name: playwright-browsers
+      path: /opt/ms-playwright
+      kind: image
+  services:
+    - name: postgres
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/svc-postgres@sha256:7cf3db853f6e121ab0a65e30deea9ed273833fba95e4f49a2cb9cdf2360d880c
+      command: [docker-entrypoint.sh]
+      args: [postgres, -c, listen_addresses=127.0.0.1, -c, fsync=off, -c, synchronous_commit=off, -c, full_page_writes=off, -c, shared_buffers=128MB]
+      env:
+        POSTGRES_USER: storefront
+        POSTGRES_PASSWORD: qa-local-only
+        POSTGRES_DB: storefront
+      data: {env: PGDATA, subdir: pgdata, sizeEstimate: 3Gi}   # XD-FIX-R1-074: the controller sets PGDATA under /workspace/.services/<name>
+      ports:
+        - {name: pg, port: 5432}
+      readiness:
+        exec: [pg_isready, -h, 127.0.0.1, -U, storefront]
+        periodSeconds: 1
+        failureThreshold: 60
+      resources:
+        requests: {cpu: 500m, memory: 512Mi, ephemeralStorage: 256Mi}
+        limits: {cpu: '1', memory: 1Gi, ephemeralStorage: 1Gi}
+      forRoles: [qa, implementer, repair]
+      seed:
+        name: migrate
+        run: npx --no-install prisma migrate deploy
+        timeoutSeconds: 180
+  resourceProfiles:
+    default:
+      requests: {cpu: 2250m, memory: 5376Mi, ephemeralStorage: 21Gi}
+      limits: {cpu: '5', memory: 12Gi, ephemeralStorage: 40Gi}
+      workspace:
+        sizeLimit: 40Gi
+        overflow: {policy: auto, thresholdSize: 200Gi}   # StorageClass comes from WS-02 runtime-selection policy (R1V-031)
+      derivation:
+        method: provisional
+        reason: Copied from WS-03's measured nextjs_app default profile; re-measured for storefront-web after 30 runs.
+        expiresAt: '2027-01-31T00:00:00Z'
+    qa:
+      # Agent container only: npm, next build, next start, Playwright chromium (2 workers), buildctl client.
+      # /dev/shm (2Gi, memory-backed) is counted inside this memory limit.
+      requests: {cpu: '3', memory: 7680Mi, ephemeralStorage: 24Gi}
+      limits: {cpu: '7', memory: 16Gi, ephemeralStorage: 40Gi}
+      workspace:
+        sizeLimit: 40Gi
+        overflow: {policy: auto, thresholdSize: 200Gi}   # StorageClass comes from WS-02 runtime-selection policy (R1V-031)
+      derivation:
+        method: provisional
+        reason: Same numbers as WS-03's measured nextjs_app qa profile (131 runs, replicant-kata-clh); storefront baseline pending.
+        expiresAt: '2027-01-31T00:00:00Z'
+  profileByRole:
+    implementer: default
+    repair: default
+    reviewer: default
+    qa: qa
+  isolationHint:
+    coding: kata-clh
+    qa_build: kata-clh
+    review: kata-clh
+  networkProfile:
+    coding: coding-default
+    qa_build: qa-with-mirror
+    review: review-readonly
+  outputs:
+    maxOutputBytes: 2147483648
+  qa:
+    schema: replicant.env-qa/v1
+    enabled: true
+    appKind: web
+    privacy:
+      realData: false
+      traceDomSnapshots: false
+    timeouts:
+      totalSeconds: 3000
+      reserveSeconds: 240
+      startupSeconds: 300
+      finalizeSeconds: 900
+    env:
+      DATABASE_URL: postgresql://storefront:qa-local-only@127.0.0.1:5432/storefront?schema=public
+      PRICING_API_URL: http://127.0.0.1:4010
+      NEXTAUTH_URL: http://127.0.0.1:3000
+      NEXTAUTH_SECRET: qa-local-only-not-a-secret
+      PORT: '3000'
+    steps:
+      useBootstrap: true
+      unit:
+        - id: vitest
+          run: npx vitest run --reporter=default --reporter=junit --outputFile.junit=/workspace/.qa/out/vitest.xml
+          timeoutSeconds: 900
+          report: {format: junit, path: /workspace/.qa/out/vitest.xml}
+          listCommand: npx vitest list
+          rerun:
+            command: npx vitest run --reporter=junit --outputFile.junit=/workspace/.qa/out/vitest_rerun.xml {tests}
+            selectorStyle: jest-name-pattern
+        - id: typecheck
+          run: npx tsc --noEmit -p tsconfig.json && echo '<testsuites/>' > /workspace/.qa/out/typecheck.xml
+          timeoutSeconds: 600
+          report: {format: junit, path: /workspace/.qa/out/typecheck.xml}
+      integration:
+        - id: api_integration
+          run: npx vitest run --config vitest.integration.config.ts --reporter=junit --outputFile.junit=/workspace/.qa/out/api_integration.xml
+          timeoutSeconds: 900
+          report: {format: junit, path: /workspace/.qa/out/api_integration.xml}
+          listCommand: npx vitest list --config vitest.integration.config.ts
+      build:
+        - id: next_build
+          run: npx next build
+          timeoutSeconds: 1200
+          env:
+            NODE_OPTIONS: --max-old-space-size=6144
+    imageBuild:
+      enabled: true
+      builder: buildkit
+      builderImage: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/buildkit-rootless@sha256:df8732b47bae0d6c302fff4f034dc390145c00a7fde7b568698c3414a909de90
+      builderResources:
+        requests: {cpu: '1', memory: 1Gi, ephemeralStorage: 256Mi}
+        limits: {cpu: '4', memory: 4Gi, ephemeralStorage: 1Gi}
+      context: .
+      dockerfile: Dockerfile
+      platform: linux/amd64
+      sbom: true
+      secretScan: true
+      timeoutSeconds: 1200
+      cacheBudget: 8Gi
+    serviceOptions:
+      - name: postgres
+        resetBetweenPasses: command
+        resetCommand: npx --no-install prisma migrate reset --force --skip-generate && npx tsx prisma/seed-qa.ts
+    stubs:
+      - name: pricing
+        kind: openapi
+        server: prism
+        image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/qa-stub-prism@sha256:12952b19333b4fb41a188320aafce8577750c86ec247701173292b38ea5c0ad0
+        contract:
+          service: pricing-service
+          name: openapi
+          version: deployed_prod
+        port: 4010
+        fixtures: e2e/fixtures/pricing-examples.yaml
+        mode: static
+        resources:
+          requests: {cpu: 100m, memory: 192Mi, ephemeralStorage: 64Mi}
+          limits: {cpu: 500m, memory: 384Mi, ephemeralStorage: 256Mi}
+    seed:
+      - id: seed_catalog
+        run: npx tsx prisma/seed-qa.ts
+        fixtures: [prisma/seed-qa.ts, prisma/fixtures/catalog-qa.json]
+    contractCompat:
+      enabled: true
+    app:
+      start:
+        mode: process
+        command: npx next start -H 127.0.0.1 -p 3000
+        ports: [3000]
+      health:
+        startupTimeoutSeconds: 60
+        readiness:
+          - name: http_health
+            probe: {type: http, port: 3000, path: /api/health, expectStatus: [200], expectBody: {jsonPath: '$.db', equals: ok}}
+          - name: ready_log
+            probe: {type: log, logPattern: 'Ready in [0-9.]+m?s'}
+        stability:
+          windowSeconds: 20
+          probeIntervalSeconds: 4
+        failurePatterns:
+          - pattern: 'Error: '
+            severity: warn
+            ignoreBefore: ready
+          - pattern: 'unhandledRejection|uncaughtException'
+          - pattern: 'PrismaClientInitializationError'
+        smoke:
+          - name: home
+            type: http
+            http: {method: GET, port: 3000, path: /, expectStatus: [200], maxLatencyMs: 3000}
+          - name: product_api
+            type: http
+            http:
+              method: GET
+              port: 3000
+              path: /api/products/sku-qa-tee-001
+              expectStatus: [200]
+              expectJson:
+                - {jsonPath: '$.price.currency', equals: USD}
+      stop: {signal: SIGTERM, graceSeconds: 15}
+    web:
+      baseUrl: http://127.0.0.1:3000
+      playwright:
+        version: 1.64.1
+        browsers: [chromium]
+        workers: 2
+        browsersPath: /opt/ms-playwright
+      repoTests:
+        enabled: true
+        configPath: playwright.config.ts
+        projects: [chromium]
+        grepInvert: '@external'
+        timeoutSeconds: 1500
+      smokeFlows:
+        enabled: true
+        login:
+          name: shopper
+          steps: e2e/fixtures/login-qa.json
+        routes:
+          - {path: /, name: home, waitFor: "getByRole('navigation', { name: 'Main' })"}
+          - {path: /products/sku-qa-tee-001, name: product, waitFor: "getByRole('button', { name: 'Add to cart' })"}
+          - {path: /cart, name: cart, auth: shopper}
+          - {path: /checkout, name: checkout, auth: shopper, waitFor: "getByRole('heading', { name: 'Checkout' })"}
+          - {path: /account/orders, name: orders, auth: shopper}
+        consoleErrorPatterns: ['Hydration failed', 'Warning: Each child in a list should have a unique "key"']
+        generated:
+          enabled: true
+          maxFlows: 5
+          maxStepsPerFlow: 12
+      viewports:
+        - {name: desktop, width: 1440, height: 900}
+        - {name: mobile, width: 390, height: 844}
+      masks: ["[data-testid='order-id']", "[data-testid='relative-time']", "[data-testid='customer-email']"]
+      a11y:
+        enabled: true
+        tags: [wcag2a, wcag2aa, wcag21a, wcag21aa, wcag22aa]
+        failOn: new_serious
+        disableRules: []
+        exclude: ["iframe[title='Payment form']"]
+      visual:
+        enabled: true
+        whenPathsChanged: ['app/**', 'components/**', 'styles/**', 'public/**', 'tailwind.config.*']
+        threshold: 0.2
+        maxDiffPixelRatio: 0.002
+        blocking: false
+        stylePath: e2e/fixtures/screenshot.css
+      artifacts:
+        trace: retain-on-failure
+        video: 'off'
+        screenshot: 'on'
+    flake:
+      changeReruns: 2
+      baseReruns: 3
+      newFlakeBlocks: true
+      quarantine: []
+    agent:
+      enabled: true
+      tasks: [generate_smoke_flows, diagnose_failures]
+      maxCostUsd: 5
+      maxWallSeconds: 600
+    variants:
+      hotfix:
+        skip: [web.visual, web.smokeFlows.generated, imageBuild]
+        totalSeconds: 2100
+      docs:
+        skip: [integration, imageBuild, web.repoTests, web.smokeFlows.generated, agent]

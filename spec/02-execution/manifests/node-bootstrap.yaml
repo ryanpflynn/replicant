@@ -1,0 +1,299 @@
+# EC2NodeClass for the Kata sandbox pools (Karpenter v1.15, karpenter.k8s.aws/v1).
+# User data (AL2023 MIME multi-part): NodeConfig (containerd runtime handlers, kubelet) + disk setup script.
+# Shell parts run after nodeadm-config and before nodeadm-run (runtime-evaluation.md A-7).
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: sbx-kata
+spec:
+  role: replicant-prod-exec-sandbox-node          # minimal node role in the exec account (CCR-09-07)
+  amiSelectorTerms:
+    - tags:
+        replicant.example.com/ami: sbx-al2023-kata   # custom AMI: AL2023 EKS + Kata 4.3.1 + runsc + NRI plugin
+        replicant.example.com/ami-channel: prod
+  subnetSelectorTerms:
+    - tags: {replicant.example.com/subnet: sandbox}  # no default route (network.md section 6)
+  securityGroupSelectorTerms:
+    - tags: {replicant.example.com/sg: sandbox-nodes}
+  cpuOptions:
+    nestedVirtualization: enabled                # Karpenter >= v1.13 (runtime-evaluation.md A-2)
+  metadataOptions:
+    httpEndpoint: enabled
+    httpTokens: required
+    httpPutResponseHopLimit: 1
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs: {volumeSize: 100Gi, volumeType: gp3, encrypted: true}
+  kubelet:
+    maxPods: 80
+    systemReserved: {cpu: 1000m, memory: 4Gi, ephemeral-storage: 50Gi}
+    evictionHard:
+      memory.available: 2Gi
+      nodefs.available: "5%"
+      nodefs.inodesFree: "5%"
+      imagefs.available: "10%"
+    imageGCHighThresholdPercent: 70
+    imageGCLowThresholdPercent: 60
+  tags:
+    replicant.example.com/pool: sbx-kata
+  userData: |
+    MIME-Version: 1.0
+    Content-Type: multipart/mixed; boundary="REPLICANT"
+
+    --REPLICANT
+    Content-Type: application/node.eks.aws
+
+    apiVersion: node.eks.aws/v1alpha1
+    kind: NodeConfig
+    spec:
+      kubelet:
+        config:
+          containerLogMaxSize: 50Mi
+          containerLogMaxFiles: 3
+      containerd:
+        config: |
+          version = 3
+          [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.kata-clh-runtime-rs]
+            runtime_type = "io.containerd.kata-clh.v2"
+            privileged_without_host_devices = true
+            pod_annotations = []
+            container_annotations = []
+          [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.kata-clh-runtime-rs.options]
+            ConfigPath = "/opt/kata/share/defaults/kata-containers/runtime-rs/configuration-clh.toml"
+          [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc]
+            runtime_type = "io.containerd.runsc.v1"
+            pod_annotations = []
+            container_annotations = []
+          [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc.options]
+            TypeUrl = "io.containerd.runsc.v1.options"
+            ConfigPath = "/etc/containerd/runsc.toml"
+          [plugins.'io.containerd.nri.v1.nri']
+            disable = false
+            plugin_request_timeout = "10s"
+
+    --REPLICANT
+    Content-Type: text/x-shellscript; charset="us-ascii"
+
+    #!/usr/bin/env bash
+    # replicant-sandbox-disks (workspace-storage.md section 1.2)
+    set -euo pipefail
+    MNT=/mnt/k8s-disks/0
+    MD=/dev/md/replicant0
+    mapfile -t DISKS < <(lsblk -dpno NAME,MODEL | awk '/Amazon EC2 NVMe Instance Storage/ {print $1}')
+    if [[ ${#DISKS[@]} -eq 0 ]]; then echo "no instance store" >&2; exit 1; fi
+    if [[ ! -e "$MD" ]]; then
+      if [[ ${#DISKS[@]} -eq 1 ]]; then MD="${DISKS[0]}"; else
+        mdadm --create --force --verbose "$MD" --level=0 --name=replicant0 --raid-devices="${#DISKS[@]}" "${DISKS[@]}"
+        udevadm settle
+      fi
+    fi
+    blkid -t TYPE=xfs "$MD" >/dev/null 2>&1 || mkfs.xfs -f -K -l su=8b "$MD"
+    mkdir -p "$MNT"
+    mountpoint -q "$MNT" || mount -t xfs -o noatime,prjquota "$MD" "$MNT"
+    xfs_quota -x -c 'state -p' "$MNT" | grep -q 'Enforcement: ON'
+    for d in /var/lib/kubelet /var/lib/containerd /var/lib/soci-snapshotter-grpc /var/log/pods; do
+      src="$MNT/$(basename "$d")"; mkdir -p "$src" "$d"
+      mountpoint -q "$d" || mount --bind "$src" "$d"
+    done
+    test -c /dev/kvm
+    --REPLICANT--
+---
+# Bare-metal fallback pool (no CPU options needed; /dev/kvm is native).
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: sbx-kata-metal
+spec:
+  role: replicant-prod-exec-sandbox-node          # minimal node role in the exec account (CCR-09-07)
+  amiSelectorTerms:
+    - tags:
+        replicant.example.com/ami: sbx-al2023-kata   # custom AMI: AL2023 EKS + Kata 4.3.1 + runsc + NRI plugin
+        replicant.example.com/ami-channel: prod
+  subnetSelectorTerms:
+    - tags: {replicant.example.com/subnet: sandbox}  # no default route (network.md section 6)
+  securityGroupSelectorTerms:
+    - tags: {replicant.example.com/sg: sandbox-nodes}
+  metadataOptions:
+    httpEndpoint: enabled
+    httpTokens: required
+    httpPutResponseHopLimit: 1
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs: {volumeSize: 100Gi, volumeType: gp3, encrypted: true}
+  kubelet:
+    maxPods: 80
+    systemReserved: {cpu: 1000m, memory: 4Gi, ephemeral-storage: 50Gi}
+    evictionHard:
+      memory.available: 2Gi
+      nodefs.available: "5%"
+      nodefs.inodesFree: "5%"
+      imagefs.available: "10%"
+    imageGCHighThresholdPercent: 70
+    imageGCLowThresholdPercent: 60
+  tags:
+    replicant.example.com/pool: sbx-kata-metal
+  userData: |
+    MIME-Version: 1.0
+    Content-Type: multipart/mixed; boundary="REPLICANT"
+
+    --REPLICANT
+    Content-Type: application/node.eks.aws
+
+    apiVersion: node.eks.aws/v1alpha1
+    kind: NodeConfig
+    spec:
+      kubelet:
+        config:
+          containerLogMaxSize: 50Mi
+          containerLogMaxFiles: 3
+      containerd:
+        config: |
+          version = 3
+          [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.kata-clh-runtime-rs]
+            runtime_type = "io.containerd.kata-clh.v2"
+            privileged_without_host_devices = true
+            pod_annotations = []
+            container_annotations = []
+          [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.kata-clh-runtime-rs.options]
+            ConfigPath = "/opt/kata/share/defaults/kata-containers/runtime-rs/configuration-clh.toml"
+          [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc]
+            runtime_type = "io.containerd.runsc.v1"
+            pod_annotations = []
+            container_annotations = []
+          [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc.options]
+            TypeUrl = "io.containerd.runsc.v1.options"
+            ConfigPath = "/etc/containerd/runsc.toml"
+          [plugins.'io.containerd.nri.v1.nri']
+            disable = false
+            plugin_request_timeout = "10s"
+
+    --REPLICANT
+    Content-Type: text/x-shellscript; charset="us-ascii"
+
+    #!/usr/bin/env bash
+    # replicant-sandbox-disks (workspace-storage.md section 1.2)
+    set -euo pipefail
+    MNT=/mnt/k8s-disks/0
+    MD=/dev/md/replicant0
+    mapfile -t DISKS < <(lsblk -dpno NAME,MODEL | awk '/Amazon EC2 NVMe Instance Storage/ {print $1}')
+    if [[ ${#DISKS[@]} -eq 0 ]]; then echo "no instance store" >&2; exit 1; fi
+    if [[ ! -e "$MD" ]]; then
+      if [[ ${#DISKS[@]} -eq 1 ]]; then MD="${DISKS[0]}"; else
+        mdadm --create --force --verbose "$MD" --level=0 --name=replicant0 --raid-devices="${#DISKS[@]}" "${DISKS[@]}"
+        udevadm settle
+      fi
+    fi
+    blkid -t TYPE=xfs "$MD" >/dev/null 2>&1 || mkfs.xfs -f -K -l su=8b "$MD"
+    mkdir -p "$MNT"
+    mountpoint -q "$MNT" || mount -t xfs -o noatime,prjquota "$MD" "$MNT"
+    xfs_quota -x -c 'state -p' "$MNT" | grep -q 'Enforcement: ON'
+    for d in /var/lib/kubelet /var/lib/containerd /var/lib/soci-snapshotter-grpc /var/log/pods; do
+      src="$MNT/$(basename "$d")"; mkdir -p "$src" "$d"
+      mountpoint -q "$d" || mount --bind "$src" "$d"
+    done
+    test -c /dev/kvm
+    --REPLICANT--
+---
+# gVisor standby pool (no KVM needed); writes /etc/containerd/runsc.toml (runtime-evaluation.md §11.3).
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: sbx-gvisor
+spec:
+  role: replicant-prod-exec-sandbox-node          # minimal node role in the exec account (CCR-09-07)
+  amiSelectorTerms:
+    - tags:
+        replicant.example.com/ami: sbx-al2023-kata   # same custom AMI (it ships runsc and containerd-shim-runsc-v1)
+        replicant.example.com/ami-channel: prod
+  subnetSelectorTerms:
+    - tags: {replicant.example.com/subnet: sandbox}  # no default route (network.md section 6)
+  securityGroupSelectorTerms:
+    - tags: {replicant.example.com/sg: sandbox-nodes}
+  metadataOptions:
+    httpEndpoint: enabled
+    httpTokens: required
+    httpPutResponseHopLimit: 1
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs: {volumeSize: 100Gi, volumeType: gp3, encrypted: true}
+  kubelet:
+    maxPods: 80
+    systemReserved: {cpu: 1000m, memory: 4Gi, ephemeral-storage: 50Gi}
+    evictionHard:
+      memory.available: 2Gi
+      nodefs.available: "5%"
+      nodefs.inodesFree: "5%"
+      imagefs.available: "10%"
+    imageGCHighThresholdPercent: 70
+    imageGCLowThresholdPercent: 60
+  tags:
+    replicant.example.com/pool: sbx-gvisor
+  userData: |
+    MIME-Version: 1.0
+    Content-Type: multipart/mixed; boundary="REPLICANT"
+
+    --REPLICANT
+    Content-Type: application/node.eks.aws
+
+    apiVersion: node.eks.aws/v1alpha1
+    kind: NodeConfig
+    spec:
+      kubelet:
+        config:
+          containerLogMaxSize: 50Mi
+          containerLogMaxFiles: 3
+      containerd:
+        config: |
+          version = 3
+          [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.kata-clh-runtime-rs]
+            runtime_type = "io.containerd.kata-clh.v2"
+            privileged_without_host_devices = true
+            pod_annotations = []
+            container_annotations = []
+          [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.kata-clh-runtime-rs.options]
+            ConfigPath = "/opt/kata/share/defaults/kata-containers/runtime-rs/configuration-clh.toml"
+          [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc]
+            runtime_type = "io.containerd.runsc.v1"
+            pod_annotations = []
+            container_annotations = []
+          [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc.options]
+            TypeUrl = "io.containerd.runsc.v1.options"
+            ConfigPath = "/etc/containerd/runsc.toml"
+          [plugins.'io.containerd.nri.v1.nri']
+            disable = false
+            plugin_request_timeout = "10s"
+
+    --REPLICANT
+    Content-Type: text/x-shellscript; charset="us-ascii"
+
+    #!/usr/bin/env bash
+    # replicant-sandbox-disks (workspace-storage.md section 1.2)
+    set -euo pipefail
+    MNT=/mnt/k8s-disks/0
+    MD=/dev/md/replicant0
+    mapfile -t DISKS < <(lsblk -dpno NAME,MODEL | awk '/Amazon EC2 NVMe Instance Storage/ {print $1}')
+    if [[ ${#DISKS[@]} -eq 0 ]]; then echo "no instance store" >&2; exit 1; fi
+    if [[ ! -e "$MD" ]]; then
+      if [[ ${#DISKS[@]} -eq 1 ]]; then MD="${DISKS[0]}"; else
+        mdadm --create --force --verbose "$MD" --level=0 --name=replicant0 --raid-devices="${#DISKS[@]}" "${DISKS[@]}"
+        udevadm settle
+      fi
+    fi
+    blkid -t TYPE=xfs "$MD" >/dev/null 2>&1 || mkfs.xfs -f -K -l su=8b "$MD"
+    mkdir -p "$MNT"
+    mountpoint -q "$MNT" || mount -t xfs -o noatime,prjquota "$MD" "$MNT"
+    xfs_quota -x -c 'state -p' "$MNT" | grep -q 'Enforcement: ON'
+    for d in /var/lib/kubelet /var/lib/containerd /var/lib/soci-snapshotter-grpc /var/log/pods; do
+      src="$MNT/$(basename "$d")"; mkdir -p "$src" "$d"
+      mountpoint -q "$d" || mount --bind "$src" "$d"
+    done
+    install -d /etc/containerd
+    cat > /etc/containerd/runsc.toml <<'RUNSC'
+    [runsc_config]
+      platform = "systrap"
+      directfs = "false"
+      overlay2 = "root:self"
+      network = "sandbox"
+      net-raw = "false"
+    RUNSC
+    --REPLICANT--

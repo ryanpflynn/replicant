@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token sheet · replicant design system</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body data-page="none">
+<main class="sheet">
+  <div class="row"><span class="brand" style="border:0;padding:0;height:auto"><span class="mark"><i></i><i></i><i></i><i></i></span><span class="word">replicant</span></span><span class="t3">design tokens · generated from design/tools/build_tokens.py · contrast numbers in design/contrast-report.md</span></div>
+
+  <h2>Surfaces, lines, text</h2>
+  <div class="swatches" id="neutral"></div>
+  <h2>Accent (reserved: a human is needed · primary action · focus)</h2>
+  <div class="swatches" id="accent"></div>
+  <h2>Semantic families (fg on tint ≥ 4.5:1 · solid on bg ≥ 3:1)</h2>
+  <div class="swatches" id="sem"></div>
+  <h2>Status vocabulary (shape + colour + label)</h2>
+  <div id="status" style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:20px"></div>
+  <h2>Type</h2>
+  <div class="typerow"><span class="mono t3">display 22/28 600</span><span style="font-size:22px;line-height:28px;font-weight:600;letter-spacing:-0.01em">Refund ledger entries double-count FX fees</span></div>
+  <div class="typerow"><span class="mono t3">title 18/24 600</span><span style="font-size:18px;line-height:24px;font-weight:600">Stale FX rate cache after deploy</span></div>
+  <div class="typerow"><span class="mono t3">title-sm 15/20 600</span><span style="font-size:15px;line-height:20px;font-weight:600">Why this needs a human</span></div>
+  <div class="typerow"><span class="mono t3">body 13/18 400</span><span>Plan approved by <b>Priya Raman</b> in Slack · 35 min after opening · $2.86 of $40.00</span></div>
+  <div class="typerow"><span class="mono t3">small 12/16 400</span><span class="small t2">eligible: ledger-core CODEOWNERS (write+) · reminders 4 h · escalates 24 h</span></div>
+  <div class="typerow"><span class="mono t3">micro caps 11/14 500</span><span class="caps">Publish approval · cycle 0</span></div>
+  <div class="typerow"><span class="mono t3">mono 12/18 400</span><span class="id mono"><span class="pfx">job_</span>01m5p7x7r0<span class="rest">bt69j0h0fbxepw90</span> · rb_ds5p3wmcj · sha256:9be1…07c2 · 0O 1lI</span></div>
+  <h2>Spacing (4 px base) and radii</h2>
+  <div id="space" class="row g4" style="align-items:flex-end"></div>
+  <div class="row g4" style="margin-top:16px"><span class="tag">r-xs 2</span><span class="btn sm">r-sm 3</span><span class="memtext small" style="padding:4px 8px">r-md 5</span><span class="pill neutral">pill uses r-sm, not 999</span></div>
+  <h2>Controls and focus</h2>
+  <div class="row g3"><button class="btn primary">Approve and publish<kbd>A</kbd></button><button class="btn">Request changes<kbd>R</kbd></button><button class="btn ghost danger">Reject<kbd>X</kbd></button><button class="btn" style="outline:2px solid var(--c-focus);outline-offset:2px">Focused</button><span class="chip on">Mine <span class="n">4</span></span><span class="chip">My teams <span class="n">6</span></span></div>
+</main>
+<script>
+(function(){
+  const qs=new URLSearchParams(location.search); const th=qs.get('theme'); if(th) document.documentElement.dataset.theme=th;
+  const cs=getComputedStyle(document.documentElement);
+  const sw=(id,names)=>{document.getElementById(id).innerHTML=names.map(n=>`<div class="sw"><div class="chipc" style="background:var(--c-${n})"></div><div class="lab">${n}<br><span class="t3">${cs.getPropertyValue('--c-'+n).trim()}</span></div></div>`).join('')};
+  sw('neutral',['bg','bg-sunken','bg-raised','bg-hover','bg-selected','line','line-strong','line-input','text','text-2','text-3']);
+  sw('accent',['accent','accent-hover','accent-text','accent-tint','focus','text-on-accent','primary','primary-hover','text-on-primary']);
+  const fams=['info','success','danger','special','neutral','attention','warning'];
+  sw('sem',fams.flatMap(f=>[f+'-solid',f+'-fg',f+'-tint']));
+  const S={job:[['queued','neutral','ring-dotted'],['running · waiting capacity','info','ring-spin'],['running','info','ring-spin'],['waiting_human','attention','diamond'],['waiting_external','neutral','ring-half'],['paused','neutral','bars'],['succeeded','success','check'],['failed','danger','cross'],['cancelled','neutral','slash'],['rejected','danger','slash'],['expired','neutral','hourglass'],['taken_over','special','hand']],
+    gate:[['open','attention','diamond'],['partially_approved · 1 of 2','attention','diamond-hollow'],['approved','success','check'],['rejected','danger','cross'],['changes_requested','special','return'],['answered','success','check'],['expired','neutral','hourglass'],['cancelled','neutral','slash']],
+    run:[['Pending','neutral','ring-dotted'],['Provisioning','info','ring-dotted'],['Running','info','ring-spin'],['Finalizing','info','ring-half'],['Cancelling','neutral','slash'],['Succeeded','success','check'],['Failed','danger','cross'],['Cancelled','neutral','slash']],
+    memory:[['candidate','info','diamond-hollow'],['active','success','dot'],['deprecated','neutral','dot-hollow'],['quarantined','danger','triangle'],['disabled','neutral','slash']],
+    bundle:[['built','neutral','dot-hollow'],['evaluating','info','ring-spin'],['eval_passed','success','check'],['eval_failed','danger','cross'],['canary','info','ring-spin'],['canary · held','warning','bars'],['promoted','success','dot'],['rolled_back','danger','return'],['deprecated','neutral','dot-hollow'],['revoked','danger','slash']]};
+  document.getElementById('status').innerHTML=Object.entries(S).map(([d,l])=>`<div><div class="caps" style="margin-bottom:6px">${d}</div>${l.map(([s,f,g])=>`<div style="margin:4px 0"><span class="pill ${f}"><i class="g" data-g="${g}"></i>${s}</span></div>`).join('')}</div>`).join('');
+  document.getElementById('space').innerHTML=[1,2,3,4,5,6,8,10,12].map(k=>`<div style="text-align:center"><div style="width:${parseInt(cs.getPropertyValue('--sp-'+k))}px;height:${parseInt(cs.getPropertyValue('--sp-'+k))}px;background:var(--c-text-2)"></div><div class="mono t3 micro" style="margin-top:4px">${k}·${parseInt(cs.getPropertyValue('--sp-'+k))}</div></div>`).join('');
+})();
+</script>
+<script src="app.js"></script>
+</body>
+</html>

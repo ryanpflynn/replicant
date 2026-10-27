@@ -1,0 +1,58 @@
+# AgentDefinition: contract-probe (role eval). Used by WS-11's contract suite (XD-11-09) to run the REAL CLI image
+# against replicant-gateway-shim in script/replay mode with deterministic settings. Tenant replicant-eval only.
+apiVersion: replicant.example.com/v1
+kind: AgentDefinition
+metadata:
+  name: contract-probe
+  scope:
+    level: tenant
+    tenant_id: replicant-eval
+  owners:
+    - replicant-platform
+  description: Minimal agent that exercises argv, managed settings, MCP, steering, structured result and exit codes.
+spec:
+  roles: [eval]
+  workloadClass: utility
+  cli: claude-code
+  cliImage:
+    image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/cli-claude-code@sha256:7a9c1e3b5d7f9a0c2e4b6d8f0a1c3e5b7d9f2a4c6e8b0d1f3a5c7e9b2d4f6a8c
+    version: 2.1.310
+    entrypointVersion: 1.1.0
+  model:
+    primary: anthropic/claude-haiku-5-5
+  prompts:
+    role:
+      ref: prompt/contract-probe-role@1
+      mode: append
+    task: prompt/contract-probe-task@1
+  tools:
+    read: true
+    edit: true
+    shell:
+      mode: allowlist
+      allow: ["git status:*", "ls:*"]
+    web:
+      fetch: false
+      search: false
+    subagents:
+      enabled: false
+  mcpServers:
+    - name: memory
+      service: memory
+      required: true
+  limits:
+    maxTurns: 6
+    maxWallSeconds: 300
+    maxCostUsd: 0.5
+  gateway:
+    protocol: anthropic_messages
+  steering:
+    live: true
+  session:
+    capture: always
+  outputContract:
+    roleResultSchema: replicant.role-result.implementer/v1
+    structuredResult: cli_schema
+    outputs:
+      diff_bundle: optional
+      handoff: required

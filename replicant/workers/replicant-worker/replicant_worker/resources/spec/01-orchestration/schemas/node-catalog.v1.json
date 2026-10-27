@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/kinds/node-catalog/v1.json",
+  "title": "NodeCatalog spec (kind schema, WS-01)",
+  "description": "Validates the `spec` of a NodeCatalog registry document, published by replicant-worker CI (C-DEF 2.1.0 publish source `worker_ci`) once per build ID. The C-DEF envelope already constrains workerDeployment and the minimum node fields; this schema adds the fields the registry, graph compiler, bundle builder, and tightening checker (WS-06 ADR-001, XD-06-01) rely on.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["workerDeployment", "catalogSchemaVersion", "engine", "fglVersion", "carrySchemas", "migrationProtocol", "nodes"],
+  "properties": {
+    "workerDeployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deploymentName", "buildId", "imageDigest"],
+      "properties": {
+        "deploymentName": {"const": "replicant-worker"},
+        "buildId": {"type": "string", "pattern": "^b[0-9]{8}-[0-9a-f]{12}$"},
+        "imageDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "patchOf": {"description": "Emergency patch builds only (versioning.md section 7): the build ID whose live histories this build was replay-verified against.", "type": "string", "pattern": "^b[0-9]{8}-[0-9a-f]{12}$"}
+      }
+    },
+    "catalogSchemaVersion": {"const": 1},
+    "engine": {"description": "Graph engine compiled into this build (temporal-langgraph.md section 3).", "enum": ["langgraph-pregel", "interpreter"]},
+    "fglVersion": {"type": "integer", "minimum": 1},
+    "carrySchemas": {
+      "description": "Continue-As-New carry schemas this build can read (it writes the last one). Migration eligibility requires the source job's carry schema to be listed here.",
+      "type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^replicant\\.wf-carry/v[0-9]+$"}
+    },
+    "migrationProtocol": {"description": "Migration Handoff Protocol version implemented (versioning.md section 6). Frozen: every build implements v1.", "const": "replicant.migration-handoff/v1"},
+    "replay": {
+      "description": "Evidence recorded by CI (versioning.md section 8).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "goldenHistories": {"type": "integer", "minimum": 0},
+        "goldenCorpusDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "handoffProtocolHistoriesPassed": {"type": "boolean"}
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["nodeType", "role", "effectClass", "protected", "bounded", "interrupts", "effects", "inputSchema", "outputSchema", "configSchema"],
+        "properties": {
+          "nodeType": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,40}$"},
+          "role": {"enum": ["intake_router", "planner", "implementer", "reviewer", "skeptic", "verifier", "qa", "human_gate", "publisher", "feedback_ingestor", "memory_writer", "context_assembler", "auxiliary"]},
+          "effectClass": {
+            "description": "XD-06-01. check_only: may fail the job or raise risk; never writes the workspace or calls an external side effect. workspace_write: produces a diff (AgentRun with a writable workspace). external_side_effect: anything visible outside the replicant (GitHub, Slack, memory candidates).",
+            "enum": ["check_only", "workspace_write", "external_side_effect"]
+          },
+          "protected": {"description": "Core role: cannot be removed, retyped, or skipped by graph modifiers; cannot carry a `when` guard (human_gate: only additive).", "type": "boolean"},
+          "bounded": {"description": "Loops through this node are bounded by the node itself (repair budget, expiry), satisfying invariant I-4.", "type": "boolean"},
+          "interrupts": {"description": "May pause the graph (LangGraph interrupt). Never allowed inside a parallel branch.", "type": "boolean"},
+          "effects": {"description": "Effect names this node type uses in logical activity IDs.", "type": "array", "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,30}$"}},
+          "description": {"type": "string", "maxLength": 500},
+          "inputSchema": {"type": "object"},
+          "outputSchema": {"description": "JSON Schema of the node's exports (visible to guards as nodes['<key>'].*).", "type": "object"},
+          "configSchema": {"type": "object"}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/kinds/policy-runner_polling/v1.json",
+  "title": "Policy spec, policyType runner_polling (WS-01)",
+  "description": "Run-completion wait (ADR-002, C-RUNNER): Signal hint plus timer polling. Global scope only. Bounds from C-RUNNER (10..600 s).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["policyType", "pending_interval_seconds", "running_interval_seconds", "deadline_slack_seconds"],
+  "properties": {
+    "policyType": {"const": "runner_polling"},
+    "pending_interval_seconds": {"type": "integer", "minimum": 10, "maximum": 600},
+    "running_interval_seconds": {"type": "integer", "minimum": 10, "maximum": 600},
+    "deadline_slack_seconds": {"type": "integer", "minimum": 60, "maximum": 1800}
+  }
+}

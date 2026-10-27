@@ -1,0 +1,55 @@
+apiVersion: replicant.example.com/v1
+kind: Policy
+metadata:
+  name: gate-rules
+  scope: {level: global}
+  owners: [replicant-platform]
+spec:
+  policyType: gate_rules
+  delegation: {allowed: true, max_days: 21, delegate_must_be_eligible: true}
+  quiet_hours: {start: "20:00", end: "08:00", weekends: true}
+  gates:
+    - id: plan.high
+      gate_kind: plan_approval
+      when: {any_of: [{workflow_type_in: [feature, api_change]}, {risk_at_least: high}]}
+      eligible: {codeowners_of_changed_paths: true, okta_groups: ["{tenant}-approvers"], min_repo_permission: write, requester_may_decide: false}
+      timing:
+        reminders: [PT4H, P1D]
+        reminder_repeat: P1D
+        escalations: [{after: P1D, to: escalation_target_1}, {after: P3D, to: tenant_admins, widen_eligibility: true}]
+        expires_after: P7D
+        on_expiry: expire
+    - id: publish.medium
+      gate_kind: publish_approval
+      when: {risk_at_least: medium}
+      eligible: {codeowners_of_changed_paths: true, okta_groups: ["{tenant}-approvers"], min_repo_permission: write, requester_may_decide: false}
+      timing:
+        reminders: [PT4H, P1D]
+        escalations: [{after: PT12H, to: escalation_target_1}, {after: P2D, to: tenant_admins, widen_eligibility: true}]
+        expires_after: P5D
+        on_expiry: expire
+        expiry_bounded_by_base_drift: true
+      reapprove_after_rebase: on_conflict_or_risk_change
+    - id: publish.docs.low
+      gate_kind: publish_approval
+      when: {workflow_type_in: [docs]}
+      eligible: {okta_groups: ["{tenant}-engineers"], min_repo_permission: write, requester_may_decide: false}
+      timing: {reminders: [P1D], expires_after: P5D, on_expiry: expire}
+      batchable: true
+    - id: clarification.any
+      gate_kind: clarification
+      when: {always: true}
+      eligible: {requester: true, min_repo_permission: write, requester_may_decide: true}
+      timing: {reminders: [PT2H, P1D], expires_after: P3D, on_expiry: expire}
+    - id: budget.any
+      gate_kind: budget_extension
+      when: {always: true}
+      # G-07 / R2-022: the requester is informed, not asked; routing allows self-approval only up to
+      # budgets.extension.requesterSelfApproveMaxUsd (default 0). R1V-152.
+      eligible: {okta_groups: ["{tenant}-leads"], min_repo_permission: write, requester_may_decide: false}
+      timing: {reminders: [PT1H], expires_after: P2D, on_expiry: expire}
+    - id: migration.any
+      gate_kind: bundle_migration
+      when: {always: true}
+      eligible: {requester: true, min_repo_permission: write, requester_may_decide: true}
+      timing: {reminders: [P1D], reminder_repeat: P3D, expires_after: P14D, on_expiry: decline}

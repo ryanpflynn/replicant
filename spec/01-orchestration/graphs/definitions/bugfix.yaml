@@ -1,0 +1,212 @@
+# GraphDefinition (kind schema: spec/01-orchestration/schemas/graph-definition.v1.json)
+# Authored in the replicant-config repo under graphs/; published to the registry (C-DEF section 4).
+# Shape 1 (graphs/bugfix.md).
+apiVersion: replicant.example.com/v1
+kind: GraphDefinition
+metadata:
+  name: bugfix
+  scope:
+    level: global
+  owners: [replicant-platform]
+  description: "router -> context -> plan -> risk-gated plan approval -> implement -> QA -> review -> verify -> publish -> PR review"
+  labels:
+    workflow-type: bugfix
+spec:
+  workflowType: bugfix
+  fglVersion: 1
+  params:
+    max_review_rounds: 2
+  entry: context
+  nodes:
+    - key: context
+      type: context_assembler
+      phase: context
+      config: {briefing: standard}
+    - key: plan
+      type: plan_run
+      phase: planning
+      maxVisits: 3
+      config: {agent: planner-claude, workloadClass: review, timeouts: {startup_seconds: 300, active_deadline_seconds: 1200, finalize_seconds: 120}}
+    - key: risk_plan
+      type: risk_classify
+      phase: planning
+      config: {stage: plan}
+    - key: plan_gate
+      type: human_gate
+      phase: plan_gate
+      config: {gateKind: plan_approval}
+    - key: implement
+      type: implement_run
+      phase: implementing
+      maxVisits: 4
+      config: {agent: implementer-claude, workloadClass: coding, steering: true, timeouts: {startup_seconds: 300, active_deadline_seconds: 5400, finalize_seconds: 300}}
+    - key: qa
+      type: qa_run
+      phase: qa
+      maxVisits: 5
+      config: {agent: qa-runner, workloadClass: qa_build, timeouts: {startup_seconds: 600, active_deadline_seconds: 3600, finalize_seconds: 300}}
+    - key: review
+      type: review_run
+      phase: review
+      maxVisits: 3
+      config: {agent: reviewer-codex, workloadClass: review}
+    # ---- verification before publish (I-3: qa, verifier, diff risk, publish gate on every path)
+    - key: verify
+      type: verifier
+      phase: verify
+    - key: risk_diff
+      type: risk_classify
+      phase: verify
+      config: {stage: diff}
+    - key: publish_gate
+      type: human_gate
+      phase: publish_gate
+      config: {gateKind: publish_approval}
+    - key: base_check
+      type: base_check
+      phase: rebase_reverify
+      maxVisits: 3
+    - key: rebase
+      type: repair_run
+      phase: rebase_reverify
+      maxVisits: 2
+      config: {agent: implementer-claude, mode: rebase, workloadClass: coding}
+    - key: publish
+      type: publisher
+      phase: publishing
+      config: {mode: open_pr}
+    # ---- PR review and repair cycles (D-15, ADR-009)
+    - key: pr_wait
+      type: pr_feedback_wait
+      phase: pr_review
+    - key: triage
+      type: feedback_triage
+      phase: repairing
+    - key: reply_ack
+      type: post_reply
+      phase: repairing
+      config: {template: ack}
+    - key: repair
+      type: repair_run
+      phase: repairing
+      maxVisits: 3
+      config: {agent: implementer-claude, workloadClass: coding, steering: true}
+    - key: qa_repair
+      type: qa_run
+      phase: qa
+      maxVisits: 3
+      config: {agent: qa-runner, workloadClass: qa_build}
+    - key: verify_repair
+      type: verifier
+      phase: verify
+    - key: risk_repair
+      type: risk_classify
+      phase: verify
+      config: {stage: diff}
+    - key: push_gate
+      type: human_gate
+      phase: publish_gate
+      config: {gateKind: publish_approval}
+    - key: push
+      type: publisher
+      phase: publishing
+      config: {mode: push_update}
+    - key: reply_fix
+      type: post_reply
+      phase: repairing
+      config: {template: fix_summary}
+    - key: reply_no_action
+      type: post_reply
+      phase: repairing
+      config: {template: no_action}
+    - key: reply_question
+      type: post_reply
+      phase: repairing
+      config: {template: question}
+    - key: reply_budget
+      type: post_reply
+      phase: repairing
+      config: {template: budget_exhausted}
+    - key: memory
+      type: memory_writer
+      phase: memory
+  edges:
+    - {from: context, to: plan}
+    - {from: plan, switch: [{when: "nodes['plan'].outcome == 'completed'", to: risk_plan}, {when: "nodes['plan'].outcome == 'no_changes'", to: "end:no_change_needed"}], default: "end:node_failed"}
+    - {from: risk_plan, to: plan_gate}
+    - from: plan_gate
+      switch:
+        - {when: "nodes['plan_gate'].outcome in ['approve', 'not_required']", to: implement}
+        - {when: "nodes['plan_gate'].outcome == 'request_changes'", to: plan}
+        - {when: "nodes['plan_gate'].outcome == 'expired'", to: "end:gate_expired"}
+      default: "end:rejected_at_gate"
+    - {from: implement, switch: [{when: "nodes['implement'].outcome == 'completed'", to: qa}, {when: "nodes['implement'].outcome == 'no_changes'", to: "end:no_change_needed"}], default: "end:node_failed"}
+    - from: qa
+      switch:
+        - {when: "nodes['qa'].decision == 'proceed'", to: review}
+        - {when: "nodes['qa'].decision == 'retry_qa'", to: qa}
+        - {when: "nodes['qa'].decision in ['operator_and_gate', 'gate_with_failure']", to: verify}
+        - {when: "nodes['qa'].decision == 'fail_job'", to: "end:qa_failed"}
+      default: implement
+    - {from: review, switch: [{when: "nodes['review'].verdict == 'approve' or cycle > 0", to: verify}], default: implement}
+    - {from: verify, switch: [{when: "nodes['verify'].passed", to: risk_diff}], default: "end:policy_violation"}
+    - {from: risk_diff, to: publish_gate}
+    - from: publish_gate
+      switch:
+        - {when: "nodes['publish_gate'].outcome in ['approve', 'not_required']", to: base_check}
+        - {when: "nodes['publish_gate'].outcome == 'request_changes'", to: implement}
+        - {when: "nodes['publish_gate'].outcome == 'rerun_qa'", to: qa}
+        - {when: "nodes['publish_gate'].outcome == 'expired'", to: "end:gate_expired"}
+      default: "end:rejected_at_gate"
+    # D-19: base moved -> clean: re-run QA on the new base; conflicts: rebase run; then re-verify
+    - from: base_check
+      switch:
+        - {when: "nodes['base_check'].moved and nodes['base_check'].clean", to: qa}
+        - {when: "nodes['base_check'].moved", to: rebase}
+      default: publish
+    - {from: rebase, switch: [{when: "nodes['rebase'].outcome == 'completed'", to: qa}], default: "end:node_failed"}
+    - from: publish
+      switch:
+        - {when: "nodes['publish'].outcome == 'dry_run'", to: "end:dry_run_completed"}
+        - {when: "nodes['publish'].outcome == 'ready_to_publish'", to: "end:ready_to_publish"}
+      default: pr_wait
+    - from: pr_wait
+      switch:
+        - {when: "nodes['pr_wait'].outcome == 'merged'", to: "end:pr_merged"}
+        - {when: "nodes['pr_wait'].outcome == 'closed'", to: "end:pr_closed_unmerged"}
+        - {when: "nodes['pr_wait'].outcome == 'expired'", to: "end:pr_wait_expired"}
+        - {when: "nodes['pr_wait'].outcome == 'budget_exhausted'", to: reply_budget}
+        - {when: "nodes['pr_wait'].outcome == 'feedback'", to: triage}
+      default: pr_wait
+    - from: triage
+      switch:
+        - {when: "nodes['triage'].outcome == 'actionable'", to: reply_ack}
+        - {when: "nodes['triage'].outcome == 'question'", to: reply_question}
+      default: reply_no_action
+    - {from: reply_ack, to: repair}
+    - {from: repair, switch: [{when: "nodes['repair'].outcome == 'completed'", to: qa_repair}], default: reply_no_action}
+    - from: qa_repair
+      switch:
+        - {when: "nodes['qa_repair'].decision in ['proceed', 'operator_and_gate', 'gate_with_failure']", to: verify_repair}
+        - {when: "nodes['qa_repair'].decision == 'retry_qa'", to: qa_repair}
+        - {when: "nodes['qa_repair'].decision == 'fail_job'", to: "end:qa_failed"}
+      default: repair
+    - {from: verify_repair, switch: [{when: "nodes['verify_repair'].passed", to: risk_repair}], default: "end:policy_violation"}
+    - {from: risk_repair, to: push_gate}
+    - from: push_gate
+      switch:
+        - {when: "nodes['push_gate'].outcome in ['approve', 'not_required']", to: push}
+        - {when: "nodes['push_gate'].outcome == 'request_changes'", to: repair}
+        - {when: "nodes['push_gate'].outcome == 'rerun_qa'", to: qa_repair}
+        - {when: "nodes['push_gate'].outcome == 'expired'", to: "end:gate_expired"}
+      default: "end:rejected_at_gate"
+    - {from: push, to: reply_fix}
+    - {from: reply_fix, to: memory}
+    - {from: reply_no_action, to: memory}
+    - {from: reply_question, to: pr_wait}
+    - {from: memory, to: pr_wait}
+    - {from: reply_budget, to: "end:repair_budget_exhausted"}
+  boundaries:
+    # Continue-As-New when entering PR review (phase) and at the start of every repair cycle
+    - {kind: phase, before: pr_wait}
+    - {kind: repair_cycle, before: triage}

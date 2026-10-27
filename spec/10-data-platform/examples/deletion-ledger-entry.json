@@ -1,0 +1,18 @@
+{
+  "schema": "replicant.deletion-ledger/v1",
+  "ledger_id": "del_01m6a7q3k8x2v9n4p6r1t5w0yz",
+  "requested_at": "2026-11-03T14:02:11Z",
+  "reason": "secret_purge",
+  "ticket": "INC-1234",
+  "requested_by": "usr_01knk8dfr0fvjc7v0b9vhvkzbp",
+  "approved_by": ["usr_01knk9a2b3c4d5e6f7g8h9j0km"],
+  "scope": {"tenant_id": "payments", "job_ids": ["job_01m5p7x7r0bt69j0h0fbxepw90"]},
+  "targets": [
+    {"store": "s3", "selector": "transcripts:tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_gj3h3ep3phjfs9e23v768zrca5/transcript/part-00003.ndjson.zst",
+     "content_sha256": "2f4b6d8c0e1a3f5b7d9c1e3a5f7b0d2c4e6a8f1b3d5c7e9a0f2b4d6c8e1a3f5b"},
+    {"store": "langfuse", "selector": "trace:fc0575170c8597ce9805552723c08d6e"},
+    {"store": "loki", "selector": "{env=\"prod\", tenant=\"payments\", source=\"transcript\"} | job_id=\"job_01m5p7x7r0bt69j0h0fbxepw90\""}
+  ],
+  "executor": "svc_retention-sweeper",
+  "replay": "always"
+}

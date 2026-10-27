@@ -1,0 +1,33 @@
+# WS-06 — judge definition (evals/judges/diff-quality.yaml in replicant-config).
+apiVersion: replicant.example.com/v1
+kind: JudgeDefinition
+metadata:
+  name: diff-quality
+  version: 4
+  owners: [replicant-eval-curators]
+  description: Pairwise preference between two arms' diffs for the same task, only when both resolved the task.
+spec:
+  rubric: diff_quality
+  mode: pairwise
+  jurors:
+    - {gateway_model_id: anthropic/claude-opus-5-5, family: anthropic, effort: high, use_batch: false}
+    # Second juror from a different family (self-preference guard). Model id is illustrative; WS-03 pins the real gateway id.
+    - {gateway_model_id: openai/gpt-5.2-2026-08-14, family: openai, effort: high, use_batch: false}
+  prompt:
+    name: judge/diff-quality
+    version: 4
+    digest: sha256:0c4f1e9a2b7d3c5e8f6a1b0d2c4e6f8a0b1c3d5e7f9a2b4c6d8e0f1a3b5c7d9e
+  inputs: [task_statement, diff, reference_patch_as_one_valid_solution]
+  output:
+    criteria:
+      - {key: minimality, scale: preference_ab_tie, langfuse_score_config: sc-diff-minimality}
+      - {key: idiomatic, scale: preference_ab_tie, langfuse_score_config: sc-diff-idiomatic}
+      - {key: test_quality, scale: preference_ab_tie, langfuse_score_config: sc-diff-test-quality}
+      - {key: no_unrelated_changes, scale: binary, langfuse_score_config: sc-diff-unrelated}
+  aggregation: juror_median
+  calibration:
+    anchor_set: diff-quality-anchors-v2
+    min_weighted_kappa_gating: 0.6
+    min_weighted_kappa_decision: 0.75
+    max_days_since_calibration: 30
+    known_negatives: [empty_diff, wrong_task_diff, prompt_injection_in_output, test_deletion_diff, verbose_padding]

@@ -1,0 +1,18 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReplicantWorkerSignsRunGrantsOnly",
+      "Effect": "Allow",
+      "Action": ["kms:Sign"],
+      "Resource": "arn:aws:kms:us-east-1:111111111111:key/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/replicant-key-class": "run-grant",
+          "kms:SigningAlgorithm": "ECDSA_SHA_256",
+          "kms:MessageType": "RAW"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,269 @@
+# EnvironmentDefinition: Next.js web app with Playwright, a Postgres sidecar, and a 40 GiB workspace.
+# Validates against schemas/environment-definition.schema.json; tools/validate.py also recomputes every
+# measured profile with formula rp-1 (tools/rp1.py) from the recorded stats and fails on mismatch.
+# Gateway configuration lives in the AgentDefinition (gateway.protocol) and is selected for this
+# codebase by the codebase_bindings policy (examples/policy-codebase-bindings.yaml); the environment
+# only allowlists the egress profile that contains the gateway route (networkProfile).
+apiVersion: replicant.example.com/v1
+kind: EnvironmentDefinition
+metadata:
+  name: nextjs-app
+  scope:
+    level: global
+  owners:
+    - replicant-platform
+    - web-platform
+  description: >-
+    Node 22 + pnpm/npm toolchain for Next.js applications, Playwright Chromium baked into the image,
+    Postgres 17 sidecar for QA and implementer integration tests, 40 GiB hard workspace limit.
+  labels:
+    replicant.codebase-type: nextjs_app
+spec:
+  codebaseType: nextjs_app
+  image:
+    build:
+      base: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/base-node@sha256:0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9
+      platform: linux/amd64
+      packages:
+        apt:
+          - git
+          - jq
+          - postgresql-client
+          - zstd
+        npmGlobal:
+          - pnpm@10.18.3
+          - "@playwright/test@1.56.1"
+      steps:
+        - name: playwright-browsers
+          run: |
+            PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright npx --yes playwright@1.56.1 install --with-deps chromium
+            chmod -R a+rX /opt/ms-playwright
+          workingDir: /tmp
+          timeoutSeconds: 1200
+    resolved:
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/replicant/env-nextjs-app@sha256:7c1e3a5b9d2f4e6a8c0b1d3f5e7a9c2b4d6f8e0a1c3e5b7d9f2a4c6e8b0d1f3a
+      buildSpecDigest: sha256:4f6a8c0e2b4d6f8a1c3e5b7d9f0a2c4e6b8d0f1a3c5e7b9d2f4a6c8e0b1d3f5a
+      sbomDigest: sha256:9e0a2c4b6d8f1a3c5e7b9d0f2a4c6e8b1d3f5a7c9e2b4d6f8a0c1e3b5d7f9a2c
+      builtAt: "2026-10-20T14:02:11Z"
+  repo:
+    fetchDepth: 50
+    submodules: none
+    lfs: false
+  env:
+    NODE_OPTIONS: --max-old-space-size=6144
+    NEXT_TELEMETRY_DISABLED: "1"
+    PLAYWRIGHT_BROWSERS_PATH: /opt/ms-playwright
+    DATABASE_URL: postgresql://app:app@127.0.0.1:5432/app_test
+  packageMirrors: [npm]
+  bootstrap:
+    forRoles: [implementer, repair, reviewer, qa]
+    steps:
+      - name: install-pnpm
+        run: pnpm install --frozen-lockfile --prefer-offline
+        when:
+          pathsExist: [pnpm-lock.yaml]
+        timeoutSeconds: 900
+      - name: install-npm
+        run: npm ci --no-audit --no-fund
+        when:
+          pathsExist: [package-lock.json]
+        timeoutSeconds: 900
+      - name: prisma-generate
+        run: npx --no-install prisma generate
+        when:
+          pathsExist: [prisma/schema.prisma]
+        timeoutSeconds: 300
+        onFailure: continue
+  caches:
+    - name: npm-cache
+      path: /workspace/.cache/npm
+      kind: workspace
+      env: npm_config_cache
+    - name: pnpm-store
+      path: /workspace/.cache/pnpm-store
+      kind: workspace
+      env: PNPM_STORE_DIR
+    - name: next-cache
+      path: /workspace/repo/.next/cache
+      kind: workspace
+    - name: playwright-browsers
+      path: /opt/ms-playwright
+      kind: image
+  services:
+    - name: postgres
+      image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/mirror/library/postgres@sha256:3b5d7f9a1c2e4b6d8f0a3c5e7b9d1f2a4c6e8b0d3f5a7c9e1b2d4f6a8c0e3b5d
+      env:
+        POSTGRES_USER: app
+        POSTGRES_PASSWORD: app
+        POSTGRES_DB: app_test
+      args: ["-c", "fsync=off", "-c", "full_page_writes=off", "-c", "synchronous_commit=off"]
+      ports:
+        - name: pg
+          port: 5432
+      readiness:
+        exec: ["pg_isready", "-h", "127.0.0.1", "-U", "app", "-d", "app_test"]
+        periodSeconds: 2
+        failureThreshold: 60
+      resources:
+        requests:
+          cpu: 500m
+          memory: 512Mi
+          ephemeralStorage: 1Gi
+        limits:
+          cpu: "1"
+          memory: 1Gi
+          ephemeralStorage: 4Gi
+      data:
+        env: PGDATA                     # controller sets PGDATA=/workspace/.services/postgres/pgdata (XD-02-15)
+        subdir: pgdata
+        sizeEstimate: 3Gi
+      forRoles: [qa, implementer, repair]
+      seed:
+        name: migrate-test-db
+        run: |
+          if [ -f prisma/schema.prisma ]; then npx --no-install prisma migrate deploy; fi
+        timeoutSeconds: 300
+  resourceProfiles:
+    default:
+      requests:
+        cpu: 2250m
+        memory: 12Gi
+        ephemeralStorage: 21Gi
+      limits:
+        cpu: "5"
+        memory: 12Gi
+        ephemeralStorage: 43Gi
+      memoryRequestPolicy: match_limit
+      workspace:
+        sizeLimit: 40Gi
+        overflow:
+          policy: auto
+        watchdogThresholds:
+          warn: 0.85
+          fail: 0.98
+      derivation:
+        method: measured
+        proposalId: rsp_01m5k2q8w3e4r5t6y7v8j9n0pa
+        baseline:
+          codebaseType: nextjs_app
+          roles: [implementer, repair]
+          runtimeClass: replicant-kata-clh
+          windowStart: "2026-09-29T00:00:00Z"
+          windowEnd: "2026-10-13T00:00:00Z"
+          sampleCount: 146
+          formulaVersion: rp-2
+          stats:
+            hostFootprintBytesP50: 11166914969
+            cpuMillicoresP50: 2100
+            cpuMillicoresP95: 3600
+            memoryBytesP50: 5583457484
+            memoryBytesP95: 9556302233
+            workspaceBytesP50: 19327352832
+            workspaceBytesP95: 32749125632
+            ephemeralBytesP50: 22011707392
+            ephemeralBytesP95: 35433480192
+    qa:
+      requests:
+        cpu: "3"
+        memory: 16Gi
+        ephemeralStorage: 24Gi
+      limits:
+        cpu: "7"
+        memory: 16Gi
+        ephemeralStorage: 43Gi
+      memoryRequestPolicy: match_limit
+      workspace:
+        sizeLimit: 40Gi
+        overflow:
+          policy: auto
+      derivation:
+        method: measured
+        proposalId: rsp_01m5k2q8w3e4r5t6y7v8j9n0pb
+        baseline:
+          codebaseType: nextjs_app
+          roles: [qa]
+          runtimeClass: replicant-kata-clh
+          windowStart: "2026-09-29T00:00:00Z"
+          windowEnd: "2026-10-13T00:00:00Z"
+          sampleCount: 131
+          formulaVersion: rp-2
+          stats:
+            hostFootprintBytesP50: 15247133900
+            cpuMillicoresP50: 3000
+            cpuMillicoresP95: 5200
+            memoryBytesP50: 8053063680
+            memoryBytesP95: 12884901888
+            workspaceBytesP50: 23622320128
+            workspaceBytesP95: 32856499814
+            ephemeralBytesP50: 25769803776
+            ephemeralBytesP95: 35433480192
+    review:
+      requests:
+        cpu: 1250m
+        memory: 4Gi
+        ephemeralStorage: 17Gi
+      limits:
+        cpu: 3500m
+        memory: 7680Mi
+        ephemeralStorage: 34Gi
+      memoryRequestPolicy: host_footprint
+      workspace:
+        sizeLimit: 32Gi
+        overflow:
+          policy: local_only
+      derivation:
+        method: measured
+        baseline:
+          codebaseType: nextjs_app
+          roles: [reviewer]
+          runtimeClass: replicant-kata-clh
+          windowStart: "2026-09-29T00:00:00Z"
+          windowEnd: "2026-10-13T00:00:00Z"
+          sampleCount: 88
+          formulaVersion: rp-2
+          stats:
+            hostFootprintBytesP50: 4294967296
+            cpuMillicoresP50: 1200
+            cpuMillicoresP95: 2500
+            memoryBytesP50: 3221225472
+            memoryBytesP95: 5905580032
+            workspaceBytesP50: 17179869184
+            workspaceBytesP95: 25769803776
+            ephemeralBytesP50: 18253611008
+            ephemeralBytesP95: 27917287424
+  profileByRole:
+    implementer: default
+    repair: default
+    reviewer: review
+    qa: qa
+    planner: review
+  isolationHint:
+    coding: kata-clh
+    qa_build: kata-clh
+    review: kata-clh
+  networkProfile:
+    coding: coding-default
+    qa_build: qa-with-mirror
+    review: review-readonly
+  budgets:
+    computeUsdPerJob: 50          # XD-FIX-R2-064; WS-01 checks it against cost.run_resource_usage
+  outputs:
+    maxOutputBytes: 4294967296
+  qa:
+    # Owned by WS-05 (replicant.env-qa/v1). Shown here with the fields WS-03 expects WS-05 to define;
+    # WS-05's schema is authoritative.
+    schema: replicant.env-qa/v1
+    build:
+      run: pnpm build
+      timeoutSeconds: 1200
+    start:
+      run: pnpm start --port 3000
+      healthcheck:
+        httpGet: {port: 3000, path: /api/health}
+        timeoutSeconds: 120
+    playwright:
+      config: playwright.config.ts
+      project: chromium
+      baseUrl: http://127.0.0.1:3000
+      trace: retain-on-failure
+      screenshotMasks: ["input[type=password]", "input[type=email]"]

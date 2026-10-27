@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/qa/approval-packet-qa/v1.json",
+  "title": "Approval packet QA section (replicant.approval-packet.qa/v1)",
+  "description": "WS-05. The `qa` member of WS-07's approval_packet, built by activity gates.build_packet from the CLASSIFIED qa_report and the qa_run node's routing decision (never from the sandbox report or run_result.outcome). WS-07 adopts this shape (XD-FIX-R1-5.1-WS05). The packet digest (C-MSG presented_digest) covers it, so an approval binds to specific QA evidence. Only replicant-generated strings are rendered unquoted; `findings[].message`, `test_id` and `file` are repo-controlled text and must be rendered escaped.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "verdict", "reason_code", "decision", "summary", "run_id", "classified_report", "tested_tree", "counts", "by_cause", "test_inventory_delta", "risk_floor", "actions"],
+  "properties": {
+    "schema": {"const": "replicant.approval-packet.qa/v1"},
+    "verdict": {"type": "string", "enum": ["pass", "pass_with_warnings", "fail", "inconclusive", "not_applicable"]},
+    "reason_code": {"type": "string", "maxLength": 32},
+    "decision": {"description": "The qa_run node's route_after_qa decision (single source, R1-118).", "type": "string", "enum": ["proceed", "fix_loop", "retry_qa", "operator_and_gate", "gate_with_failure", "fail_job"]},
+    "summary": {"description": "Replicant-generated one-liner (never model text).", "type": "string", "maxLength": 300},
+    "run_id": {"type": "string", "pattern": "^run_[0-9a-hjkmnp-tv-z]{26}$"},
+    "classified_report": {
+      "type": "object", "additionalProperties": false, "required": ["bucket_class", "key", "sha256"],
+      "properties": {"bucket_class": {"const": "artifacts"}, "key": {"type": "string", "maxLength": 1024}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+    },
+    "iteration": {"type": "object", "additionalProperties": false, "required": ["fix_iterations_used", "fix_iterations_max"],
+      "properties": {"fix_iterations_used": {"type": "integer", "minimum": 0}, "fix_iterations_max": {"type": "integer", "minimum": 0}, "env_retries_used": {"type": "integer", "minimum": 0}}},
+    "tested_tree": {"type": "object", "additionalProperties": false, "required": ["base_sha", "head_tree_sha", "diff_bundle_sha256"],
+      "properties": {"base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"}, "head_tree_sha": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"}, "diff_bundle_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}},
+    "counts": {"type": "object", "additionalProperties": false, "required": ["total", "passed", "failed", "flaky", "skipped", "blocking"],
+      "properties": {"total": {"type": "integer", "minimum": 0}, "passed": {"type": "integer", "minimum": 0}, "failed": {"type": "integer", "minimum": 0}, "flaky": {"type": "integer", "minimum": 0}, "skipped": {"type": "integer", "minimum": 0}, "blocking": {"type": "integer", "minimum": 0}}},
+    "by_cause": {"type": "object", "additionalProperties": false,
+      "properties": {"code": {"type": "integer", "minimum": 0}, "flaky_new": {"type": "integer", "minimum": 0}, "flaky_known": {"type": "integer", "minimum": 0}, "pre_existing": {"type": "integer", "minimum": 0}, "environment": {"type": "integer", "minimum": 0}, "test_defect": {"type": "integer", "minimum": 0}, "unknown": {"type": "integer", "minimum": 0}}},
+    "test_inventory_delta": {
+      "description": "R2-006. Rendered as 'Δ vs base: −1 test, +1 skip' in the QA panel header whenever deleted_or_skipped is true, with the lists from the classified report one click away. Also the input of WS-07's risk predicate deleted_or_skipped_tests.",
+      "type": "object", "additionalProperties": false, "required": ["method", "tests_removed", "tests_skipped_added", "deleted_test_files", "skip_markers_added", "deleted_or_skipped"],
+      "properties": {"method": {"type": "string", "enum": ["listed", "junit", "static"]}, "tests_removed": {"type": "integer", "minimum": 0}, "tests_skipped_added": {"type": "integer", "minimum": 0},
+        "deleted_test_files": {"type": "integer", "minimum": 0}, "skip_markers_added": {"type": "integer", "minimum": 0}, "deleted_or_skipped": {"type": "boolean"}}
+    },
+    "stages": {"type": "array", "maxItems": 30, "items": {"type": "object", "additionalProperties": false, "required": ["stage", "status"],
+      "properties": {"stage": {"type": "string", "maxLength": 32}, "status": {"type": "string", "enum": ["passed", "failed", "warning", "skipped", "not_run", "error"]}, "skip_reason": {"type": "string", "maxLength": 32}}}},
+    "findings": {"description": "Blocking findings first, then up to 10 non-blocking, max 20.", "type": "array", "maxItems": 20, "items": {"type": "object", "additionalProperties": false, "required": ["test_id", "cause", "blocking", "evidence_summary"],
+      "properties": {"test_id": {"type": "string", "maxLength": 512}, "cause": {"type": "string", "enum": ["code", "flaky_new", "flaky_known", "pre_existing", "environment", "test_defect", "unknown"]}, "blocking": {"type": "boolean"},
+        "evidence_summary": {"type": "string", "maxLength": 300}, "message": {"type": "string", "maxLength": 500}, "file": {"type": "string", "maxLength": 1024}, "line": {"type": "integer", "minimum": 1}, "env_signature": {"type": "string", "maxLength": 64}}}},
+    "screenshots": {"description": "≤ 12 thumbnails: failing web checks, unexpected visual changes, expected visual changes, then routes. classification decides presign rules (WS-08 §5.6): internal unless qa.privacy.realData.", "type": "array", "maxItems": 12,
+      "items": {"type": "object", "additionalProperties": false, "required": ["key", "label", "classification"], "properties": {"key": {"type": "string", "maxLength": 1024}, "label": {"type": "string", "maxLength": 200}, "variant": {"type": "string", "enum": ["change", "base", "diff", "failure"]}, "expected_by_plan": {"type": "boolean"}, "classification": {"type": "string", "enum": ["internal", "restricted"]}}}},
+    "restricted_evidence": {"description": "Traces and videos: listed by count only; never embedded or linked in Slack/GitHub. The UI shows them to viewers with repo write (WS-09 G-14).", "type": "object", "additionalProperties": false, "properties": {"playwright_traces": {"type": "integer", "minimum": 0}, "videos": {"type": "integer", "minimum": 0}}},
+    "image": {"type": "object", "additionalProperties": false, "required": ["digest"], "properties": {"digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, "sbom_key": {"type": "string", "maxLength": 1024}, "secret_findings": {"type": "integer", "minimum": 0}}},
+    "contract_compat": {"type": "object", "additionalProperties": false, "properties": {"breaking": {"type": "integer", "minimum": 0}, "checked": {"type": "integer", "minimum": 0}}},
+    "risk_floor": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
+    "banner": {"description": "Replicant-generated; required for verdicts fail and inconclusive.", "type": "string", "maxLength": 300},
+    "actions": {
+      "description": "Decisions offered on this gate revision. rerun_qa only when verdict is inconclusive and fewer than 2 re-runs happened on this gate (R2-027, CCR-05-04).",
+      "type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "enum": ["approve", "approve_draft_only", "reject", "request_changes", "rerun_qa"]}
+    }
+  },
+  "allOf": [
+    {"if": {"properties": {"verdict": {"enum": ["fail", "inconclusive"]}}}, "then": {"required": ["banner"]}},
+    {"if": {"properties": {"verdict": {"not": {"const": "inconclusive"}}}}, "then": {"properties": {"actions": {"not": {"contains": {"const": "rerun_qa"}}}}}}
+  ]
+}

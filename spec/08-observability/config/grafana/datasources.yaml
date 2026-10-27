@@ -1,0 +1,150 @@
+# Grafana data source provisioning (ConfigMap grafana-replicant-datasources, key replicant.yaml). Owner WS-08.
+# Org 1 "Replicant Operations" gets every data source; Org 2 "Replicant Tenants" gets metrics only (ADR-002).
+# Correlation design: dashboards.md section 2. UIDs are stable and referenced by dashboards and deep links.
+apiVersion: 1
+datasources:
+  # ---------------- Org 1: Replicant Operations ----------------
+  - name: Mimir
+    uid: mimir
+    orgId: 1
+    type: prometheus
+    access: proxy
+    url: http://mimir-query-frontend.observability.svc.cluster.local:8080/prometheus
+    isDefault: true
+    jsonData:
+      httpHeaderName1: X-Scope-OrgID
+      prometheusType: Mimir
+      timeInterval: 30s
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo
+        - name: job_id
+          url: https://grafana.prod.replicant.internal/d/replicant-job/job?var-job_id=$${__value.raw}
+    secureJsonData:
+      httpHeaderValue1: replicant
+  - name: Loki (platform+sandbox)
+    uid: loki
+    orgId: 1
+    type: loki
+    access: proxy
+    url: http://loki-query-frontend.observability.svc.cluster.local:3100
+    jsonData:
+      httpHeaderName1: X-Scope-OrgID
+      maxLines: 5000
+      derivedFields:
+        - name: Trace
+          matcherType: label            # structured metadata key trace_id (C-IDS section 9)
+          matcherRegex: trace_id
+          datasourceUid: tempo
+          url: $${__value.raw}
+          urlDisplayLabel: Open trace in Tempo
+        - name: Job
+          matcherType: label
+          matcherRegex: job_id
+          url: https://grafana.prod.replicant.internal/d/replicant-job/job?var-job_id=$${__value.raw}
+          urlDisplayLabel: Job drilldown
+        - name: Langfuse
+          matcherType: label
+          matcherRegex: trace_id
+          url: https://langfuse.prod.replicant.internal/project/replicant-prod/traces/$${__value.raw}
+          urlDisplayLabel: Open LLM trace in Langfuse
+    secureJsonData:
+      httpHeaderValue1: platform|sandbox   # multi_tenant_queries_enabled: true in loki.yaml
+  # Restricted tenants' sandbox streams (Loki tenants sandbox-<tenant>, ADR-08-002). The header is rendered at deploy
+  # time from ConfigMap observability-tenant-classes (key loki_restricted_tenant_ids, e.g. sandbox-acme-hr|sandbox-acme-health).
+  - name: Loki (restricted)
+    uid: loki-restricted
+    orgId: 1
+    type: loki
+    access: proxy
+    url: http://loki-query-frontend.observability.svc.cluster.local:3100
+    jsonData:
+      httpHeaderName1: X-Scope-OrgID
+      maxLines: 5000
+    secureJsonData:
+      httpHeaderValue1: $LOKI_RESTRICTED_TENANT_IDS
+  - name: Loki (audit)
+    uid: loki-audit
+    orgId: 1
+    type: loki
+    access: proxy
+    url: http://loki-query-frontend.observability.svc.cluster.local:3100
+    jsonData:
+      httpHeaderName1: X-Scope-OrgID
+    secureJsonData:
+      httpHeaderValue1: audit
+  - name: Tempo
+    uid: tempo
+    orgId: 1
+    type: tempo
+    access: proxy
+    url: http://tempo.observability.svc.cluster.local:3200
+    jsonData:
+      httpHeaderName1: X-Scope-OrgID
+      tracesToLogsV2:
+        datasourceUid: loki
+        spanStartTimeShift: -10m
+        spanEndTimeShift: 10m
+        filterByTraceID: false
+        filterBySpanID: false
+        customQuery: true
+        query: '{env="prod"} | trace_id="$${__trace.traceId}"'
+      tracesToMetrics:
+        datasourceUid: mimir
+        spanStartTimeShift: -10m
+        spanEndTimeShift: 10m
+        tags:
+          - {key: service.name, value: service}
+        queries:
+          - name: Request rate
+            query: sum(rate(traces_spanmetrics_calls_total{$$__tags}[5m]))
+      serviceMap:
+        datasourceUid: mimir
+      nodeGraph:
+        enabled: true
+      search:
+        hide: false
+      traceQuery:
+        timeShiftEnabled: true
+        spanStartTimeShift: -30d        # one trace per job spans up to 30 days (C-IDS T-1)
+        spanEndTimeShift: 1d
+    secureJsonData:
+      httpHeaderValue1: replicant
+  - name: Replicant read models (grafana_ro)
+    uid: replicant-pg
+    orgId: 1
+    type: grafana-postgresql-datasource
+    url: replicant.cluster-ro-cxyz.us-east-1.rds.amazonaws.com:5432
+    user: grafana_ro
+    jsonData:
+      database: replicant
+      sslmode: verify-full
+      postgresVersion: 1700
+      maxOpenConns: 10
+      connMaxLifetime: 14400
+    secureJsonData:
+      password: $REPLICANT_GRAFANA_RO_PASSWORD
+  - name: Alertmanager
+    uid: alertmanager
+    orgId: 1
+    type: alertmanager
+    url: http://mimir-alertmanager.observability.svc.cluster.local:8080
+    jsonData:
+      implementation: mimir
+      handleGrafanaManagedAlerts: false
+      httpHeaderName1: X-Scope-OrgID
+    secureJsonData:
+      httpHeaderValue1: replicant
+  # ---------------- Org 2: Replicant Tenants (metrics only) ----------------
+  - name: Mimir
+    uid: mimir-tenants
+    orgId: 2
+    type: prometheus
+    access: proxy
+    url: http://mimir-query-frontend.observability.svc.cluster.local:8080/prometheus
+    isDefault: true
+    jsonData:
+      httpHeaderName1: X-Scope-OrgID
+      prometheusType: Mimir
+    secureJsonData:
+      httpHeaderValue1: replicant

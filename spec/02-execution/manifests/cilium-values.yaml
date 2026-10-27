@@ -1,0 +1,37 @@
+# Helm values for cilium/cilium 1.20.4 in fct-<env>-exec (network.md section 1).
+eni:
+  enabled: true
+ipam:
+  mode: eni
+routingMode: native
+egressMasqueradeInterfaces: ens+
+kubeProxyReplacement: true
+k8sServiceHost: ""                 # set to the private EKS API endpoint host at install time
+k8sServicePort: 443
+socketLB:
+  hostNamespaceOnly: true          # required for Kata and gVisor pods (runtime-evaluation.md F-17)
+policyEnforcementMode: default
+hostFirewall:
+  enabled: true
+extraArgs:
+  - --tofqdns-dns-reject-response-code=refused
+  - --tofqdns-min-ttl=0
+hubble:
+  enabled: true
+  export:                         # XD-08-16, R1-043: static file exporter tailed by WS-08 node-logs.alloy
+    static:
+      enabled: true
+      filePath: /var/run/cilium/hubble/events.log
+      fieldMask: []
+      allowList:
+        - '{"verdict":["DROPPED","ERROR"]}'
+      denyList: []
+  relay:
+    enabled: true
+  metrics:
+    enabled:
+      - dns:query
+      - drop
+      - policy:sourceContext=pod;destinationContext=dns|ip
+operator:
+  replicas: 2

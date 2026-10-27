@@ -1,0 +1,21 @@
+# runner-local contract scenario invalid_result: StructuredOutput that does not validate against the role-result schema (RC-RUN-13).
+schema: replicant.gateway-script/v1
+name: runner-contract-invalid-result
+protocol: anthropic_messages
+finish: "Done."
+turns:
+  - respond:
+      structured_output: {schema: "replicant.role-result.implementer/v1", bogus: true}
+      usage: {input_tokens: 500, output_tokens: 20}
+  - respond:
+      structured_output: {schema: "replicant.role-result.implementer/v1", bogus: true}
+      usage: {input_tokens: 500, output_tokens: 20}
+  - respond:
+      structured_output: {schema: "replicant.role-result.implementer/v1", bogus: true}
+      usage: {input_tokens: 500, output_tokens: 20}
+  - respond:
+      structured_output: {schema: "replicant.role-result.implementer/v1", bogus: true}
+      usage: {input_tokens: 500, output_tokens: 20}
+  - respond:
+      structured_output: {schema: "replicant.role-result.implementer/v1", bogus: true}
+      usage: {input_tokens: 500, output_tokens: 20}

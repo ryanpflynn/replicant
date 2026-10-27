@@ -1,0 +1,456 @@
+openapi: 3.1.1
+info:
+  title: identity-service
+  version: 1.0.0
+  description: |
+    Owner WS-07 (WS-09 reviews). SCIM 2.0 server for Okta, Okta Event Hook receiver, identity linking, sessions,
+    delegations, role bindings, and the authorization decision API (one evaluator, `replicant-authz`; identity.md §6).
+    Internal callers authenticate with projected ServiceAccount tokens (audience `identity-service`) and are
+    allow-listed per operation (`x-replicant-callers`). Every decision is evaluated at request time; no grant is
+    cached (D-18, D-25). Permission names come from identity.md §5.1 and use the `area:verb` spelling
+    (`memory:admin`, never `memory.admin`; R1-098).
+servers:
+  - url: http://identity-service.replicant-control.svc:8080
+security:
+  - serviceAccount: []
+paths:
+  /internal/v1/authorize:
+    post:
+      operationId: authorize
+      summary: Single permission decision (R1-098, XD-FIX-R1-098). memory-service calls it with action memory:admin before every admin state change (D-25 second layer); any service may call it
+      x-replicant-callers: [control-plane-api, memory-service, context-mcp, slack-integration, github-integration, jira-integration, replicant-worker, eval-worker]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AuthorizeRequest"}
+      responses:
+        "200":
+          description: Decision with evidence (deny is a 200 with decision=deny)
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AuthzDecision"}
+        "400": {$ref: "common-components.yaml#/components/responses/Problem"}
+        "503": {$ref: "common-components.yaml#/components/responses/Problem"}
+  /internal/v1/authorize:batch-repos:
+    post:
+      operationId: authorizeBatchRepos
+      summary: Repository permission of one principal for up to 100 repos (R1-098; confused-deputy filter for memory-service, context-mcp, briefings, the job memory view)
+      description: |
+        Live GitHub (or Gitea) collaborator permission per repo via a broker token with metadata:read (CCR-09-06),
+        memoised for at most 60 s. Display-grade only: gate decisions and triggers use check-decision and
+        check-repair-trigger, which never read the memo. Repos the App cannot see return decision deny with
+        permission none. More than 100 repo_ids is a 400; GitHub unavailable is a retryable 503.
+      x-replicant-callers: [memory-service, context-mcp, control-plane-api, replicant-worker]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [principal_id, action, repo_ids]
+              properties:
+                principal_id: {$ref: "common-components.yaml#/components/schemas/PrincipalId"}
+                action: {type: string, enum: ["repo:read"]}
+                repo_ids: {type: array, minItems: 1, maxItems: 100, items: {type: string, maxLength: 128}, description: "GitHub repository node IDs (R_kgDOK2a9Xw); local profile uses '<gitea host>/<numeric id>'"}
+                freshness: {type: string, enum: [request], default: request}
+      responses:
+        "200":
+          description: One result per requested repo, in request order (role_name ranking admin > maintain > write > triage > read > none)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [results]
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      required: [repo_id, decision, permission]
+                      properties:
+                        repo_id: {type: string}
+                        decision: {type: string, enum: [allow, deny]}
+                        permission: {type: string, enum: [admin, maintain, write, triage, read, none]}
+                        source: {type: string, enum: [github_live, github_memo, gitea_live, golden_grant]}
+                  as_of: {type: string, format: date-time}
+        "400": {$ref: "common-components.yaml#/components/responses/Problem"}
+        "503": {$ref: "common-components.yaml#/components/responses/Problem"}
+  /internal/v1/principals/by-okta-sub/{sub}:
+    get:
+      operationId: getPrincipalByOktaSub
+      summary: Resolve an Okta subject to a replicant principal (XD-FIX-R1-194). audit-indexer has no database login and caches results for 1 h
+      x-replicant-callers: [audit-indexer, control-plane-api]
+      parameters:
+      - name: sub
+        in: path
+        required: true
+        schema: {type: string, minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9._-]+$"}
+      responses:
+        "200":
+          description: Principal
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [principal_id, display_name, okta_login]
+                properties:
+                  principal_id: {$ref: "common-components.yaml#/components/schemas/PrincipalId"}
+                  display_name: {type: string, maxLength: 200}
+                  okta_login: {type: string, maxLength: 320}
+        "404": {$ref: "common-components.yaml#/components/responses/Problem"}
+  /internal/v1/check-decision:
+    post:
+      operationId: checkDecision
+      summary: Authoritative gate-decision check for activity identity.check_decision (freshness live; C-MSG gate.decide handler step 3)
+      x-replicant-callers: [replicant-worker]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [principal_id, gate, job]
+              properties:
+                principal_id: {$ref: "common-components.yaml#/components/schemas/PrincipalId"}
+                gate: {$ref: "../../00-contracts/schemas/workflow-messages.schema.json#/$defs/GateView"}
+                job: {type: object, required: [job_id, tenant_id, requester, repo_ids], properties: {job_id: {type: string}, tenant_id: {type: string}, requester: {type: string}, repo_ids: {type: array, items: {type: string}}}}
+                prior_approvers: {type: array, items: {type: string}, description: "For min_approvers > 1 (V11): principals that already approved"}
+      responses:
+        "200":
+          description: allow or deny; deny reasons use GateDecideResult.denial_reason (C-MSG 1.5.0)
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AuthzDecision"}
+  /internal/v1/check-action:
+    post:
+      operationId: checkAction
+      summary: Job control check for activity identity.check_action (steer, cancel, pause, resume, takeover, batch_cancel)
+      x-replicant-callers: [replicant-worker]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AuthorizeRequest"}
+      responses:
+        "200":
+          description: Decision
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AuthzDecision"}
+  /internal/v1/check-repair-trigger:
+    post:
+      operationId: checkRepairTrigger
+      summary: D-15 check for activity identity.check_repair_trigger (linked, org member, repo write or above, not a bot, not the Replicant app)
+      x-replicant-callers: [replicant-worker]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [actors, repo_id]
+              properties:
+                repo_id: {type: string}
+                actors: {type: array, maxItems: 100, items: {type: object, required: [kind, external_id], properties: {kind: {type: string, enum: [github, gitea]}, external_id: {type: string}, login: {type: string}}}}
+      responses:
+        "200":
+          description: Per-actor result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results: {type: array, items: {type: object, properties: {external_id: {type: string}, allowed: {type: boolean}, principal_id: {type: string}, reason: {type: string}}}}
+  /internal/v1/check-release-signoff:
+    post:
+      operationId: checkReleaseSignoff
+      summary: Live group membership, author exclusion and two-person distinctness for WS-06 sign-offs (XD-06-07)
+      x-replicant-callers: [eval-worker]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [principal_id, signoff_point, required_groups, excluded_principals, prior_signers]
+              properties:
+                principal_id: {type: string}
+                signoff_point: {type: string}
+                required_groups: {type: array, items: {type: string}}
+                excluded_principals: {type: array, items: {type: string}}
+                prior_signers: {type: array, items: {type: string}}
+      responses:
+        "200":
+          description: Decision
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AuthzDecision"}
+  /internal/v1/resolve:
+    post:
+      operationId: resolveChannelIdentity
+      summary: Channel identity → principal (active link) or unlinked
+      x-replicant-callers: [github-integration, slack-integration, jira-integration, control-plane-api]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, namespace, external_id]
+              properties:
+                kind: {type: string, enum: [github, slack, jira, gitea]}
+                namespace: {type: string, description: "github host, slack enterprise_id or team_id, jira site, gitea host"}
+                external_id: {type: string}
+      responses:
+        "200":
+          description: Result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [linked]
+                properties:
+                  linked: {type: boolean}
+                  principal_id: {type: string}
+                  status: {type: string, enum: [active, deprovisioned, suspended]}
+  /internal/v1/sessions:
+    post:
+      operationId: createSession
+      x-replicant-callers: [control-plane-api]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, required: [principal_id], properties: {principal_id: {type: string}, okta_sid: {type: string}, refresh_token_enc: {type: string, contentEncoding: base64}, user_agent_hash: {type: string}}}
+      responses:
+        "201":
+          description: Session id (the cookie carries id + HMAC)
+          content:
+            application/json:
+              schema: {type: object, required: [session_id, idle_expires_at, absolute_expires_at], properties: {session_id: {type: string}, idle_expires_at: {type: string, format: date-time}, absolute_expires_at: {type: string, format: date-time}}}
+  /internal/v1/sessions/{session_id}:
+    parameters:
+      - {name: session_id, in: path, required: true, schema: {type: string}}
+    delete:
+      operationId: revokeSession
+      x-replicant-callers: [control-plane-api]
+      responses:
+        "204": {description: Revoked}
+  /internal/v1/delegations:
+    post:
+      operationId: idsCreateDelegation
+      summary: Writer for identity.delegations; control-plane-api proxies POST /v1/me/delegations (R1-178). Max 21 days
+      x-replicant-callers: [control-plane-api]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, required: [from_principal, to_principal, starts_at, ends_at], properties: {from_principal: {type: string}, to_principal: {type: string}, tenants: {type: array, items: {type: string}}, starts_at: {type: string, format: date-time}, ends_at: {type: string, format: date-time}, reason: {type: string, maxLength: 200}}}
+      responses:
+        "201": {description: Created}
+        "422": {$ref: "common-components.yaml#/components/responses/Problem"}
+  /internal/v1/links/{kind}:start:
+    parameters:
+      - {name: kind, in: path, required: true, schema: {type: string, enum: [github, slack, jira, gitea]}}
+    post:
+      operationId: startLink
+      x-replicant-callers: [control-plane-api]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, required: [principal_id], properties: {principal_id: {type: string}, pending_action: {type: object, description: "R2-049: the unrecorded Slack/GitHub action to offer again after linking (gate_id, revision, decision)"}}}
+      responses:
+        "200":
+          description: Authorize URL
+          content:
+            application/json:
+              schema: {type: object, required: [authorize_url], properties: {authorize_url: {type: string, format: uri}, expires_at: {type: string, format: date-time}}}
+  /internal/v1/links/{kind}/callback:
+    parameters:
+      - {name: kind, in: path, required: true, schema: {type: string, enum: [github, slack, jira, gitea]}}
+    post:
+      operationId: completeLink
+      x-replicant-callers: [control-plane-api]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, required: [code, state], properties: {code: {type: string}, state: {type: string}}}
+      responses:
+        "200":
+          description: Linked
+          content:
+            application/json:
+              schema: {type: object, properties: {status: {$ref: "common-components.yaml#/components/schemas/LinkStatus"}, external_id: {type: string}, login: {type: string}}}
+        "409": {$ref: "common-components.yaml#/components/responses/Problem"}
+  /internal/v1/links/{link_id}:
+    parameters:
+      - {name: link_id, in: path, required: true, schema: {type: string, pattern: "^lnk_[0-9a-hjkmnp-tv-z]{26}$"}}
+    delete:
+      operationId: unlink
+      x-replicant-callers: [control-plane-api]
+      responses:
+        "204": {description: Revoked; emits identity_link_removed}
+  /internal/v1/hints/github-membership:
+    post:
+      operationId: githubMembershipHint
+      x-replicant-callers: [github-integration]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, properties: {org: {type: string}, user_id: {type: integer}, action: {type: string}}}
+      responses:
+        "202": {description: Re-resolution scheduled}
+  /internal/v1/role-bindings:
+    get:
+      operationId: idsGetRoleBindings
+      summary: Reader for identity.role_bindings; control-plane-api serves GET /v1/admin/role-bindings from it
+      x-replicant-callers: [control-plane-api]
+      responses:
+        "200":
+          description: Current bindings
+          content:
+            application/json:
+              schema: {type: object}
+    put:
+      operationId: idsPutRoleBindings
+      summary: Writer of identity.role_bindings (control-plane-api proxies PUT /v1/admin/role-bindings; dev seeder may call it directly in local images)
+      x-replicant-callers: [control-plane-api, dev-seeder]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object}
+      responses:
+        "200": {description: New version}
+  /internal/v1/identity:resync:
+    post:
+      operationId: idsIdentityResync
+      summary: control-plane-api proxies POST /v1/admin/identity/resync
+      x-replicant-callers: [control-plane-api]
+      responses:
+        "202": {description: Full Okta reconcile started}
+  /v1/admin/dev/identity-links:
+    post:
+      operationId: devIdentityLinks
+      summary: LOCAL ONLY (replicant_dev_auth package, dev images only; identity.md §9.3)
+      x-replicant-callers: [dev-seeder]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items: {type: object, required: [principal_id, kind, external_id], properties: {principal_id: {type: string}, kind: {type: string, enum: [github, slack, gitea]}, namespace: {type: string}, external_id: {type: string}, login: {type: string}}}
+      responses:
+        "200": {description: Links upserted}
+  /okta/event-hooks:
+    get:
+      operationId: oktaEventHookVerify
+      security: []
+      x-replicant-callers: [okta]
+      parameters:
+        - {name: x-okta-verification-challenge, in: header, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: Echo
+          content:
+            application/json:
+              schema: {type: object, required: [verification], properties: {verification: {type: string}}}
+    post:
+      operationId: oktaEventHook
+      security: [{oktaHookSecret: []}]
+      x-replicant-callers: [okta]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object}
+      responses:
+        "204": {description: Accepted (deduped by eventId)}
+  /scim/v2/Users:
+    get:
+      operationId: scimListUsers
+      security: [{scimBearer: []}]
+      x-replicant-callers: [okta]
+      parameters:
+        - {name: filter, in: query, schema: {type: string}}
+        - {name: startIndex, in: query, schema: {type: integer}}
+        - {name: count, in: query, schema: {type: integer}}
+      responses:
+        "200":
+          description: SCIM ListResponse
+          content:
+            application/scim+json:
+              schema: {type: object}
+    post:
+      operationId: scimCreateUser
+      security: [{scimBearer: []}]
+      x-replicant-callers: [okta]
+      requestBody:
+        required: true
+        content:
+          application/scim+json:
+            schema: {type: object}
+      responses:
+        "201": {description: Created}
+  /scim/v2/Users/{id}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}}
+    get: {operationId: scimGetUser, security: [{scimBearer: []}], x-replicant-callers: [okta], responses: {"200": {description: User}}}
+    put: {operationId: scimReplaceUser, security: [{scimBearer: []}], x-replicant-callers: [okta], requestBody: {required: true, content: {application/scim+json: {schema: {type: object}}}}, responses: {"200": {description: Replaced}}}
+    patch: {operationId: scimPatchUser, security: [{scimBearer: []}], x-replicant-callers: [okta], requestBody: {required: true, content: {application/scim+json: {schema: {type: object}}}}, responses: {"200": {description: Patched}}}
+  /scim/v2/Groups:
+    post: {operationId: scimCreateGroup, security: [{scimBearer: []}], x-replicant-callers: [okta], requestBody: {required: true, content: {application/scim+json: {schema: {type: object}}}}, responses: {"201": {description: Created}}}
+    get: {operationId: scimListGroups, security: [{scimBearer: []}], x-replicant-callers: [okta], responses: {"200": {description: ListResponse}}}
+  /scim/v2/Groups/{id}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}}
+    patch: {operationId: scimPatchGroup, security: [{scimBearer: []}], x-replicant-callers: [okta], requestBody: {required: true, content: {application/scim+json: {schema: {type: object}}}}, responses: {"200": {description: Patched}}}
+    put: {operationId: scimReplaceGroup, security: [{scimBearer: []}], x-replicant-callers: [okta], requestBody: {required: true, content: {application/scim+json: {schema: {type: object}}}}, responses: {"200": {description: Replaced}}}
+    delete: {operationId: scimDeleteGroup, security: [{scimBearer: []}], x-replicant-callers: [okta], responses: {"204": {description: Soft-deleted}}}
+components:
+  securitySchemes:
+    serviceAccount: {type: http, scheme: bearer, bearerFormat: JWT}
+    scimBearer: {type: http, scheme: bearer, description: "Okta SCIM HTTP header token (Secrets Manager replicant/<env>/scim-bearer)"}
+    oktaHookSecret: {type: apiKey, in: header, name: Authorization, description: "Secret configured on the Okta Event Hook"}
+  schemas:
+    AuthorizeRequest:
+      type: object
+      additionalProperties: false
+      required: [principal_id, action]
+      properties:
+        principal_id: {$ref: "common-components.yaml#/components/schemas/PrincipalId"}
+        action:
+          description: identity.md §5.1 catalogue (area:verb spelling)
+          type: string
+          enum: ["job:read", "job:create", "job:control:own", "job:control:any", "artifact:download", "gate:decide", "gate:delegate",
+                 "tenant:policy:edit", "tenant:ops:edit", "cost:read", "release:read", "release:operate", "release:revoke", "release:pin",
+                 "release:signoff", "registry:publish", "identity:admin", "admin:platform", "audit:read", "temporal:ui",
+                 "ops:kill-switch", "memory:admin", "memory:flag", "repo:read",
+                 "restore:execute", "eval:curate", "release:signoff_tenant_layer", "security:leak"]
+        tenant_id:
+          description: null for platform-scope permissions (memory:admin sends tenant_id null, XD-FIX-R1-098; R1V-040)
+          anyOf: [{$ref: "common-components.yaml#/components/schemas/TenantId"}, {type: "null"}]
+        repo_ids: {type: array, maxItems: 200, items: {type: string}}
+        job_id: {type: string}
+        freshness: {type: string, enum: [request, live], default: request, description: "request = evaluated now from the SCIM replica; live = also calls Okta for groups"}
+    AuthzDecision:
+      type: object
+      required: [decision, reason, evaluated_at]
+      properties:
+        decision: {type: string, enum: [allow, deny]}
+        reason: {type: string, description: "ok | not_in_admin_group | not_in_approver_group | insufficient_repo_permission | identity_unlinked | principal_deprovisioned | self_approval_forbidden | tenant_mismatch | identity_unverifiable | identity_recheck_pending | duplicate_approver | initiator_cannot_approve | missing_permission"}
+        evidence:
+          type: object
+          properties:
+            groups: {type: array, items: {type: string}}
+            groups_source: {type: string, enum: [scim_replica, okta_live]}
+            groups_as_of: {type: string, format: date-time}
+            repo_permissions: {type: object, additionalProperties: {type: string}}
+        evaluated_at: {type: string, format: date-time}

@@ -1,0 +1,12 @@
+# runner-local contract scenario long_running: one long Bash call (RC-RUN-16, RC-CAN-02, RC-LEASE-02).
+schema: replicant.gateway-script/v1
+name: runner-contract-long-running
+protocol: anthropic_messages
+finish: "Done."
+turns:
+  - respond:
+      tool_use: {name: Bash, input: {command: "timeout 280 tail -f /dev/null; true", description: "Watch for changes"}}
+      usage: {input_tokens: 1000, output_tokens: 20}
+  - respond:
+      tool_use: {name: Bash, input: {command: "timeout 280 tail -f /dev/null; true", description: "Watch for changes"}}
+      usage: {input_tokens: 1000, output_tokens: 20}

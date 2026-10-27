@@ -1,0 +1,9 @@
+# replicant-qa (minimal v0 harness)
+
+`replicant-qa run --inputs /replicant/inputs --out /replicant/out/qa --plan /replicant/inputs/run-plan.json`: stages `install`
+(`go mod download`), `unit` (`go test -json ./...`, JUnit), `build` (`go build ./...`); writes `result.json`
+(`{verdict, exit_class, role_result}` with `replicant.role-result.qa/v1`), `outputs.entries.json`, build logs, JUnit, a
+summary `qa_report`, and checkpoints in `/replicant/out/qa-checkpoints/`. Exit classes per the R1V-023 ruling (install
+failure → `environment_setup`). Shipped in the CLI image at `/opt/replicant/bin/replicant-qa`.
+
+- Test: `podman run --rm -v "$PWD":/src -w /src/go/cmd/replicant-qa -e GOWORK=off docker.io/library/golang:1.26 go test ./...`

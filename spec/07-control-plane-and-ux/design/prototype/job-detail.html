@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>job_01m5p7x7r0 · Refund ledger entries double-count FX fees · replicant</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body data-page="jobs" data-admin="false">
+<div class="shell">
+  <aside class="rail" data-auto></aside>
+
+  <header class="topbar">
+    <div class="crumbs"><a href="job-list.html">Jobs</a><span class="sep">/</span><span>payments</span><span class="sep">/</span><b class="id"><span class="pfx">job_</span>01m5p7x7r0<span class="rest">bt69j0h0fbxepw90</span></b></div>
+    <span class="live" data-hide="stale"><i></i>Live</span><span class="live off" data-show="stale"><i></i>Reconnecting · data as of 10:41:12</span>
+    <div class="search" role="button" aria-label="Open command palette"><span>Jump to job, PR, run, bundle…</span><kbd>⌘K</kbd></div>
+    <button class="iconbtn" aria-label="Toggle theme" title="Toggle theme (⇧T)"><svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.25"><circle cx="7" cy="7" r="5"/><path d="M7 2v10a5 5 0 0 0 0-10z" fill="currentColor"/></svg></button>
+  </header>
+
+  <main class="main">
+    <section class="jobhead">
+      <div class="row" style="align-items:flex-start">
+        <div class="grow">
+          <h1>Refund ledger entries double-count FX fees for partial refunds</h1>
+          <div class="meta">
+            <span class="pill info" data-hide="failed capacity"><i class="g" data-g="ring-spin"></i>Running</span>
+            <span class="pill danger" data-show="failed"><i class="g" data-g="cross"></i>Failed</span>
+            <span class="pill info" data-show="capacity"><i class="g" data-g="ring-spin"></i>Running · waiting for capacity</span>
+            <span data-hide="failed">implementing <span class="t3">· cycle 0</span></span><span data-show="failed">qa <span class="t3">· cycle 0</span></span>
+            <span class="sep"></span>
+            <span class="mono">acme-payments/ledger-api</span>
+            <a href="#" class="mono">#1423</a>
+            <span class="sep"></span>
+            <span class="row g1"><span class="avatar sm">MT</span>Maya Torres</span>
+            <span class="t3">via GitHub label <span class="tag mono">replicant</span></span>
+            <span class="sep"></span>
+            <span class="t3">bugfix · started 08:00 · 1h 02m</span>
+          </div>
+        </div>
+        <div class="acts" data-hide="failed">
+          <button class="btn"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1.5 6h7M6 3l3 3-3 3"/></svg>Steer<kbd>S</kbd></button>
+          <div class="btngroup">
+            <button class="btn">Pause<kbd>P</kbd></button>
+            <button class="btn">Take over<kbd>T</kbd></button>
+          </div>
+          <button class="btn ghost danger" aria-label="Cancel job">Cancel</button>
+        </div>
+      </div>
+    </section>
+
+    <div class="track" aria-label="Phase progress">
+      <div class="st done"><i></i><span>routing</span></div>
+      <div class="st done"><i></i><span>context</span></div>
+      <div class="st done"><i></i><span>planning</span></div>
+      <div class="st done gate"><i></i><span>plan gate</span></div>
+      <div class="st now"><i></i><span>implementing</span></div>
+      <div class="st"><i></i><span>qa</span></div>
+      <div class="st"><i></i><span>review</span></div>
+      <div class="st"><i></i><span>verify</span></div>
+      <div class="st gate"><i></i><span>publish gate</span></div>
+      <div class="st"><i></i><span>publishing</span></div>
+      <div class="st"><i></i><span>pr review</span></div>
+    </div>
+
+    <div class="banner warning" data-show="stale"><i class="g" data-g="triangle" style="margin-top:3px"></i><span class="t"><b>Showing data as of 10:41:12.</b> Live updates are reconnecting; Replicant is still working. Actions still work and are recorded.</span><span class="acts"><button class="btn sm">Reload</button></span></div>
+    <div class="banner danger" data-show="failed"><i class="g" data-g="cross" style="margin-top:3px"></i><span class="t"><b>Failed in QA: the workspace ran out of disk (WorkspaceDiskExceeded, 40 GiB).</b> Failure class: environment. The go-service environment profile needs more disk; a right-sizing proposal (rsp_01m5q0…) is open. Nothing was published.</span><span class="acts"><button class="btn sm">Take over</button><button class="btn sm">Start again</button></span></div>
+    <div class="banner neutral" data-show="capacity"><i class="g" data-g="ring-dotted" style="margin-top:3px"></i><span class="t"><b>Waiting: tenant run quota 12 of 12 in use · waiting 41 min · attempt 9.</b> It starts automatically when one of payments’ runs finishes. No ETA is shown because none can be computed reliably.</span><span class="acts"><button class="btn sm">View running jobs</button><button class="btn sm">Ask payments-leads</button></span></div>
+    <div class="jobgrid">
+      <div>
+        <div class="livenode" data-hide="failed capacity">
+          <i class="g f-info" data-g="ring-spin"></i>
+          <div class="what"><b>implementer</b> <span class="t3 mono">run_gj3h3ep3ph</span> <span class="t2">· claude-code 2.1.240 · claude-opus-5-5 · kata-clh · 6 vCPU / 16 GiB · disk 11.2 / 40 GiB</span></div>
+          <div class="row g3 small"><span class="t2 num">running 14m 03s</span><a href="#" class="t2">Live transcript</a></div>
+        </div>
+        <div class="tail" aria-label="Live transcript tail (redacted)" data-hide="failed capacity"><span class="ts">08:55:41</span>  <span class="tool">Bash</span>  go test ./ledger/... -run 'TestApplyRefund|TestProration' -count=1
+<span class="ts">08:55:58</span>  <span class="ok">ok</span>    github.com/acme-payments/ledger-api/ledger      4.112s
+<span class="ts">08:56:02</span>  <span class="tool">Edit</span>  ledger/refund.go  (+14 −9)
+<span class="ts">08:56:09</span>  <span class="tool">Bash</span>  go vet ./ledger/... && golangci-lint run ./ledger/...</div>
+
+        <nav class="tabs" aria-label="Job sections">
+          <a href="#" class="on">Timeline <span class="n">23</span></a>
+          <a href="#">Plan</a>
+          <a href="#">Diff <span class="n">—</span></a>
+          <a href="#">QA <span class="n">—</span></a>
+          <a href="#">Runs <span class="n">2</span></a>
+          <a href="#">Transcripts</a>
+          <a href="#">Artifacts <span class="n">31</span></a>
+        </nav>
+
+        <ol class="tl">
+          <li data-show="failed"><span class="when">09:31:40</span><span class="gl"><i class="g f-danger" data-g="cross"></i></span><div class="body">Job failed · QA run <span class="mono">run_chxtsxqzcp</span> ended <span class="mono">WorkspaceDiskExceeded</span> <span class="t3">· disk watchdog at 40.0 / 40 GiB during <span class="mono">go build ./...</span></span></div><span class="right">now</span></li>
+          <li data-show="capacity"><span class="when">09:29:10</span><span class="gl"><i class="g f-neutral" data-g="ring-dotted"></i></span><div class="body">Waiting for a sandbox <span class="t3">· runner returned 429 tenant_quota_exceeded · 12 of 12 in use · attempt 9</span></div><span class="right">41 min</span></li>
+          <li data-hide="failed capacity"><span class="when">08:56:09</span><span class="gl"><i class="g f-info" data-g="ring-spin"></i></span><div class="body">implementer running <span class="t3">· turn 41 · 212k tokens in / 18k out</span></div><span class="right">now</span></li>
+          <li><span class="when">08:47:30</span><span class="gl"><i class="g f-special" data-g="hand"></i></span>
+            <div class="body">Steering message from Maya Torres delivered live to <span class="mono">run_gj3h3ep3ph</span>
+              <div class="quote"><span class="untrusted">user text · msg_01m5pc2k8q</span>Use the existing Proration helper in ledger/fx instead of adding a new one, and keep the reversal idempotent on refund_id.</div>
+            </div><span class="right">UI</span></li>
+          <li><span class="when">08:42:02</span><span class="gl"><i class="g f-info" data-g="ring-dotted"></i></span>
+            <div class="body">implementer sandbox ready <span class="t3">· Provisioning 47 s · repo-mirror fetch 6.1 s</span>
+              <div class="runrow"><span class="mono">run_gj3h3ep3phjfs9e23v768zrca5</span><span>implementer.c0.n1.run</span><span>replicant-kata-clh</span><span>m8id.4xlarge · use1-az2</span></div>
+            </div><span class="right"></span></li>
+          <li><span class="when">08:41:12</span><span class="gl"><i class="g f-success" data-g="check"></i></span>
+            <div class="body">Plan approved by <b>Priya Raman</b> in Slack <span class="t3">· #payments-replicant · 35 min after opening</span>
+              <div class="quote"><span class="untrusted">approver comment</span>Fine. Watch the EUR→GBP rounding in the existing proration tests.</div>
+            </div><span class="right mono small">dec_cnd2v9…</span></li>
+          <li><span class="when">08:06:45</span><span class="gl"><i class="g f-attention" data-g="diamond"></i></span>
+            <div class="body">Plan approval gate opened <span class="t3">· eligible: ledger-core CODEOWNERS (write+) · reminders 4 h · escalates 24 h · expires Oct 31</span></div><span class="right"><span class="chan"><i>UI</i><i>Slack</i><i>GH</i></span></span></li>
+          <li><span class="when">08:06:44</span><span class="gl"><i class="g f-danger" data-g="triangle"></i></span>
+            <div class="body">Risk classified <span class="risk high">high</span> <span class="t3">· 3 deterministic rules fired · LLM did not raise</span>
+              <div class="runrow"><span class="mono">path.money_movement</span><span class="mono">codeowners.ledger_core</span><span class="mono">service.tier1</span></div>
+            </div><span class="right"></span></li>
+          <li><span class="when">08:06:40</span><span class="gl"><i class="g f-success" data-g="check"></i></span>
+            <div class="body">planner succeeded <span class="t3">· 6 m 21 s · $0.61 · plan r1, 7 steps, 3 files</span>
+              <div class="runrow"><span class="mono">run_za95kq1w3xh8b2f0y4ms6tj7cd</span><span>planner.c0.n1.run</span><span>read-only intent</span></div>
+            </div><span class="right"></span></li>
+          <li><span class="when">08:00:11</span><span class="gl"><i class="g f-neutral" data-g="check"></i></span><div class="body">Context assembled <span class="t3">· briefing 48 KB · ledger-api, fx-rates-svc · 4 memory entries · budget 61% of window</span></div><span class="right"></span></li>
+          <li><span class="when">08:00:05</span><span class="gl"><i class="g f-neutral" data-g="check"></i></span><div class="body">Memory snapshot pinned <span class="mono t2">msnap_my7g26p6dy</span></div><span class="right"></span></li>
+          <li><span class="when">08:00:04</span><span class="gl"><i class="g f-neutral" data-g="check"></i></span><div class="body">Routed to <b>bugfix</b> <span class="t3">· rule router.label_replicant_bug · bundle <span class="mono">rb_ds5p3wmcj</span> (default)</span></div><span class="right"></span></li>
+          <li><span class="when">08:00:00</span><span class="gl"><i class="g f-neutral" data-g="dot-hollow"></i></span><div class="body">Job created from GitHub <span class="mono">issues.labeled</span> by @mtorres-acme <span class="t3">· acknowledged on #1423 in 3.4 s</span></div><span class="right"></span></li>
+        </ol>
+      </div>
+
+      <aside class="side">
+        <div class="section">
+          <dl class="kv">
+            <dt>Status</dt><dd><span class="row g1" data-hide="failed capacity"><i class="g f-info" data-g="ring-spin"></i>Running · implementing</span><span class="row g1" data-show="failed"><i class="g f-danger" data-g="cross"></i>Failed · qa</span><span class="row g1" data-show="capacity"><i class="g f-info" data-g="ring-spin"></i>Running · waiting for capacity</span></dd>
+            <dt>Cost so far</dt><dd><div class="row"><span class="num">$2.86</span><span class="t3 small">of $40.00 cap</span></div><div class="bar" style="margin-top:5px"><i style="width:7.2%"></i></div></dd>
+            <dt>Risk</dt><dd><span class="risk high">high</span> <span class="t3 small">3 rules</span></dd>
+            <dt>Bundle</dt><dd><a href="releases.html" class="mono">rb_ds5p3wmcj</a> <span class="t3 small">2026.10.24-3</span></dd>
+            <dt>Worker</dt><dd class="mono" style="overflow-wrap:anywhere" title="replicant-worker:b20261024-3f9a1c2e7d4b · click to copy">replicant-worker:b20261024-3f9a1c2e7d4b</dd>
+            <dt>Repo / base</dt><dd class="mono ellipsis">main @ 7c1e9a40d2</dd>
+            <dt>Repair budget</dt><dd class="num">0 of 5 cycles <span class="t3 small">repair_limits</span></dd>
+            <dt>Requester</dt><dd>Maya Torres <span class="t3 small">write</span></dd>
+          </dl>
+        </div>
+        <div class="section">
+          <div class="section-h"><h3>Memory used</h3><span class="t3 small">4 entries · read-only</span><a class="aside small t2" href="#">Why these?</a></div>
+          <ul class="memlist">
+            <li><div class="txt">Monetary amounts in ledger-api use <span class="mono">decimal.Decimal</span>-equivalent <span class="mono">money.Amount</span>; never float64.</div><div class="src mono">mem_01m42qyvr0@3 · repo · from PR #1288 review</div></li>
+            <li><div class="txt">FX reversals must be keyed on <span class="mono">refund_id</span> to stay idempotent under webhook retries.</div><div class="src mono">mem_01m3zr8w6k@1 · repo · from PR #1302</div></li>
+            <li><div class="txt">Run <span class="mono">make test-ledger</span>, not <span class="mono">go test ./...</span>; the latter needs Kafka.</div><div class="src mono">mem_01kz5c0n9t@2 · repo · playbook</div></li>
+            <li><div class="txt">Payments tenant: PR titles start with the Jira key when one is linked.</div><div class="src mono">mem_01kvm3hb2e@4 · tenant</div></li>
+          </ul>
+        </div>
+        <div class="section links">
+          <div class="section-h"><h3>Observe</h3></div>
+          <a href="#">Langfuse trace <span class="ext">5ba8ff0c12…</span></a>
+          <a href="#">Grafana logs (job_id) <span class="ext">loki</span></a>
+          <a href="#">Tempo trace <span class="ext">tempo</span></a>
+          <a href="#">Temporal workflow <span class="ext">operators</span></a>
+        </div>
+      </aside>
+    </div>
+  </main>
+</div>
+<div class="scrim"></div>
+<div class="palette" role="dialog" aria-label="Command palette">
+  <div class="q"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="6" cy="6" r="4.2"/><path d="M9.2 9.2L12.5 12.5"/></svg><span>steer</span><span class="caret"></span></div>
+  <div class="grp caps">This job</div>
+  <div class="it on"><span>Steer job_01m5p7x7r0…</span><span class="t3 small">delivered live to implementer</span><span class="hint"><kbd>S</kbd></span></div>
+  <div class="it"><span>Pause at next node</span><span class="hint"><kbd>P</kbd></span></div>
+  <div class="it"><span>Pause at next gate</span><span class="hint"><kbd>⇧</kbd><kbd>P</kbd></span></div>
+  <div class="grp caps">Jobs</div>
+  <div class="it"><span class="mono">job_01m5n2a9qe</span><span class="t2 ellipsis">Stale FX rate cache after deploy · ledger-api</span><span class="hint">waiting_human</span></div>
+  <div class="it"><span class="mono">job_01m5k8t0vy</span><span class="t2 ellipsis">Settlement batcher retries duplicate a failed batch</span><span class="hint">running</span></div>
+  <div class="ft"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> run</span><span><kbd>esc</kbd> close</span><span style="margin-left:auto">Type <span class="mono">&gt;</span> for commands, <span class="mono">#</span> for PRs, <span class="mono">rb_</span> for bundles</span></div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

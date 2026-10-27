@@ -1,0 +1,150 @@
+# WS-10 · Replicant database migration Job (D-26; schema-management.md §7)
+# Rendered by the `replicant-control` Helm chart; applied by Argo CD as a PreSync hook, so every
+# sync of the replicant-control Application runs migrations BEFORE any Deployment is updated.
+# Argo CD: "If any of them fails the whole sync process will stop and will be marked as failed"
+# [verified: https://github.com/argoproj/argo-cd/blob/master/docs/user-guide/sync-waves.md, 2026-10-24].
+# No ttlSecondsAfterFinished: Argo CD must read the Job to learn the hook phase (same source);
+# BeforeHookCreation deletes the previous run's Job at the next sync.
+# Validated: YAML parse + kubeconform (Kubernetes 1.36 schemas), 2026-10-24.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: replicant-db-migrate
+  namespace: replicant-control
+  labels:
+    app.kubernetes.io/name: replicant-db-migrate
+    app.kubernetes.io/part-of: replicant
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+automountServiceAccountToken: true   # needed: the contract gate lists Deployments (read-only RBAC below)
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: replicant-db-migrate-contract-gate
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["list", "get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: replicant-db-migrate-contract-gate
+  namespace: replicant-workers
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: replicant-db-migrate-contract-gate
+subjects:
+  - kind: ServiceAccount
+    name: replicant-db-migrate
+    namespace: replicant-control
+# Identical RoleBindings exist in replicant-control, replicant-integrations, replicant-context and
+# replicant-eval (the namespaces listed in REPLICANT_DB_CLIENT_NAMESPACES); omitted here only to keep
+# the example short — the chart renders one per namespace from the same template.
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # Fixed name + BeforeHookCreation: one migrate Job object per environment at a time.
+  name: replicant-db-migrate
+  namespace: replicant-control
+  labels:
+    app.kubernetes.io/name: replicant-db-migrate
+    app.kubernetes.io/part-of: replicant
+    app.kubernetes.io/version: "b20261024-3f9a1c2e7d4b"
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "-1"
+    replicant.example.com/schema-revision: "202610240001_ops"   # the head this image will migrate to
+spec:
+  backoffLimit: 3                 # only lock timeouts are retried (podFailurePolicy below)
+  activeDeadlineSeconds: 1800     # hard stop; the sync fails and pages
+  podFailurePolicy:
+    rules:
+      - action: FailJob           # 20 checksum changed, 21 contract gate, 30 SQL error, 40 drift: never blind-retry
+        onExitCodes:
+          containerName: migrate
+          operator: In
+          values: [20, 21, 30, 40]
+      - action: Count             # 10 advisory-lock timeout: another run holds the lock; retry is safe
+        onExitCodes:
+          containerName: migrate
+          operator: In
+          values: [10]
+      - action: Ignore            # node drain / preemption must not burn the retry budget
+        onPodConditions:
+          - type: DisruptionTarget
+            status: "True"
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: replicant-db-migrate
+      annotations:
+        replicant.example.com/schema-revision: "202610240001_ops"
+    spec:
+      restartPolicy: Never        # required by podFailurePolicy
+      serviceAccountName: replicant-db-migrate   # EKS Pod Identity association -> role replicant-prod-db-migrate
+      priorityClassName: replicant-platform-critical
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: 111111111111.dkr.ecr.us-east-1.amazonaws.com/replicant/replicant-db-migrate@sha256:4f1c2a9e0b7d6c5e3a2f1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e
+          args: ["migrate", "--to", "head", "--advisory-lock", "--verify-drift", "--lock-timeout", "600"]   # same flags as compose (XD-11-12), minus --ensure-roles
+          env:
+            - name: REPLICANT_ENV
+              value: prod
+            - name: REPLICANT_DB_HOST
+              value: replicant-prod.cluster-c9xk2mzq4lab.us-east-1.rds.amazonaws.com   # writer endpoint, never the reader
+            - name: REPLICANT_DB_PORT
+              value: "5432"
+            - name: REPLICANT_DB_NAME
+              value: replicant
+            - name: REPLICANT_DB_USER
+              value: replicant_migrator
+            - name: REPLICANT_DB_IAM_AUTH
+              value: "true"
+            - name: AWS_REGION
+              value: us-east-1
+            - name: REPLICANT_DB_CLIENT_NAMESPACES
+              value: replicant-control,replicant-integrations,replicant-workers,replicant-context,replicant-eval
+            - name: REPLICANT_IMAGE_DIGEST
+              value: sha256:4f1c2a9e0b7d6c5e3a2f1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e
+            - name: REPLICANT_GIT_SHA
+              value: 3f9a1c2e7d4b5a6c8e0f1a2b3c4d5e6f7a8b9c0d
+            - name: POD_JOB_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['job-name']
+            - name: ARGOCD_APP_NAME
+              value: replicant-control-prod
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://alloy.observability.svc:4318
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: service.name=replicant-db-migrate,replicant.env=prod
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

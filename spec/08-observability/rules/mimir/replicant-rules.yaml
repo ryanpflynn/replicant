@@ -1,0 +1,784 @@
+# Mimir ruler rule groups for tenant "replicant". Owner WS-08. Loaded with:
+#   mimirtool rules sync --address=http://mimir-ruler.observability.svc:8080 --id=replicant rules/mimir/replicant-rules.yaml
+# Validated with `promtool check rules` (Prometheus 3.15.1) and `mimirtool rules check` (3.2.3), 2026-10-24.
+# Metric catalog: telemetry-model.md section 8. SLO definitions: dashboards.md section 4.
+# Every alert carries: severity (page|ticket|info), owner (workstream/team), slo (when SLO-derived), runbook_url.
+groups:
+  # ------------------------------------------------------------------------------------------------------------
+  # SLO recording rules
+  # ------------------------------------------------------------------------------------------------------------
+  - name: replicant-slo-recording
+    interval: 1m
+    rules:
+      # SLO-1 first visible progress: 99% of jobs show progress within 60 s of the trigger.
+      - record: replicant:first_progress_bad:ratio_rate5m
+        expr: |
+          1 - (
+            sum(rate(replicant_jobs_first_progress_seconds_bucket{le="60"}[5m]))
+            / clamp_min(sum(rate(replicant_jobs_first_progress_seconds_count[5m])), 1e-9)
+          )
+      - record: replicant:first_progress_bad:ratio_rate30m
+        expr: |
+          1 - (sum(rate(replicant_jobs_first_progress_seconds_bucket{le="60"}[30m]))
+               / clamp_min(sum(rate(replicant_jobs_first_progress_seconds_count[30m])), 1e-9))
+      - record: replicant:first_progress_bad:ratio_rate1h
+        expr: |
+          1 - (sum(rate(replicant_jobs_first_progress_seconds_bucket{le="60"}[1h]))
+               / clamp_min(sum(rate(replicant_jobs_first_progress_seconds_count[1h])), 1e-9))
+      - record: replicant:first_progress_bad:ratio_rate6h
+        expr: |
+          1 - (sum(rate(replicant_jobs_first_progress_seconds_bucket{le="60"}[6h]))
+               / clamp_min(sum(rate(replicant_jobs_first_progress_seconds_count[6h])), 1e-9))
+
+      # SLO-2 trigger to first sandbox ready: 95% of jobs within 90 s (shared context section 2: p95 < 90 s).
+      - record: replicant:sandbox_ready_bad:ratio_rate30m
+        expr: |
+          1 - (sum(rate(replicant_jobs_first_sandbox_ready_seconds_bucket{le="90"}[30m]))
+               / clamp_min(sum(rate(replicant_jobs_first_sandbox_ready_seconds_count[30m])), 1e-9))
+      - record: replicant:sandbox_ready_bad:ratio_rate1h
+        expr: |
+          1 - (sum(rate(replicant_jobs_first_sandbox_ready_seconds_bucket{le="90"}[1h]))
+               / clamp_min(sum(rate(replicant_jobs_first_sandbox_ready_seconds_count[1h])), 1e-9))
+      - record: replicant:sandbox_ready_bad:ratio_rate6h
+        expr: |
+          1 - (sum(rate(replicant_jobs_first_sandbox_ready_seconds_bucket{le="90"}[6h]))
+               / clamp_min(sum(rate(replicant_jobs_first_sandbox_ready_seconds_count[6h])), 1e-9))
+      - record: replicant:sandbox_ready_seconds:p95_1h
+        expr: histogram_quantile(0.95, sum by (le) (rate(replicant_jobs_first_sandbox_ready_seconds_bucket[1h])))
+      - record: replicant:run_startup_seconds:p95_by_isolation_1h
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, isolation, workload_class) (rate(replicant_controller_run_startup_seconds_bucket{phase="agent_running"}[1h])))
+
+      # SLO-3 control-plane availability 99.9% (requests to control-plane-api, excluding 4xx).
+      - record: replicant:control_plane_errors:ratio_rate5m
+        expr: |
+          sum(rate(replicant_http_server_request_duration_seconds_count{service="control-plane-api",status_code=~"5.."}[5m]))
+          / clamp_min(sum(rate(replicant_http_server_request_duration_seconds_count{service="control-plane-api"}[5m])), 1e-9)
+      - record: replicant:control_plane_errors:ratio_rate30m
+        expr: |
+          sum(rate(replicant_http_server_request_duration_seconds_count{service="control-plane-api",status_code=~"5.."}[30m]))
+          / clamp_min(sum(rate(replicant_http_server_request_duration_seconds_count{service="control-plane-api"}[30m])), 1e-9)
+      - record: replicant:control_plane_errors:ratio_rate1h
+        expr: |
+          sum(rate(replicant_http_server_request_duration_seconds_count{service="control-plane-api",status_code=~"5.."}[1h]))
+          / clamp_min(sum(rate(replicant_http_server_request_duration_seconds_count{service="control-plane-api"}[1h])), 1e-9)
+      - record: replicant:control_plane_errors:ratio_rate6h
+        expr: |
+          sum(rate(replicant_http_server_request_duration_seconds_count{service="control-plane-api",status_code=~"5.."}[6h]))
+          / clamp_min(sum(rate(replicant_http_server_request_duration_seconds_count{service="control-plane-api"}[6h])), 1e-9)
+      - record: replicant:control_plane_errors:ratio_rate3d
+        expr: |
+          sum(rate(replicant_http_server_request_duration_seconds_count{service="control-plane-api",status_code=~"5.."}[3d]))
+          / clamp_min(sum(rate(replicant_http_server_request_duration_seconds_count{service="control-plane-api"}[3d])), 1e-9)
+
+  - name: replicant-business-recording
+    interval: 1m
+    rules:
+      - record: replicant:jobs_terminal:increase1h
+        expr: sum by (tenant, workflow_type, outcome, release_cohort) (increase(replicant_jobs_terminal_total[1h]))
+      - record: replicant:job_failure:ratio1h
+        expr: |
+          sum by (tenant, workflow_type) (increase(replicant_jobs_terminal_total{outcome="failed"}[1h]))
+          / clamp_min(sum by (tenant, workflow_type) (increase(replicant_jobs_terminal_total[1h])), 1)
+      - record: replicant:llm_cost_usd:increase1h
+        expr: sum by (tenant) (increase(replicant_gateway_cost_micros_total[1h])) / 1e6
+      - record: replicant:llm_cost_usd_by_role:increase1h
+        expr: sum by (tenant, role) (increase(replicant_gateway_cost_micros_total[1h])) / 1e6
+      - record: replicant:sandbox_workspace_used:ratio
+        expr: |
+          max by (tenant, role, workload_class, isolation, pod) (replicant_sandbox_workspace_used_bytes)
+          / on (pod) group_left max by (pod) (replicant_sandbox_workspace_limit_bytes)
+      # Watchdog gauges (WS-02, XD-FIX-R1-196): used, peak and limit per pod, pod label allowed on replicant_sandbox_*
+      - record: replicant:sandbox_cpu_utilization:ratio
+        expr: |
+          sum by (namespace, pod) (rate(container_cpu_usage_seconds_total{namespace=~"sbx-.+",container!=""}[5m]))
+          / on (namespace, pod) group_left
+          sum by (namespace, pod) (container_spec_cpu_quota{namespace=~"sbx-.+",container!=""} / 100000)
+
+  # ------------------------------------------------------------------------------------------------------------
+  # SLO burn-rate alerts (multiwindow, multi-burn-rate)
+  # ------------------------------------------------------------------------------------------------------------
+  - name: replicant-slo-alerts
+    rules:
+      - alert: ReplicantControlPlaneAvailabilityFastBurn
+        expr: |
+          replicant:control_plane_errors:ratio_rate1h > (14.4 * 0.001)
+          and replicant:control_plane_errors:ratio_rate5m > (14.4 * 0.001)
+        for: 2m
+        labels: {severity: page, owner: ws-07, slo: control-plane-availability}
+        annotations:
+          summary: "control-plane-api is burning its 99.9% availability budget 14.4x too fast"
+          description: "5xx ratio {{ $value | humanizePercentage }} over 1h. At this rate the 30-day budget is gone in about 2 days."
+          runbook_url: https://runbooks.replicant.internal/observability/control-plane-availability
+      - alert: ReplicantControlPlaneAvailabilitySlowBurn
+        expr: |
+          replicant:control_plane_errors:ratio_rate6h > (6 * 0.001)
+          and replicant:control_plane_errors:ratio_rate30m > (6 * 0.001)
+        for: 15m
+        labels: {severity: page, owner: ws-07, slo: control-plane-availability}
+        annotations:
+          summary: "control-plane-api 5xx ratio is burning budget 6x too fast (6h window)"
+          runbook_url: https://runbooks.replicant.internal/observability/control-plane-availability
+      - alert: ReplicantControlPlaneAvailabilityBudgetDrain
+        expr: replicant:control_plane_errors:ratio_rate3d > 0.001
+        for: 1h
+        labels: {severity: ticket, owner: ws-07, slo: control-plane-availability}
+        annotations:
+          summary: "control-plane-api error ratio above 0.1% over 3 days"
+          runbook_url: https://runbooks.replicant.internal/observability/control-plane-availability
+      - alert: ReplicantFirstProgressSLOBurn
+        expr: |
+          replicant:first_progress_bad:ratio_rate1h > (14.4 * 0.01)
+          and replicant:first_progress_bad:ratio_rate5m > (14.4 * 0.01)
+          and sum(increase(replicant_jobs_first_progress_seconds_count[1h])) > 10
+        for: 5m
+        labels: {severity: page, owner: ws-01, slo: first-progress-60s}
+        annotations:
+          summary: "More than 14% of jobs take over 60 s to show progress"
+          description: "Check Temporal workflow task schedule-to-start latency, router activity latency, and projector lag."
+          runbook_url: https://runbooks.replicant.internal/observability/first-progress
+      - alert: ReplicantFirstProgressSLOSlowBurn
+        expr: |
+          replicant:first_progress_bad:ratio_rate6h > (6 * 0.01)
+          and replicant:first_progress_bad:ratio_rate30m > (6 * 0.01)
+        for: 30m
+        labels: {severity: ticket, owner: ws-01, slo: first-progress-60s}
+        annotations:
+          summary: "First-progress SLO burning budget 6x over 6h"
+          runbook_url: https://runbooks.replicant.internal/observability/first-progress
+      - alert: ReplicantSandboxReadySLOBurn
+        expr: |
+          replicant:sandbox_ready_bad:ratio_rate1h > (6 * 0.05)
+          and replicant:sandbox_ready_bad:ratio_rate30m > (6 * 0.05)
+          and sum(increase(replicant_jobs_first_sandbox_ready_seconds_count[1h])) > 10
+        for: 10m
+        labels: {severity: page, owner: ws-02, slo: sandbox-ready-p95-90s}
+        annotations:
+          summary: "More than 30% of jobs wait over 90 s for their first sandbox"
+          description: "p95 is {{ with query \"replicant:sandbox_ready_seconds:p95_1h\" }}{{ . | first | value | humanizeDuration }}{{ end }}. Break down with replicant_controller_run_startup_seconds by phase segment (scheduled, workspace_ready, agent_running)."
+          runbook_url: https://runbooks.replicant.internal/observability/sandbox-ready
+      - alert: ReplicantSandboxReadyP95Breached
+        expr: replicant:sandbox_ready_seconds:p95_1h > 90
+        for: 30m
+        labels: {severity: ticket, owner: ws-02, slo: sandbox-ready-p95-90s}
+        annotations:
+          summary: "Trigger-to-sandbox-ready p95 above 90 s for 30 minutes"
+          runbook_url: https://runbooks.replicant.internal/observability/sandbox-ready
+
+  # ------------------------------------------------------------------------------------------------------------
+  # Jobs, workflows, gates
+  # ------------------------------------------------------------------------------------------------------------
+  - name: replicant-jobs
+    rules:
+      - alert: ReplicantJobFailureRateHigh
+        expr: |
+          replicant:job_failure:ratio1h > 0.25
+          and sum by (tenant, workflow_type) (increase(replicant_jobs_terminal_total[1h])) >= 8
+        for: 15m
+        labels: {severity: page, owner: ws-01}
+        annotations:
+          summary: "{{ $labels.tenant }}/{{ $labels.workflow_type }}: {{ $value | humanizePercentage }} of jobs failed in the last hour"
+          description: "Top failure reasons: replicant_runs_terminal_total by reason; job drilldown in the per-tenant dashboard."
+          releases_url: https://app.replicant.internal/releases?focus=failures
+          runbook_url: https://runbooks.replicant.internal/observability/job-failure-rate
+      - alert: ReplicantWorkflowsStalled
+        expr: sum by (tenant) (replicant_jobs_stalled) > 0
+        for: 15m
+        labels: {severity: page, owner: ws-01}
+        annotations:
+          summary: "{{ $value }} job(s) in tenant {{ $labels.tenant }} are running with no progress for 30+ minutes"
+          description: "Reported by sys:projection-reconciler (status=running, no projection seq advance in 30 min, no open run). Open the job, then Temporal history (pending activities)."
+          runbook_url: https://runbooks.replicant.internal/observability/stalled-workflows
+      - alert: ReplicantProjectionLag
+        expr: histogram_quantile(0.99, sum by (le) (rate(replicant_projection_lag_seq_bucket[10m]))) > 0
+        for: 5m
+        labels: {severity: page, owner: ws-07}
+        annotations:
+          summary: "UI read model lags Temporal (projection seq mismatch persisting > 5 min)"
+          runbook_url: https://runbooks.replicant.internal/observability/projection-lag
+      - alert: ReplicantUnknownRunSignals
+        expr: sum(increase(replicant_workflow_unknown_run_signals_total[10m])) > 0
+        labels: {severity: ticket, owner: ws-09}
+        annotations:
+          summary: "Workflows received run.status_changed Signals for unknown run_ids (C-MSG section 1.1)"
+          description: "Usually a notifier bug; persistent or bursty values may indicate a compromised run-notifier credential."
+          runbook_url: https://runbooks.replicant.internal/observability/unknown-run-signals
+      - alert: ReplicantApprovalBacklogAging
+        expr: max by (tenant, gate_kind) (replicant_gate_oldest_open_age_seconds) > 3 * 86400
+        for: 30m
+        labels: {severity: ticket, owner: ws-07}
+        annotations:
+          summary: "{{ $labels.tenant }} has a {{ $labels.gate_kind }} gate open for {{ $value | humanizeDuration }}"
+          description: "Escalation should have fired at 24 h (gate_rules policy). Check replicant_gate_reminders_total{outcome=\"failed\"}."
+          runbook_url: https://runbooks.replicant.internal/observability/approval-backlog
+      - alert: ReplicantApprovalBacklogLarge
+        expr: sum by (tenant) (replicant_gates_open) > 25
+        for: 1h
+        labels: {severity: ticket, owner: ws-07}
+        annotations:
+          summary: "{{ $labels.tenant }} has {{ $value }} open approval gates"
+          runbook_url: https://runbooks.replicant.internal/observability/approval-backlog
+      - alert: ReplicantGateRemindersFailing
+        expr: sum by (tenant, gate_kind) (increase(replicant_gate_reminders_total{outcome="failed"}[1h])) > 0
+        for: 15m
+        labels: {severity: ticket, owner: ws-07}
+        annotations:
+          summary: "Gate reminders or escalations are failing to deliver for {{ $labels.tenant }}"
+          runbook_url: https://runbooks.replicant.internal/observability/approval-backlog
+
+  # ------------------------------------------------------------------------------------------------------------
+  # Cost
+  # ------------------------------------------------------------------------------------------------------------
+  - name: replicant-cost
+    rules:
+      - alert: ReplicantTenantLLMCostAnomaly
+        # Hourly spend above 3x the same hour's 7-day average and above 50 USD absolute.
+        expr: |
+          replicant:llm_cost_usd:increase1h
+            > 3 * avg_over_time(replicant:llm_cost_usd:increase1h[7d] offset 1h)
+          and replicant:llm_cost_usd:increase1h > 50
+        for: 30m
+        labels: {severity: ticket, owner: ws-03}
+        annotations:
+          summary: "{{ $labels.tenant }} LLM spend {{ $value | humanize }} USD/h, over 3x its weekly average"
+          description: "Gateway cost dashboard, top jobs by cost (Postgres cost ledger). Budgets are enforced by the gateway; this alert finds runaway loops before they hit budgets."
+          runbook_url: https://runbooks.replicant.internal/observability/cost-anomaly
+      - alert: ReplicantGlobalLLMCostSpike
+        expr: sum(replicant:llm_cost_usd:increase1h) > 1000
+        for: 15m
+        labels: {severity: page, owner: ws-03}
+        annotations:
+          summary: "Replicant-wide LLM spend above 1,000 USD in the last hour"
+          runbook_url: https://runbooks.replicant.internal/observability/cost-anomaly
+      - alert: ReplicantBudgetRejectionsSpike
+        expr: sum by (tenant) (increase(replicant_gateway_budget_denials_total[1h])) > 20
+        for: 15m
+        labels: {severity: ticket, owner: ws-03}
+        annotations:
+          summary: "{{ $labels.tenant }}: {{ $value }} gateway budget rejections in 1h (runs ending GatewayBudgetExceeded)"
+          runbook_url: https://runbooks.replicant.internal/observability/cost-anomaly
+
+  # ------------------------------------------------------------------------------------------------------------
+  # Execution: Runner, controller, notifier, sandboxes
+  # ------------------------------------------------------------------------------------------------------------
+  - name: replicant-execution
+    rules:
+      - alert: ReplicantRunFailuresByInfraReason
+        expr: |
+          sum by (reason, isolation) (increase(replicant_controller_phase_transitions_total{phase="Failed",reason=~"NodeLost|PodEvicted|Preempted|ImagePullFailed|SandboxStartTimeout|RepoFetchFailed|CredentialIssueFailed|RuntimeClassUnavailable|ControllerError|ArtifactUploadFailed|DefinitionUnavailable"}[30m])) > 5
+        for: 10m
+        labels: {severity: page, owner: ws-02}
+        annotations:
+          summary: "{{ $value }} runs failed with {{ $labels.reason }} on {{ $labels.isolation }} in 30 min"
+          runbook_url: https://runbooks.replicant.internal/observability/run-infra-failures
+      - alert: ReplicantWorkspaceDiskExceeded
+        expr: sum by (tenant, workload_class) (increase(replicant_controller_phase_transitions_total{phase="Failed",reason="WorkspaceDiskExceeded"}[6h])) >= 3
+        labels: {severity: ticket, owner: ws-03}
+        annotations:
+          summary: "{{ $labels.tenant }} {{ $labels.workload_class }} runs repeatedly exceed workspace disk; resize the environment definition's resource profile (D-12)"
+          runbook_url: https://runbooks.replicant.internal/observability/resource-profile
+      - alert: ReplicantRunOOMKilled
+        expr: sum by (tenant, workload_class) (increase(replicant_controller_phase_transitions_total{phase="Failed",reason="OOMKilled"}[6h])) >= 3
+        labels: {severity: ticket, owner: ws-03}
+        annotations:
+          summary: "{{ $labels.tenant }} {{ $labels.workload_class }} runs repeatedly OOMKilled; resize the resource profile"
+          runbook_url: https://runbooks.replicant.internal/observability/resource-profile
+      - alert: ReplicantCallbackDeliveryStuck
+        expr: max(replicant_controller_oldest_undelivered_notification_seconds) > 300
+        for: 5m
+        labels: {severity: page, owner: ws-02}
+        annotations:
+          summary: "Oldest undelivered run notification is {{ $value | humanizeDuration }} old (C-MSG section 5)"
+          description: "Workflows still complete via polling (up to 120 s extra latency). Check run-notifier and the Temporal frontend NLB."
+          runbook_url: https://runbooks.replicant.internal/observability/callback-delivery
+      - alert: ReplicantControllerReconcileErrors
+        expr: sum(rate(controller_runtime_reconcile_errors_total{controller="agentrun"}[10m])) > 0.1
+        for: 10m
+        labels: {severity: page, owner: ws-02}
+        annotations:
+          summary: "agentrun-controller reconcile errors above 0.1/s"
+          runbook_url: https://runbooks.replicant.internal/observability/controller
+      - alert: ReplicantRunnerQuotaSaturation
+        # XD-FIX-R1-055 (WS-02 18:40Z): exactly this expression; outcome enum per runner-service.md section 9.
+        expr: sum by (tenant) (increase(replicant_runner_runs_created_total{outcome="quota_exceeded"}[15m])) > 0
+        for: 15m
+        labels: {severity: ticket, owner: ws-02}
+        annotations:
+          summary: "{{ $labels.tenant }} is hitting its concurrent-run quota (jobs show waiting_capacity)"
+          runbook_url: https://runbooks.replicant.internal/observability/capacity
+      - alert: ReplicantSandboxPoolPending
+        expr: sum(replicant_controller_agentruns{phase="Pending"}) > 20
+        for: 10m
+        labels: {severity: page, owner: ws-02}
+        annotations:
+          summary: "{{ $value }} AgentRuns pending for 10 minutes (Karpenter capacity or RuntimeClass node pools)"
+          runbook_url: https://runbooks.replicant.internal/observability/capacity
+
+  # ------------------------------------------------------------------------------------------------------------
+  # Temporal
+  # ------------------------------------------------------------------------------------------------------------
+  - name: replicant-temporal
+    rules:
+      - alert: TemporalWorkflowTaskBacklog
+        expr: max by (task_queue) (approximate_backlog_age_seconds{namespace=~"replicant-.+",task_queue=~"replicant-.+"}) > 60
+        for: 5m
+        labels: {severity: page, owner: ws-01}
+        annotations:
+          summary: "Temporal task queue {{ $labels.task_queue }} backlog older than 60 s"
+          description: "Workers for the pinned deployment version may be missing or saturated (temporal_worker_task_slots_available)."
+          runbook_url: https://runbooks.replicant.internal/observability/temporal-backlog
+      - alert: TemporalNoPollerTasks
+        expr: sum by (task_queue) (increase(no_poller_tasks{namespace=~"replicant-.+"}[10m])) > 0
+        for: 10m
+        labels: {severity: page, owner: ws-01}
+        annotations:
+          summary: "Tasks added to {{ $labels.task_queue }} with no recent poller (a pinned worker version may have been drained too early)"
+          runbook_url: https://runbooks.replicant.internal/observability/temporal-backlog
+      - alert: TemporalPersistenceErrors
+        expr: sum(rate(persistence_errors[5m])) > 1
+        for: 10m
+        labels: {severity: page, owner: ws-10}
+        annotations:
+          summary: "Temporal persistence errors above 1/s"
+          runbook_url: https://runbooks.replicant.internal/observability/temporal-persistence
+      - alert: TemporalServiceErrors
+        expr: |
+          sum by (operation) (rate(service_error_with_type{error_type!~"(NotFound|WorkflowExecutionAlreadyStarted|WorkflowNotReady|NamespaceNotFound)"}[5m]))
+          / clamp_min(sum by (operation) (rate(service_requests[5m])), 1e-9) > 0.05
+        for: 10m
+        labels: {severity: ticket, owner: ws-01}
+        annotations:
+          summary: "Temporal {{ $labels.operation }} error ratio above 5%"
+          runbook_url: https://runbooks.replicant.internal/observability/temporal-errors
+      - alert: TemporalWorkflowTaskScheduleToStartHigh
+        expr: |
+          histogram_quantile(0.95, sum by (le, task_queue) (rate(temporal_workflow_task_schedule_to_start_latency_bucket{namespace=~"replicant-.+"}[5m]))) > 2000
+        for: 10m
+        labels: {severity: ticket, owner: ws-01}
+        annotations:
+          summary: "Workflow task schedule-to-start p95 above 2 s on {{ $labels.task_queue }} (Python SDK histograms are in milliseconds)"
+          runbook_url: https://runbooks.replicant.internal/observability/temporal-backlog
+
+  # ------------------------------------------------------------------------------------------------------------
+  # Redaction, leak detection, telemetry pipeline health
+  # ------------------------------------------------------------------------------------------------------------
+  - name: replicant-telemetry-safety
+    rules:
+      - alert: ReplicantSecretLeakDetected
+        expr: sum by (source, rule) (increase(replicant_leak_scanner_findings_total[15m])) > 0
+        labels: {severity: page, owner: ws-09}
+        annotations:
+          summary: "leak-scanner found a {{ $labels.rule }} secret in {{ $labels.source }} after redaction"
+          description: "Start the leak purge runbook (session-capture.md section 8). Rotate the credential first."
+          runbook_url: https://runbooks.replicant.internal/security/leak-purge
+      - alert: ReplicantRedactionCanaryLeak
+        expr: sum by (sink) (increase(replicant_redaction_canary_leaks_total[1h])) > 0
+        labels: {severity: page, owner: ws-08}
+        annotations:
+          summary: "The daily redaction canary job found a planted fake secret unredacted in {{ $labels.sink }}"
+          runbook_url: https://runbooks.replicant.internal/observability/redaction-canary
+      - alert: ReplicantRedactionCanaryMissing
+        expr: time() - max(replicant_redaction_canary_last_success_timestamp_seconds) > 2 * 86400
+        labels: {severity: ticket, owner: ws-08}
+        annotations:
+          summary: "The redaction canary has not completed successfully for 2 days"
+          runbook_url: https://runbooks.replicant.internal/observability/redaction-canary
+      - alert: ReplicantRedactionErrors
+        expr: sum by (sink) (increase(replicant_redaction_errors_total[15m])) > 0
+        labels: {severity: page, owner: ws-08}
+        annotations:
+          summary: "Redactor errors in {{ $labels.sink }}: content was dropped rather than shipped (fail-closed)"
+          runbook_url: https://runbooks.replicant.internal/observability/redaction-errors
+      - alert: ReplicantSecondPassRedactions
+        # Both Alloy secretfilters use origin_label "service"; sandbox services are replicant-sandbox* (R1-203).
+        expr: sum by (name) (increase(loki_secretfilter_secrets_redacted_by_category_total{origin=~"replicant-sandbox.*"}[1h])) > 0
+        for: 5m
+        labels: {severity: ticket, owner: ws-08}
+        annotations:
+          summary: "Second-pass redaction caught {{ $labels.name }} secrets the sandbox uploader missed"
+          description: "Add the case to redaction/tests/corpus.yaml and fix the ruleset; the S3 transcript copy may need a purge."
+          runbook_url: https://runbooks.replicant.internal/observability/redaction-errors
+      - alert: ReplicantForbiddenMetricLabel
+        # Alloy marks series with forbidden_label=<key> before dropping the identifier (CCR-08-07).
+        expr: count by (__name__, forbidden_label) ({forbidden_label!=""}) > 0
+        for: 5m
+        labels: {severity: ticket, owner: ws-08}
+        annotations:
+          summary: "{{ $labels.__name__ }} carried {{ $labels.forbidden_label }} as a label (C-IDS section 11); Alloy dropped it"
+          runbook_url: https://runbooks.replicant.internal/observability/cardinality
+      - alert: ReplicantLangfuseIngestLag
+        expr: max(replicant_telemetry_probe_lag_seconds{sink="langfuse"}) > 300
+        for: 10m
+        labels: {severity: ticket, owner: ws-08}
+        annotations:
+          summary: "Langfuse shows probe spans {{ $value | humanizeDuration }} after emission"
+          runbook_url: https://runbooks.replicant.internal/observability/langfuse-ingest
+      - alert: ReplicantTelemetryProbeFailing
+        expr: min by (sink) (replicant_telemetry_probe_success) == 0
+        for: 15m
+        labels: {severity: ticket, owner: ws-08}
+        annotations:
+          summary: "Synthetic telemetry probe cannot find its marker in {{ $labels.sink }}"
+          runbook_url: https://runbooks.replicant.internal/observability/pipeline-health
+      - alert: AlloyExporterFailures
+        expr: sum by (cluster, exporter) (rate(otelcol_exporter_send_failed_spans_total[10m])) > 10
+        for: 10m
+        labels: {severity: ticket, owner: ws-08}
+        annotations:
+          summary: "Alloy exporter {{ $labels.exporter }} in {{ $labels.cluster }} failing to send spans"
+          runbook_url: https://runbooks.replicant.internal/observability/pipeline-health
+      - alert: LokiDiscardedSamples
+        expr: sum by (tenant, reason) (rate(loki_discarded_samples_total[10m])) > 1
+        for: 15m
+        labels: {severity: ticket, owner: ws-08}
+        annotations:
+          summary: "Loki discarding lines for tenant {{ $labels.tenant }} ({{ $labels.reason }})"
+          description: "rate_limited on tenant sandbox usually means a sandbox log flood; the Alloy stage.limit should have caught it."
+          runbook_url: https://runbooks.replicant.internal/observability/pipeline-health
+      - alert: ReplicantLangfuseRetentionSweepBehind
+        expr: time() - max(replicant_langfuse_retention_last_success_timestamp_seconds) > 3 * 86400
+        labels: {severity: ticket, owner: ws-08}
+        annotations:
+          summary: "Langfuse retention sweeper has not completed for 3 days; traces older than 90 days are accumulating"
+          runbook_url: https://runbooks.replicant.internal/observability/langfuse-retention
+
+  # ------------------------------------------------------------------------------------------------------------
+  # Release attribution (XD-07-07) and security-relevant run failures (C-CRD 2.3.0 section 4)
+  # ------------------------------------------------------------------------------------------------------------
+  - name: replicant-release-attribution
+    rules:
+      - record: replicant:job_failure_by_version:ratio1h
+        expr: |
+          sum by (deployment_version) (increase(replicant_jobs_terminal_total{outcome="failed"}[1h]))
+          / clamp_min(sum by (deployment_version) (increase(replicant_jobs_terminal_total[1h])), 1)
+      - alert: ReplicantJobFailureRateByVersion
+        expr: |
+          replicant:job_failure_by_version:ratio1h > 0.25
+          and sum by (deployment_version) (increase(replicant_jobs_terminal_total[1h])) >= 8
+        for: 15m
+        labels: {severity: page, owner: ws-06}
+        annotations:
+          summary: "Worker version {{ $labels.deployment_version }} fails {{ $value | humanizePercentage }} of its jobs"
+          description: "Open the releases page focused on failures to see the bundle behind this version and roll it back."
+          releases_url: "https://app.replicant.internal/releases?focus=failures&deployment_version={{ $labels.deployment_version }}"
+          runbook_url: https://runbooks.replicant.internal/observability/release-rollback
+      - alert: ReplicantRunSecurityViolation
+        expr: sum by (tenant) (increase(replicant_controller_phase_transitions_total{phase="Failed",reason="SecurityViolation"}[5m])) > 0
+        labels: {severity: page, owner: ws-09}
+        annotations:
+          summary: "A run in tenant {{ $labels.tenant }} was terminated by security automation (SecurityViolation)"
+          runbook_url: https://runbooks.replicant.internal/security/security-violation
+      - alert: ReplicantRunInputsInvalid
+        expr: sum by (tenant) (increase(replicant_controller_phase_transitions_total{phase="Failed",reason="InputsFetchFailed"}[30m])) > 0
+        labels: {severity: ticket, owner: ws-01}
+        annotations:
+          summary: "Run inputs failed digest verification in {{ $labels.tenant }} (workflow staging bug, WS-03 exit 40)"
+          runbook_url: https://runbooks.replicant.internal/observability/run-inputs-invalid
+
+  # ------------------------------------------------------------------------------------------------------------
+  # Alerts cited by other sections (R1-195). Producer metrics named in telemetry-model.md section 8 and the
+  # XD-FIX-R1-195 / XD-FIX-R1-196 entries.
+  # ------------------------------------------------------------------------------------------------------------
+  - name: replicant-cited-orchestration
+    rules:
+      - alert: ReplicantPinnedVersionNoPollers
+        # Open pinned workflows per worker version with no polling worker of that version. The gauge is emitted by
+        # replicant-worker pods of that version (XD-W2-01-01), so it stops when they are gone: the last value is kept
+        # for 1 h with max_over_time, which is the window in which this alert can catch a drained-too-early version.
+        expr: |
+          max by (deployment_version) (max_over_time(replicant_worker_pinned_open_workflows[1h])) > 0
+          unless on (deployment_version) (sum by (deployment_version) (temporal_num_pollers) > 0)
+        for: 5m
+        labels: {severity: page, owner: ws-01}
+        annotations:
+          summary: "Worker version {{ $labels.deployment_version }} has open pinned workflows and no pollers"
+          runbook_url: https://runbooks.replicant.internal/orchestration/pinned-version-no-pollers
+      - alert: ReplicantWorkflowTaskFailures
+        expr: sum by (task_queue) (rate(temporal_workflow_task_execution_failed{namespace=~"replicant-.+"}[10m])) > 0
+        for: 10m
+        labels: {severity: page, owner: ws-01}
+        annotations:
+          summary: "Workflow tasks are failing on {{ $labels.task_queue }} (non-determinism or a worker bug)"
+          runbook_url: https://runbooks.replicant.internal/orchestration/workflow-task-failures
+      - alert: ReplicantCodecTenantUnknown
+        expr: sum(increase(replicant_codec_unknown_tenant_total[10m])) > 0
+        labels: {severity: page, owner: ws-01}
+        annotations:
+          summary: "The tenant payload codec was asked to encode for an unregistered tenant"
+          runbook_url: https://runbooks.replicant.internal/orchestration/codec-tenant-unknown
+      - alert: ReplicantProjectionBacklog
+        expr: max(approximate_backlog_age_seconds{task_queue="replicant-projections"}) > 300
+        for: 5m
+        labels: {severity: page, owner: ws-07}
+        annotations:
+          summary: "projection.apply activities are waiting more than 5 minutes (replicant Postgres or projector down)"
+          runbook_url: https://runbooks.replicant.internal/observability/projection-lag
+  - name: replicant-cited-execution
+    rules:
+      - alert: ReplicantWorkspaceLimitNotEnforced
+        expr: sum by (isolation) (increase(replicant_controller_workspace_guard_failures_total[30m])) > 0
+        labels: {severity: page, owner: ws-02}
+        annotations:
+          summary: "workspace-guard found the hard workspace limit not in force on {{ $labels.isolation }} (runs fail closed)"
+          runbook_url: https://runbooks.replicant.internal/execution/workspace-limit
+      - alert: ReplicantWorkspaceHardLimitBypassed
+        expr: sum by (isolation) (increase(replicant_controller_workspace_evictions_total[1h])) > 0
+        labels: {severity: page, owner: ws-02}
+        annotations:
+          summary: "kubelet evicted a sandbox for emptyDir overrun on {{ $labels.isolation }}: the hard limit did not hold"
+          runbook_url: https://runbooks.replicant.internal/execution/workspace-limit
+      - alert: ReplicantWorkspaceNRIFailures
+        expr: sum by (isolation) (increase(replicant_workspace_nri_errors_total[15m])) > 0
+        for: 5m
+        labels: {severity: page, owner: ws-02}
+        annotations:
+          summary: "The workspace NRI plugin is failing container creation on {{ $labels.isolation }}"
+          runbook_url: https://runbooks.replicant.internal/execution/workspace-limit
+  - name: replicant-cited-gateway
+    rules:
+      - alert: ReplicantGatewayStateUnavailable
+        expr: sum(increase(replicant_gateway_state_errors_total{reason!="revocation_feed"}[5m])) > 0
+        for: 5m
+        labels: {severity: page, owner: ws-03}
+        annotations:
+          summary: "replicant-gateway-shim cannot reach its budget state store (503 gateway_state_unavailable)"
+          runbook_url: https://runbooks.replicant.internal/gateway/state-unavailable
+      - alert: ReplicantGatewayUpstreamDown
+        expr: |
+          sum(rate(replicant_gateway_upstream_errors_total[5m]))
+          / clamp_min(sum(rate(replicant_gateway_requests_total[5m])), 1e-9) > 0.5
+        for: 5m
+        labels: {severity: page, owner: ws-03}
+        annotations:
+          summary: "More than half of model requests fail upstream (enterprise gateway down)"
+          runbook_url: https://runbooks.replicant.internal/gateway/upstream-down
+      - alert: ReplicantCostReconciliationDrift
+        expr: max(replicant_cost_reconciliation_drift_ratio) > 0.02
+        labels: {severity: ticket, owner: ws-03}
+        annotations:
+          summary: "Shim usage differs from enterprise gateway billing by {{ $value | humanizePercentage }}"
+          runbook_url: https://runbooks.replicant.internal/gateway/cost-reconciliation
+      - alert: ReplicantRegistryPublishFailed
+        expr: sum(increase(replicant_registry_publish_requests_total{outcome="error"}[30m])) > 0
+        labels: {severity: ticket, owner: ws-03}
+        annotations:
+          summary: "Registry publish requests failed; registry heads stay at the last good commit"
+          description: "A registry that is unreachable from CI does not reach this metric; the publish workflow's own failure notification covers that case."
+          runbook_url: https://runbooks.replicant.internal/registry/publish-failed
+  - name: replicant-cited-services
+    rules:
+      - alert: ReplicantMemoryServiceUnavailable
+        expr: |
+          sum(up{namespace="replicant-context", service="memory-service"}) == 0
+          or sum(rate(replicant_http_server_request_duration_seconds_count{service="memory-service",status_code=~"5.."}[5m]))
+             / clamp_min(sum(rate(replicant_http_server_request_duration_seconds_count{service="memory-service"}[5m])), 1e-9) > 0.5
+        for: 5m
+        labels: {severity: page, owner: ws-04}
+        annotations:
+          summary: "memory-service is down or failing most requests"
+          runbook_url: https://runbooks.replicant.internal/memory/service-unavailable
+      - alert: ReplicantGithubDeliveryDead
+        expr: sum(increase(replicant_github_deliveries_total{outcome="dead"}[15m])) > 0
+        labels: {severity: page, owner: ws-07}
+        annotations:
+          summary: "A GitHub webhook delivery exhausted its retries (dead)"
+          runbook_url: https://runbooks.replicant.internal/github/delivery-dead
+      - alert: ReplicantGithubDeliveryUnrecoverable
+        expr: sum(increase(replicant_github_deliveries_total{outcome="unrecoverable"}[1h])) > 0
+        labels: {severity: page, owner: ws-07}
+        annotations:
+          summary: "A GitHub delivery older than 3 days is missing and cannot be redelivered"
+          runbook_url: https://runbooks.replicant.internal/github/delivery-unrecoverable
+  - name: replicant-cited-database
+    rules:
+      - alert: ReplicantDbMigrationFailed
+        expr: increase(kube_job_status_failed{namespace="replicant-control", job_name="replicant-db-migrate"}[15m]) > 0
+        labels: {severity: page, owner: ws-10}
+        annotations:
+          summary: "replicant DB migration failed in {{ $labels.cluster }}"
+          runbook_url: https://runbooks.replicant.internal/data/migration-failed
+      - alert: ReplicantDbSchemaIncompatible
+        expr: max by (service) (replicant_db_schema_compat{outcome!="ok"}) > 0
+        for: 5m
+        labels: {severity: page, owner: ws-10}
+        annotations:
+          summary: "{{ $labels.service }} refuses to start: schema revision incompatible"
+          runbook_url: https://runbooks.replicant.internal/data/schema-incompatible
+      - alert: ReplicantDbMigrationRunning30m
+        expr: (time() - kube_job_status_start_time{job_name="replicant-db-migrate"}) > 1800 and kube_job_status_active{job_name="replicant-db-migrate"} > 0
+        labels: {severity: ticket, owner: ws-10}
+        annotations:
+          summary: "replicant DB migration has been running for more than 30 minutes"
+          runbook_url: https://runbooks.replicant.internal/data/migration-running
+      - alert: ReplicantDbConnectionsHigh
+        expr: max by (dimension_DBClusterIdentifier) (aws_rds_database_connections_average{dimension_DBClusterIdentifier=~"replicant-.+"}) > 750
+        for: 10m
+        labels: {severity: ticket, owner: ws-10}
+        annotations:
+          summary: "Aurora cluster {{ $labels.dimension_DBClusterIdentifier }} has more than 750 connections"
+          runbook_url: https://runbooks.replicant.internal/data/connections-high
+      - alert: ReplicantDbPartitionRunwayLow
+        expr: min by (kind) (replicant_db_partition_runway_months) < 2
+        for: 30m
+        labels: {severity: page, owner: ws-10}
+        annotations:
+          summary: "Partitioned table {{ $labels.kind }} has fewer than 2 future partitions"
+          runbook_url: https://runbooks.replicant.internal/data/partition-runway
+  - name: replicant-audit-export
+    rules:
+      - alert: ReplicantAuditExportLagging
+        expr: |
+          max by (kind) (replicant_audit_export_lag_seconds{kind="events"}) > 600
+          or max by (kind) (replicant_audit_export_lag_seconds{kind="history"}) > 7200
+        for: 5m
+        labels: {severity: page, owner: ws-08}
+        annotations:
+          summary: "audit-exporter loop {{ $labels.kind }} is behind (audit RPO at risk)"
+          runbook_url: https://runbooks.replicant.internal/observability/audit-export-lagging
+      - alert: ReplicantAuditPartitionExportMissing
+        expr: day_of_month() >= 3 and on() absent(replicant_audit_partition_export_last_month_recorded == 1)
+        for: 1h
+        labels: {severity: ticket, owner: ws-08}
+        annotations:
+          summary: "No recorded audit partition export for last month"
+          runbook_url: https://runbooks.replicant.internal/observability/audit-partition-export
+  - name: replicant-release
+    rules:
+      # WS-07 architecture.md section 9 (XD-FIX-R1-5.1-release-alert), loaded with one correction: the baseline
+      # comparison needs "on (env) group_left ()" because the left side is grouped by (env, bundle) and the right by
+      # (env); as written in WS-07 the comparison matches nothing and the alert can never fire (promtool test
+      # in replicant-rules.test.yaml). env is the Mimir external label (empty inside the ruler query).
+      - alert: ReplicantReleaseFailureSpike
+        expr: |
+          (
+            sum by (env, bundle) (increase(replicant_jobs_terminal_total{outcome="failed", release_cohort!~"eval|shadow"}[1h]))
+            /
+            clamp_min(sum by (env, bundle) (increase(replicant_jobs_terminal_total{release_cohort!~"eval|shadow"}[1h])), 1)
+          )
+          > on (env) group_left ()
+          2 * (
+            sum by (env) (increase(replicant_jobs_terminal_total{outcome="failed", release_cohort="default"}[7d]))
+            /
+            clamp_min(sum by (env) (increase(replicant_jobs_terminal_total{release_cohort="default"}[7d])), 1)
+          )
+          and on (env, bundle)
+          sum by (env, bundle) (increase(replicant_jobs_terminal_total{release_cohort!~"eval|shadow"}[1h])) >= 10
+        for: 15m
+        labels:
+          severity: page
+          team: replicant-release
+          owner: ws-07
+        annotations:
+          summary: "Bundle {{ $labels.bundle }} failure rate is more than twice the 7-day default baseline"
+          ui: "/releases?focus=failures&bundle={{ $labels.bundle }}"
+          runbook_url: https://replicant.acme.example.com/docs/runbooks/release-failure-spike
+  - name: replicant-wave2-cited
+    rules:
+      # WS-04 curation-ui.md section 6 (XD-FIX-R2-052); routed to the replicant-admins channel (D-25).
+      - alert: ReplicantMemoryCandidatesExpiring
+        expr: sum by (tenant) (increase(replicant_memory_candidates_expired_unreviewed_total[7d])) > 20
+        for: 1h
+        labels: {severity: ticket, owner: ws-04, audience: replicant-admins}
+        annotations:
+          summary: "{{ $value }} feedback memory candidates in {{ $labels.tenant }} expired unreviewed in the last 7 days"
+          runbook_url: https://runbooks.replicant.internal/memory/candidates-expiring
+      - alert: ReplicantMemoryQueueAgeSLO
+        expr: max by (tenant) (replicant_memory_candidate_age_p90_seconds) > 14 * 86400
+        for: 1h
+        labels: {severity: ticket, owner: ws-04, audience: replicant-admins}
+        annotations:
+          summary: "p90 age of open memory candidates in {{ $labels.tenant }} exceeds 14 days"
+          runbook_url: https://runbooks.replicant.internal/memory/queue-age
+      - alert: ReplicantMemoryFlagsOverdue
+        expr: sum by (tenant) (replicant_memory_flags_overdue) > 0
+        for: 15m
+        labels: {severity: ticket, owner: ws-04, audience: replicant-admins}
+        annotations:
+          summary: "{{ $value }} memory flag(s) or correction request(s) in {{ $labels.tenant }} are past their SLA"
+          runbook_url: https://runbooks.replicant.internal/memory/flags-overdue
+      # WS-07 architecture.md section 2.9 (XD-FIX-R2-016-WS07): mirror generation ahead of the table for > 5 min.
+      - alert: ReplicantKillSwitchMirrorDrift
+        expr: max(replicant_kill_switch_mirror_generation) - max(replicant_kill_switch_recorded_generation) > 0
+        for: 5m
+        labels: {severity: page, owner: ws-07}
+        annotations:
+          summary: "Kill-switch mirror generation is ahead of tenancy.kill_switches (reconciler back-fill not done)"
+          runbook_url: https://runbooks.replicant.internal/control-plane/kill-switch-mirror-drift
+      # WS-01 graphs/README.md section 2.2 (XD-FIX-R2-010): jobs paused on an exhausted dependency.
+      - alert: ReplicantJobsHeldOnDependency
+        expr: sum by (tenant) (replicant_jobs_held{kind="dependency"}) > 0
+        for: 30m
+        labels: {severity: ticket, owner: ws-01}
+        annotations:
+          summary: "{{ $value }} job(s) in {{ $labels.tenant }} are paused on an unavailable dependency (give up after 72 h)"
+          runbook_url: https://runbooks.replicant.internal/orchestration/dependency-hold
+      # WS-04 context-budget.md section 5 and memory-evals.md (XD-W2-04-03); replicant-admins channel.
+      - alert: ReplicantContextAssemblySlow
+        expr: |
+          histogram_quantile(0.95, sum by (le, reason) (rate(replicant_context_activity_seconds_bucket{reason="memory.create_snapshot"}[10m]))) > 2
+          or histogram_quantile(0.95, sum by (le, reason) (rate(replicant_context_activity_seconds_bucket{reason="context.build_briefing"}[10m]))) > 5
+          or histogram_quantile(0.95, sum by (le, reason) (rate(replicant_context_activity_seconds_bucket{reason="context.stage_inputs"}[10m]))) > 4
+        for: 10m
+        labels: {severity: ticket, owner: ws-04, audience: replicant-admins}
+        annotations:
+          summary: "Context activity {{ $labels.reason }} p95 is over its budget (sandbox-ready SLO share)"
+          runbook_url: https://runbooks.replicant.internal/memory/context-assembly-slow
+      - alert: ReplicantMemoryAnnRecallLow
+        expr: min by (tenant) (replicant_memory_ann_recall) < 0.90
+        for: 5m
+        labels: {severity: ticket, owner: ws-04, audience: replicant-admins}
+        annotations:
+          summary: "Nightly ANN recall@10 for {{ $labels.tenant }} is {{ $value }} (target 0.95, alert below 0.90)"
+          runbook_url: https://runbooks.replicant.internal/memory/ann-recall-low
+      # WS-03 gateway.md sections 5.3 and 6.1 (XD-W2-03-03).
+      - alert: ReplicantGatewayRevocationFeedStale
+        # Polls run every 10 s; three consecutive failures (30 s) mean revocations may not be applied in time.
+        expr: sum(increase(replicant_gateway_state_errors_total{reason="revocation_feed"}[1m])) >= 3
+        for: 1m
+        labels: {severity: page, owner: ws-03}
+        annotations:
+          summary: "replicant-gateway-shim could not poll the run-grant revocation feeds for more than 3 intervals"
+          runbook_url: https://runbooks.replicant.internal/gateway/revocation-feed-stale
+      - alert: ReplicantGatewayPlatformCeiling
+        expr: sum(increase(replicant_gateway_budget_denials_total{reason="platform"}[5m])) > 0
+        labels: {severity: page, owner: ws-03}
+        annotations:
+          summary: "The gateway is refusing requests at the platform spend ceiling (402 platform)"
+          runbook_url: https://runbooks.replicant.internal/gateway/platform-ceiling
+      # WS-03 gateway.md sections 6.2a and 11 (R1V-051): series replicant_gateway_requests_total{reason}.
+      - alert: ReplicantGatewayUsageUnparsed
+        expr: sum by (tenant) (increase(replicant_gateway_requests_total{reason="usage_unparsed_limit"}[5m])) > 0
+        labels: {severity: page, owner: ws-03}
+        annotations:
+          summary: "Gateway is refusing admissions for {{ $labels.tenant }}: provider usage cannot be parsed (usage_unparsed_limit)"
+          runbook_url: https://runbooks.replicant.internal/gateway/usage-unparsed
+      - alert: ReplicantGatewayRunPolicyMissing
+        # The workflow re-registers a missing run policy within one poll interval; persisting 10 min is a fault.
+        expr: sum(increase(replicant_gateway_requests_total{reason="run_policy_missing"}[5m])) > 0
+        for: 10m
+        labels: {severity: ticket, owner: ws-03}
+        annotations:
+          summary: "Gateway keeps answering 503 run_policy_missing (run policies not re-registered)"
+          runbook_url: https://runbooks.replicant.internal/gateway/run-policy-missing
+      # WS-09 threat-model T-DOW-07 (R1V-169, XD-W3-R1V-169). The authoritative quota alarms are CloudWatch alarms
+      # against SERVICE_QUOTA() (config/aws/kms-quota-alarms.yaml); this Mimir rule mirrors them for dashboards and
+      # Alertmanager routing, using static quota values. KMS shared request quota at 30% (Sign: 1,000 RPS default). The quota
+      # values are the account's Service Quotas (symmetric cryptographic operations: 100,000 RPS in us-east-1
+      # [unverified: re-check in Service Quotas]); override them here if raised. Per-minute Sum / 60 = RPS.
+      - alert: ReplicantKmsQuotaUsageHigh
+        expr: |
+          max by (dimension_Resource) (aws_usage_call_count_sum{dimension_Service="KMS", dimension_Resource="Sign"}) / 60 > 0.30 * 1000
+          or max by (dimension_Resource) (aws_usage_call_count_sum{dimension_Service="KMS", dimension_Resource="GenerateDataKey"}) / 60 > 0.30 * 100000
+        for: 5m
+        labels: {severity: page, owner: ws-09}
+        annotations:
+          summary: "KMS {{ $labels.dimension_Resource }} is above 30% of the shared request quota (credential issuance at risk)"
+          runbook_url: https://runbooks.replicant.internal/security/kms-quota
+      # XD-W3-R1V-169: any KMS throttling seen by a replicant SDK client pages replicant-security.
+      - alert: ReplicantKmsThrottled
+        expr: sum by (service, type) (increase(replicant_kms_throttled_total[5m])) > 0
+        labels: {severity: page, owner: ws-09}
+        annotations:
+          summary: "{{ $labels.service }} was throttled by KMS ({{ $labels.type }}); credential issuance or payload encoding at risk"
+          runbook_url: https://runbooks.replicant.internal/security/kms-throttled

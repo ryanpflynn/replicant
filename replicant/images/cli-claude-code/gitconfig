@@ -1,0 +1,15 @@
+# /opt/replicant/etc/gitconfig: the read-only GIT_CONFIG_GLOBAL for the entrypoint's hardened git (cli-invocation.md §4.8)
+[core]
+	hooksPath = /dev/null
+	fsmonitor = false
+	pager = cat
+[safe]
+	directory = /workspace/repo
+[protocol]
+	version = 2
+[advice]
+	detachedHead = false
+[init]
+	defaultBranch = main
+[credential]
+	helper =

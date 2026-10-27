@@ -1,0 +1,130 @@
+// cloudwatch-metrics.alloy - Grafana Alloy v1.21.x, single-replica Deployment "alloy-cloudwatch" in the CORE cluster,
+// namespace observability. Owner WS-08. Pod Identity role replicant-<env>-alloy-cloudwatch with
+// cloudwatch:GetMetricData, cloudwatch:ListMetrics, tag:GetResources (read-only; WS-09 reviews).
+//
+// Imports the AWS-side metrics that WS-10's alerts use (ReplicantDbConnectionsHigh, Aurora replica lag, ElastiCache
+// for Langfuse) into Mimir tenant "replicant". Series names follow YACE conventions, for example
+// aws_rds_database_connections_average{dimension_DBClusterIdentifier="replicant-prod"}
+// [unverified: exact metric and label naming of prometheus.exporter.cloudwatch output; checked against the
+// component's YACE heritage only; the rule's selector is adjusted in the first staging deploy if it differs].
+// Required environment: AWS_REGION, REPLICANT_ENV, MIMIR_PUSH_URL, MIMIR_TLS_DIR.
+
+logging {
+  level  = "info"
+  format = "json"
+}
+
+prometheus.exporter.cloudwatch "aws" {
+  sts_region = sys.env("AWS_REGION")
+
+  discovery {
+    type        = "AWS/RDS"
+    regions     = [sys.env("AWS_REGION")]
+    search_tags = {
+      "replicant-env" = sys.env("REPLICANT_ENV"),
+    }
+
+    metric {
+      name       = "DatabaseConnections"
+      statistics = ["Average", "Maximum"]
+      period     = "1m"
+    }
+
+    metric {
+      name       = "AuroraReplicaLag"
+      statistics = ["Maximum"]
+      period     = "1m"
+    }
+
+    metric {
+      name       = "ServerlessDatabaseCapacity"
+      statistics = ["Average"]
+      period     = "1m"
+    }
+  }
+
+  discovery {
+    type        = "AWS/ElastiCache"
+    regions     = [sys.env("AWS_REGION")]
+    search_tags = {
+      "replicant-env" = sys.env("REPLICANT_ENV"),
+    }
+
+    metric {
+      name       = "DatabaseMemoryUsagePercentage"
+      statistics = ["Maximum"]
+      period     = "1m"
+    }
+
+    metric {
+      name       = "Evictions"
+      statistics = ["Sum"]
+      period     = "1m"
+    }
+  }
+
+  // KMS request-rate quota usage (WS-09 T-DOW-07, R1V-169): AWS/Usage CallCount for the shared Sign quota (ECC and
+  // RSA Sign share 1,000 RPS by default) and the symmetric cryptographic operations used by S3 and the payload codec.
+  // Usage metrics carry no tags, so they are read statically per dimension set. Run in each account that holds
+  // replicant KMS keys (core and exec).
+  static "kms_sign" {
+    regions    = [sys.env("AWS_REGION")]
+    namespace  = "AWS/Usage"
+    dimensions = {
+      "Service"  = "KMS",
+      "Type"     = "API",
+      "Resource" = "Sign",
+      "Class"    = "None",
+    }
+
+    metric {
+      name       = "CallCount"
+      statistics = ["Sum"]
+      period     = "1m"
+    }
+  }
+
+  static "kms_generate_data_key" {
+    regions    = [sys.env("AWS_REGION")]
+    namespace  = "AWS/Usage"
+    dimensions = {
+      "Service"  = "KMS",
+      "Type"     = "API",
+      "Resource" = "GenerateDataKey",
+      "Class"    = "None",
+    }
+
+    metric {
+      name       = "CallCount"
+      statistics = ["Sum"]
+      period     = "1m"
+    }
+  }
+}
+
+prometheus.scrape "aws" {
+  targets         = prometheus.exporter.cloudwatch.aws.targets
+  job_name        = "cloudwatch"
+  scrape_interval = "60s"
+  forward_to      = [prometheus.remote_write.mimir.receiver]
+}
+
+prometheus.remote_write "mimir" {
+  endpoint {
+    url     = sys.env("MIMIR_PUSH_URL")
+    headers = {
+      "X-Scope-OrgID" = "replicant",
+    }
+
+    tls_config {
+      ca_file   = sys.env("MIMIR_TLS_DIR") + "/ca.crt"
+      cert_file = sys.env("MIMIR_TLS_DIR") + "/tls.crt"
+      key_file  = sys.env("MIMIR_TLS_DIR") + "/tls.key"
+    }
+  }
+
+  external_labels = {
+    env     = sys.env("REPLICANT_ENV"),
+    cluster = "core",
+  }
+}

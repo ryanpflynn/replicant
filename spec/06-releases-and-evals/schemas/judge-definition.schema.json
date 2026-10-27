@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.replicant.example.com/evals/judge-definition/v1.json",
+  "title": "JudgeDefinition",
+  "description": "WS-06. A versioned LLM judge (eval-harness.md section 4.2). Authored in the replicant-config repo under evals/judges/<name>.yaml, published by the eval-config CI into evals.judges (writer eval-worker via its admin API). Judge definitions are deliberately NOT part of Release Bundles: a judge measures bundles and must stay fixed across both arms of a comparison. digest = sha256(JCS(document)). A comparison is valid only if both arms were scored by the same judge (name, version, digest).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {"const": "replicant.example.com/v1"},
+    "kind": {"const": "JudgeDefinition"},
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "owners"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$", "maxLength": 63},
+        "version": {"type": "integer", "minimum": 1},
+        "owners": {"type": "array", "minItems": 1, "items": {"type": "string", "maxLength": 200}},
+        "description": {"type": "string", "maxLength": 2000}
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rubric", "mode", "jurors", "prompt", "output", "aggregation", "inputs", "calibration"],
+      "properties": {
+        "rubric": {"type": "string", "enum": ["plan_quality", "diff_quality", "pr_description", "comment_addressal", "review_usefulness", "docs_quality"]},
+        "mode": {
+          "description": "pointwise: score one output against the rubric. pairwise: compare the two arms' outputs for the same task; both orders are scored and a preference counts only if consistent across orders.",
+          "type": "string", "enum": ["pointwise", "pairwise"]
+        },
+        "jurors": {
+          "description": "One or more models. With two or more, the case score is the aggregation of juror scores, and juror disagreement is recorded. At least one juror must be from a different model family than every agent model in the bundles under comparison (self-preference guard), enforced at comparison start.",
+          "type": "array", "minItems": 1, "maxItems": 3,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["gateway_model_id", "family", "effort"],
+            "properties": {
+              "gateway_model_id": {"type": "string", "maxLength": 200, "not": {"pattern": "latest$"}},
+              "family": {"type": "string", "enum": ["anthropic", "openai", "other"]},
+              "effort": {"description": "Pinned explicitly because provider defaults differ by model (e.g. Claude Opus 5.5 defaults to medium).", "type": "string", "enum": ["low", "medium", "high", "xhigh", "max"]},
+              "use_batch": {"description": "Reserved. The gateway has no batch path in v1 (eval-harness.md §3.4, XD-FIX-R2-063), so this must be false; a later gateway version may enable it.", "const": false, "default": false}
+            }
+          }
+        },
+        "prompt": {
+          "description": "Langfuse prompt pinned by version (never by label) plus its digest, verified at use exactly like bundle prompts.",
+          "type": "object", "additionalProperties": false, "required": ["name", "version", "digest"],
+          "properties": {
+            "name": {"type": "string", "pattern": "^judge/[a-z0-9][a-z0-9._-]{0,150}$"},
+            "version": {"type": "integer", "minimum": 1},
+            "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+          }
+        },
+        "inputs": {
+          "description": "What the judge sees. Candidate outputs are wrapped as untrusted data; the judge is never told which output is the baseline, the reference, or the candidate.",
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": {"type": "string", "enum": ["task_statement", "plan", "diff", "reference_patch_as_one_valid_solution", "pr_description", "review_comments", "review_report", "qa_summary", "docs_render"]}
+        },
+        "output": {
+          "description": "Structured output (JSON schema enforced through output_config.format). Each criterion is an atomic, separately scored property.",
+          "type": "object", "additionalProperties": false, "required": ["criteria"],
+          "properties": {
+            "criteria": {
+              "type": "array", "minItems": 1, "maxItems": 12,
+              "items": {
+                "type": "object", "additionalProperties": false, "required": ["key", "scale"],
+                "properties": {
+                  "key": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,40}$"},
+                  "scale": {"type": "string", "enum": ["binary", "ordinal_1_5", "preference_ab_tie"]},
+                  "langfuse_score_config": {"description": "Langfuse score config id the exported score validates against.", "type": "string", "maxLength": 64}
+                }
+              }
+            }
+          }
+        },
+        "aggregation": {"type": "string", "enum": ["mean_of_criteria", "min_of_criteria", "juror_median"]},
+        "calibration": {
+          "type": "object", "additionalProperties": false,
+          "required": ["anchor_set", "min_weighted_kappa_gating", "min_weighted_kappa_decision", "max_days_since_calibration"],
+          "properties": {
+            "anchor_set": {"description": "Name of the human-labelled anchor set in evals.anchor_sets.", "type": "string", "maxLength": 63},
+            "min_weighted_kappa_gating": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.6},
+            "min_weighted_kappa_decision": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.75},
+            "max_days_since_calibration": {"type": "integer", "minimum": 1, "maximum": 90, "default": 30},
+            "known_negatives": {"description": "Canary items injected into every judge batch; all must score at the scale minimum or the batch is invalid.", "type": "array", "minItems": 3, "items": {"type": "string", "enum": ["empty_diff", "wrong_task_diff", "prompt_injection_in_output", "test_deletion_diff", "verbose_padding"]}}
+          }
+        }
+      }
+    }
+  }
+}

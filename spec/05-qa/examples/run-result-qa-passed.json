@@ -1,0 +1,135 @@
+{
+  "schema": "replicant.run-result/v1",
+  "run_id": "run_ata247zxh0zx4y24bdv2vns95e",
+  "job_id": "job_01m5p7x7r0bt69j0h0fbxepw90",
+  "role": "qa",
+  "outcome": "completed",
+  "summary": "QA passed with warnings: 477 checks, 0 blocking, 1 known flaky test (TestPublisherReconnect, quarantined). Image sha256:9b1c\u20268e0d built; app healthy for 30 s; 3 smoke calls passed.",
+  "outputs": {
+    "qa_report": "tenants/payments/jobs/job_01m5p7x7r0bt69j0h0fbxepw90/runs/run_ata247zxh0zx4y24bdv2vns95e/qa_report/report.json"
+  },
+  "usage": {
+    "wall_seconds": 742.6,
+    "model_calls": 0,
+    "peak_memory_bytes": 7123456000,
+    "peak_workspace_bytes": 19102334976
+  },
+  "role_result": {
+    "schema": "replicant.role-result.qa/v1",
+    "verdict": "pass_with_warnings",
+    "reason_code": "non_blocking_findings",
+    "counts": {
+      "total": 477,
+      "passed": 476,
+      "failed": 0,
+      "flaky": 1,
+      "skipped": 0,
+      "blocking": 0
+    },
+    "by_cause": {
+      "code": 0,
+      "flaky_new": 0,
+      "flaky_known": 1,
+      "pre_existing": 0,
+      "environment": 0,
+      "test_defect": 0,
+      "unknown": 0
+    },
+    "stages": [
+      {
+        "stage": "services",
+        "status": "passed",
+        "duration_seconds": 12.1
+      },
+      {
+        "stage": "stubs",
+        "status": "passed",
+        "duration_seconds": 2.9
+      },
+      {
+        "stage": "install",
+        "status": "passed",
+        "duration_seconds": 31.0
+      },
+      {
+        "stage": "unit",
+        "status": "warning",
+        "duration_seconds": 209.4
+      },
+      {
+        "stage": "seed",
+        "status": "passed",
+        "duration_seconds": 20.2
+      },
+      {
+        "stage": "integration",
+        "status": "passed",
+        "duration_seconds": 228.8
+      },
+      {
+        "stage": "build",
+        "status": "passed",
+        "duration_seconds": 47.0
+      },
+      {
+        "stage": "image_build",
+        "status": "passed",
+        "duration_seconds": 61.7
+      },
+      {
+        "stage": "sbom",
+        "status": "passed",
+        "duration_seconds": 12.2
+      },
+      {
+        "stage": "app_start",
+        "status": "passed",
+        "duration_seconds": 3.1
+      },
+      {
+        "stage": "health",
+        "status": "passed",
+        "duration_seconds": 34.5
+      },
+      {
+        "stage": "smoke",
+        "status": "passed",
+        "duration_seconds": 1.8
+      },
+      {
+        "stage": "shutdown",
+        "status": "passed",
+        "duration_seconds": 1.1
+      }
+    ],
+    "top_failures": [
+      {
+        "stage": "unit",
+        "test_id": "go:github.com/acme-payments/ledger-api/internal/outbox.TestPublisherReconnect",
+        "status": "flaky",
+        "cause": "flaky_known",
+        "rule": "F1",
+        "blocking": false,
+        "message": "outbox_test.go:77: timed out after 5s waiting for reconnect",
+        "file": "internal/outbox/outbox_test.go",
+        "line": 77
+      }
+    ],
+    "subject": {
+      "base_sha": "8c1e4f2a9b7d3c6e5f0a1b2c3d4e5f6a7b8c9d0e",
+      "head_tree_sha": "c71a0e4d9b2f3a5c7e8d0b1f4a6c9e2d3b5f7a8c",
+      "diff_bundle_sha256": "0469c71d220f1c19a5f704645e0008ac64bdd57d45f59418fedd48887d695977"
+    },
+    "image_digest": "sha256:9b1c4e7a0d3f5b8c2e6a9d1f4b7c0e3a6d9f2b5c8e1a4d7f0b3c6e9a2d5f8e0d",
+    "base_pass_performed": false,
+    "budget_exhausted": false,
+    "test_inventory_delta": {
+      "method": "listed",
+      "tests_removed": 0,
+      "tests_skipped_added": 0,
+      "deleted_test_files": 0,
+      "skip_markers_added": 0,
+      "deleted_or_skipped": false
+    }
+  }
+}
