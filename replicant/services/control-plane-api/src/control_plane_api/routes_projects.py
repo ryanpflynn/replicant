@@ -269,10 +269,11 @@ async def put_access(project_id: str, request: Request, body: dict[str, Any] = B
         await conn.execute(text("UPDATE identity.role_binding_versions SET is_current = false WHERE is_current"))
         await conn.execute(text("UPDATE identity.role_binding_versions SET is_current = true WHERE version = :v"),
                            {"v": new})
-        await audit.emit(conn, db, {"event_type": "admin.project_access_changed", "outcome": "success",
+        await audit.emit(conn, db, {"event_type": "admin.role_binding_changed", "outcome": "success",
                                     "tenant_id": row.tenant_id, "actor_principal_id": principal.principal_id,
                                     "target_kind": "project", "target_id": project_id,
-                                    "details": {"reason": reason[:200], "binding_version": new, "bindings": [list(x) for x in clean]}})
+                                    "details": {"reason": reason[:200], "binding_version": new,
+                                                "bindings": [f"{g}:{r}" for g, r in clean][:50]}})
     await request.app.state.auth.rbac.refresh(force=True)
     doc = await _bindings(request, row)
     doc["can_edit"] = True

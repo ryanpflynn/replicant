@@ -597,3 +597,12 @@ User request: "a view of the graph in the UI … a detailed view of what the age
   project binding sees the jobs, gates and PRs of that project's repos (`auth.scope_filter`; gates are filtered through
   their job's `repo_ids`). This replaces CONFIG-D8's tenant-wide lists. Test:
   `test_db_integration.py::test_job_lists_scoped_to_project_bindings`.
+- **CONFIG-D10 (fix 2026-10-27) Project audit events recorded.** Migration `202610270020_audit_projects` registers
+  `admin.project_created`, `admin.project_changed` and `admin.project_config_changed` in `audit.event_types`, running
+  as `audit_owner`. Project access changes emit the existing `admin.role_binding_changed`, with bindings flattened to
+  `group:role` strings. Before this, all four events failed `audit.emit` and were only logged (CONTROL-D6).
+- **CONFIG-D11 (fix 2026-10-27) No lock-out on the first access change.** `rbac.RoleResolver.effective` keeps the
+  dev directory's groups until memberships exist, and keeps the static tenant roles until the current binding version
+  holds tenant- or platform-scope bindings (seed step 09). Before this, a first project-only access change on a fresh
+  install removed every static tenant role, including its author's. Test:
+  `test_first_project_binding_keeps_static_roles_and_audits`.

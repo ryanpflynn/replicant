@@ -118,7 +118,8 @@ class RoleResolver:
         return self.snap.project_of_repo.get(str(repo_id))
 
     def effective(self, p: Principal) -> Principal:
-        """The principal with roles from the DB bindings (users only, once bindings are seeded)."""
+        """The principal with roles from the DB bindings (users only). Static tenant roles stay in effect until the
+        current binding version holds tenant- or platform-scope bindings (seed step 09-projects-rbac)."""
         s = self.snap
         if not s.loaded or not p.is_user or p.roles_source == "db":
             return p
@@ -126,9 +127,12 @@ class RoleResolver:
         hit = self._cache.get(key)
         if hit is not None:
             return hit
-        groups = s.groups_of.get(p.principal_id, frozenset())
+        # Until the seed imports memberships and tenant-level bindings, keep the directory's groups and static tenant
+        # roles: a first project-only access change must not switch everyone (including its author) to no roles.
+        groups = s.groups_of.get(p.principal_id, frozenset()) if s.groups_of else frozenset(p.groups)
+        tenant_from_db = any(b.scope in ("tenant", "platform") for b in s.bindings)
         platform: set[str] = set(p.platform_roles)
-        tenant: dict[str, set[str]] = {}
+        tenant: dict[str, set[str]] = {} if tenant_from_db else {t: set(r) for t, r in p.tenant_roles.items()}
         project: dict[str, set[str]] = {}
         for b in s.bindings:
             if b.group not in groups:

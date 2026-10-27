@@ -410,3 +410,38 @@ async def _scoped_lists(c: Any, seed_h: dict[str, str], su: str) -> None:
     assert (await c.get(f"/v1/jobs/{jb}", headers=frank)).status_code == 404
     ids = {i["job_id"] for i in (await c.get(f"/v1/jobs?q={tag}", headers=erin)).json()["items"]}
     assert ids == {ja, jb}, ids
+
+
+async def test_first_project_binding_keeps_static_roles_and_audits(env):
+    """With no bindings seeded, a first project-only access change must not strip the static tenant roles (erin stays
+    tenant admin, alice can still read jobs), and project/config/access changes land in audit.events."""
+    c, fake, seed_h, *_ = env
+    su = os.environ.get("CTL_SU_DSN")
+    if not su:
+        pytest.skip("CTL_SU_DSN not set")
+    await _reset_bindings(su, baseline=False)
+    try:
+        pid = f"prj_s{secrets.token_hex(3)}"
+        r = await c.post("/v1/tenants/payments/projects", headers=seed_h, json={
+            "project_id": pid, "name": pid, "repos": [{"repo_id": str(700000 + secrets.randbelow(99999)),
+                                                       "full_name": f"acme-payments/{pid}"}]})
+        assert r.status_code == 201, r.text
+        erin = {"X-Replicant-Dev-User": "erin"}
+        for _ in range(2):   # the second write is authorized by the roles in effect after the first
+            r = await c.put(f"/v1/projects/{pid}/access", headers=erin,
+                            json={"bindings": [{"group": "ledger-admins", "role": "project_admin"}], "reason": "first"})
+            assert r.status_code == 200, r.text
+        r = await c.put(f"/v1/projects/{pid}/config", headers={**erin, "If-Match": "0"},
+                        json={"config": {"risk": {"large_change_files": 5}}, "reason": "audit"})
+        assert r.status_code == 200, r.text
+        assert (await c.get("/v1/jobs", headers={"X-Replicant-Dev-User": "alice"})).status_code == 200
+        from sqlalchemy.ext.asyncio import create_async_engine
+        eng = create_async_engine(su)
+        async with eng.begin() as conn:
+            kinds = {r.event_type for r in (await conn.execute(text(
+                "SELECT event_type FROM audit.events WHERE target_id = :p"), {"p": pid})).all()}
+        await eng.dispose()
+        assert {"admin.project_created", "admin.role_binding_changed", "admin.project_config_changed"} <= kinds, kinds
+    finally:
+        await _reset_bindings(su, baseline=False)
+
