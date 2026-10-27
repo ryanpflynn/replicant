@@ -6,7 +6,7 @@
 Records every running container's image ID and start time before the config steps and asserts they are unchanged
 at the end. Steps (project prj_ledger, repo acme-payments/ledger-api):
   0. baseline config (label `replicant`, plan gate off, defaults) written by erin (tenant_admin)
-  1. RBAC: dave (viewer) gets 403 on a config write; frank (project_admin of prj_ledger) gets 403 on
+  1. RBAC: dave (viewer) gets 403 on a config write; frank (project_admin of prj_ledger) gets 404 on
      prj_payments-web and may validate on prj_ledger; carol (linked, no binding) cannot trigger a job
   2. erin changes the trigger label to `replicant-ok`: an issue with the old label starts nothing, one with the new
      label starts job A (base bundle)
@@ -20,16 +20,11 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 import time
 import uuid
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "chaos"))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-import e2e01_v0 as e  # noqa: E402
-from chaos_v0 import reset_repo  # noqa: E402
+import replicant_e2e as e
+from replicant_e2e import reset_repo
 
 PRJ, OTHER = "prj_ledger", "prj_payments-web"
 NEW_LABEL = "replicant-ok"
@@ -199,7 +194,7 @@ def main() -> None:
 
     # 1. RBAC negatives
     put_config({**BASELINE, "gates": {"plan": "always"}}, "dave tries", user="dave", expect=403)
-    put_config({"gates": {"plan": "always"}}, "frank tries the other project", user="frank", project=OTHER, expect=403)
+    put_config({"gates": {"plan": "always"}}, "frank tries the other project", user="frank", project=OTHER, expect=404)
     with e.api("frank") as c:
         r = c.post(f"/v1/projects/{PRJ}/config:validate", json={"config": BASELINE})
         assert r.status_code == 200 and r.json()["valid"], r.text[:200]

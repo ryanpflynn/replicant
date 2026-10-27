@@ -1,16 +1,20 @@
 [project]
 name = "replicant-e2e"
 version = "0.1.0"
-description = "End-to-end drivers against the running local stack (E2E-01-v0)"
+description = "End-to-end drivers against the running local stack, and their shared helpers (replicant_e2e)"
 requires-python = ">=3.12,<3.13"
 dependencies = ["httpx>=0.27", "pytest>=8", "pyyaml>=6", "replicant-ids"]
 
 [tool.uv.sources]
 replicant-ids = { workspace = true }
 
-[tool.uv]
-package = false
-
 [tool.pytest.ini_options]
 testpaths = ["."]
 python_files = ["e2e*.py", "test_*.py"]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["replicant_e2e"]

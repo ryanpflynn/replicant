@@ -11,13 +11,9 @@ from __future__ import annotations
 import sys
 import time
 import uuid
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "chaos"))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-import e2e01_v0 as e  # noqa: E402
-from chaos_v0 import reset_repo  # noqa: E402
+import replicant_e2e as e
+from replicant_e2e import reset_repo
 
 UI = "http://127.0.0.1:8400"
 

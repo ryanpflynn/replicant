@@ -1175,7 +1175,7 @@ source = { editable = "services/control-plane-api/replicant-dev-auth" }
 [[package]]
 name = "replicant-e2e"
 version = "0.1.0"
-source = { virtual = "tests/e2e" }
+source = { editable = "tests/e2e" }
 dependencies = [
     { name = "httpx" },
     { name = "pytest" },

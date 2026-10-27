@@ -25,3 +25,5 @@ node_modules/
 web/**/test-results/
 web/**/playwright-report/
 web/**/screenshots/
+# replicant dev test output
+.test-results/

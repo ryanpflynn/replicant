@@ -27,9 +27,33 @@ def repo(rid: int = 3) -> dict:
             "html_url": "http://git.replicant.localhost:3300/acme-payments/ledger-api"}
 
 
+GITEA_IDS = {"alice": 5, "mallory": 6, "replicant-bot": 7}  # alice is linked (identity.links), mallory is not
+ALICE_PID = "usr_01knk8dfr0fvjc7v0b9vhvkzbp"
+
+
+async def _link_alice() -> None:
+    """Who may trigger comes from identity.links (kind gitea): link alice's Gitea id, as `replicant dev seed` does."""
+    su = os.environ.get("CTL_SU_DSN")
+    if not su:
+        pytest.skip("CTL_SU_DSN not set (needed to seed the identity link)")
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+    eng = create_async_engine(su)
+    async with eng.begin() as conn:
+        await conn.execute(text(
+            "INSERT INTO identity.users (principal_id, okta_sub, user_name, display_name, status) VALUES "
+            "(:p, 'dev|gi-test-alice', 'gi-test-alice@acme.test', 'Alice', 'active') ON CONFLICT DO NOTHING"), {"p": ALICE_PID})
+        await conn.execute(text(
+            "INSERT INTO identity.links (link_id, principal_id, kind, namespace, external_id, login, method, status, "
+            "verified_at) SELECT 'lnk_gitestalice', :p, 'gitea', 'git.replicant.localhost:3300', :e, 'alice', 'dev_seed', "
+            "'active', now() WHERE NOT EXISTS (SELECT 1 FROM identity.links WHERE kind = 'gitea' AND external_id = :e "
+            "AND status = 'active')"), {"p": ALICE_PID, "e": str(GITEA_IDS["alice"])})
+    await eng.dispose()
+
+
 def issue_payload(number: int, rid: int = 3, sender: str = "alice", action: str = "label_updated") -> dict:
     return {"action": action, "number": number, "repository": repo(rid),
-            "sender": {"id": 5, "login": sender, "username": sender},
+            "sender": {"id": GITEA_IDS.get(sender, 99), "login": sender, "username": sender},
             "issue": {"number": number, "title": "Refund ledger entries double-count FX fees", "body": "Repro ...",
                       "labels": [{"id": 1, "name": "replicant"}],
                       "html_url": f"http://git.replicant.localhost:3300/acme-payments/ledger-api/issues/{number}"}}
@@ -110,6 +134,7 @@ async def gi(tmp_path):
                  gitea_webhook_secret_file=str(tmp_path / "hook"), dev_seed_token_file=str(tmp_path / "seed"),
                  control_plane_token_file=str(tmp_path / "cpt"), token_broker_token_file=str(tmp_path / "bt"),
                  control_plane_url="http://cpa", token_broker_url="http://broker")
+    await _link_alice()
     f = Fakes()
     app = create_app(s, cp=ControlPlane(s, transport=httpx.MockTransport(f.cp)),
                      broker=Broker(s, transport=httpx.MockTransport(f.broker)), temporal=FakeTemporal(f),

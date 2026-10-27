@@ -140,7 +140,8 @@ def require(permission: str) -> Any:
     async def dep(request: Request, principal: Principal = Depends(current_principal)) -> Principal:
         ctx: AuthContext = request.app.state.auth
         if not holds_somewhere(ctx, principal, permission):
-            raise ProblemError(404 if permission == "job:read" else 403, "missing_permission")
+            # read routes answer 404 like a resource the caller cannot see (no existence leak, v0 SEC-D2)
+            raise ProblemError(404 if "job:read" in permission.split("|") else 403, "missing_permission")
         return principal
 
     dep.__replicant_permission__ = permission  # type: ignore[attr-defined]

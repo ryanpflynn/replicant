@@ -5,7 +5,7 @@
   start   like make, but print {"job_id"} as soon as the job is acknowledged (for the cancel test)
   finish  JOB_ID: after the UI approved the gate, merge the replicant PR and wait for `succeeded`
 
-Reuses tests/e2e/e2e01_v0.py and tests/chaos/chaos_v0.py (public APIs only; never prints a secret).
+Uses the shared replicant_e2e helpers (tests/e2e/replicant_e2e) (public APIs only; never prints a secret).
 Refuses to reset the repo while another job is still open, so it does not disturb other users of the stack.
 Run from replicant/:  uv run --package replicant-e2e python web/control-plane-web/e2e/live_gate.py make
 """
@@ -15,19 +15,11 @@ import json
 import sys
 import time
 import uuid
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(ROOT / "tests" / "e2e"))
-sys.path.insert(0, str(ROOT / "tests" / "chaos"))
-import e2e01_v0 as e  # noqa: E402
-from chaos_v0 import reset_repo  # noqa: E402
+import replicant_e2e as e
+from replicant_e2e import open_jobs, reset_repo
 
-
-def open_jobs() -> list[dict]:
-    with e.api(e.READER) as c:
-        r = e.ok(c.get("/v1/jobs", params={"status": "queued,running,waiting_human,waiting_external,paused", "limit": 50}), "jobs")
-    return r.json()["items"]
+e.TAG = "live-gate"
 
 
 def make(wait_gate: bool = True) -> None:

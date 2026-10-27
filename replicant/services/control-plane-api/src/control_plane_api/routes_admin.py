@@ -13,7 +13,7 @@ from sqlalchemy import text
 from control_plane_api import audit, contracts, registry
 from control_plane_api.auth import require
 from control_plane_api.authz import Principal
-
+from control_plane_api.db import OPERATOR_SCOPE
 from control_plane_api.problems import ProblemError
 
 router = APIRouter()
@@ -241,6 +241,16 @@ async def gateway_quota(tenant_id: str, request: Request,
 
 
 # ------------------------------------------------------------------------------------------------ tenant repos
+async def _repo_tenant(request: Request, repo_id: str) -> str | None:
+    """The tenant whose project holds `repo_id` (tenancy.project_repos), or None when no project claims it."""
+    db = request.app.state.db
+    if not await db.has_relation("tenancy.project_repos"):
+        return None
+    async with db.tx(scope=OPERATOR_SCOPE) as conn:
+        return (await conn.execute(text("SELECT tenant_id FROM tenancy.project_repos WHERE repo_id = :r LIMIT 1"),
+                                   {"r": repo_id})).scalar()
+
+
 @router.put("/v1/tenants/{tenant_id}/github/repos/{repo_id}/settings")
 async def put_repo_settings(tenant_id: str, repo_id: str, request: Request, body: dict[str, Any] = Body(...),
                             principal: Principal = require("tenant:ops:edit|dev:seed")) -> dict[str, Any]:
@@ -254,6 +264,8 @@ async def put_repo_settings(tenant_id: str, repo_id: str, request: Request, body
     if not (("dev:seed" in principal.permissions) or
             check(request.app.state.auth, principal, "tenant:ops:edit", tenant_id=tenant_id)):
         raise ProblemError(403, "missing_permission")
+    if await _repo_tenant(request, repo_id) not in (None, tenant_id):
+        raise ProblemError(404, "not_found")      # another tenant's repo (v0 SEC-D2): no existence leak
     if str(body.get("repo_id", repo_id)) != repo_id or not body.get("full_name"):
         raise ProblemError(422, "invalid_repo_settings", detail="repo_id must match the path; full_name is required")
     provider = request.headers.get("x-replicant-scm-provider", "gitea")

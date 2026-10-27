@@ -22,7 +22,7 @@ def test_built_revision_is_head():
 
 def test_single_linear_history_in_index_order():
     revs = [r.revision for r in reversed(list(_script().walk_revisions()))]
-    assert revs[0] == "202610240001_ops" and revs[-3:] == ["202610240019_eval_reader", "202610250020_notify_outbox", "202610250021_slack_threads"]
+    assert revs[0] == "202610240001_ops" and revs[-3:] == ["202610270010_projects_rbac", "202610270020_audit_projects", "202610270030_audit_events_force"]
     assert revs[1:18] == [o.revision for o in owner_ddl.OWNER_FILES]
     assert len(owner_ddl.OWNER_FILES) == 17
 

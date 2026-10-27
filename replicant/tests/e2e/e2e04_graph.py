@@ -12,11 +12,10 @@ from __future__ import annotations
 import json
 import os
 import re
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import e2e01_v0 as e  # noqa: E402
+import replicant_e2e as e
+
+e.TAG = "e2e04-graph"
 
 HAPPY = ["context", "plan", "risk_plan", "implement", "qa", "review", "verify", "risk_diff", "publish_gate",
          "base_check", "publish", "pr_wait"]

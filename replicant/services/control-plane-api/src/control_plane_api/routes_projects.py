@@ -49,13 +49,14 @@ async def _project(request: Request, principal: Principal, project_id: str, perm
     row = await P.project_row(request.app.state.db, project_id) if PROJECT_ID_RE.match(project_id) else None
     if row is None:
         raise ProblemError(404, "not_found")
-    if perm != "job:read" and not _can(request, principal, row, perm):
-        # writes answer 403 even without read access: project ids are not secret, and a cross-project admin
-        # should see why the change is refused
-        raise ProblemError(403, "missing_permission", detail=f"{perm} on project {project_id}")
+    # Read access first: a project the caller cannot see (another tenant's, or another project of the tenant) is 404
+    # for reads and writes alike, so its existence does not leak (v0 SEC-D2). Readers without the write permission
+    # get 403 and see why the change is refused.
     if not check(request.app.state.auth, principal, "job:read|dev:seed", tenant_id=row.tenant_id,
                  project_id=project_id):
         raise ProblemError(404, "not_found")
+    if perm != "job:read" and not _can(request, principal, row, perm):
+        raise ProblemError(403, "missing_permission", detail=f"{perm} on project {project_id}")
     return row
 
 

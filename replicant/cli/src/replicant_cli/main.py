@@ -9,7 +9,7 @@ import time
 
 import typer
 
-from replicant_cli import compose, secrets, seed as seedmod
+from replicant_cli import compose, prune as prunemod, secrets, seed as seedmod, testing
 from replicant_cli.paths import paths
 
 app = typer.Typer(no_args_is_help=True, add_completion=False, help="Replicant CLI")
@@ -110,6 +110,10 @@ def up(
     if gateway not in ("script", "passthrough"):
         raise typer.BadParameter("--gateway must be script or passthrough")
     created = secrets.ensure(p)
+    free = prunemod.free_gib()
+    if free < prunemod.LOW_SPACE_GIB:
+        log(f"WARNING: host free space is {free:.1f} GiB (< {prunemod.LOW_SPACE_GIB}); the Podman VM hangs when the "
+            "disk fills. Run `replicant dev prune` (or --images/--volumes).")
     if gateway == "passthrough" and not secrets.import_provider_key(p):
         log("--gateway passthrough needs ANTHROPIC_API_KEY in replicant/dev/.env (not found or empty)")
         raise typer.Exit(2)
@@ -264,6 +268,53 @@ def seed(
     """Seed tenants, repo binding, platform caps, the bundle bootstrap; check the Gitea webhook (APIs only)."""
     _guard()
     raise typer.Exit(seedmod.run(paths(), *seedmod.default_urls(), only, force, dry_run, log))
+
+
+@dev.command()
+def test(
+    suite: str = typer.Argument("unit", help="unit | e2e | m3 | all (unit then e2e)"),
+    only: str = typer.Option("", help="comma-separated suites (e.g. control-plane-api,go,web:vitest,e2e01)"),
+    fail_fast: bool = typer.Option(False, "--fail-fast", help="stop starting suites after the first failure"),
+    junit: str = typer.Option(None, "--junit", help="directory for one JUnit XML file per suite"),
+    slow: bool = typer.Option(False, "--slow", help="unit: all 44 worker scenarios (default: the fast five)"),
+    keep_db: bool = typer.Option(False, "--keep-db", help="unit: leave the smoke Postgres (ctl-pg) running"),
+    db: bool = typer.Option(True, "--db/--no-db", help="unit: run the DB-gated tests (smoke Postgres)"),
+    build: bool = typer.Option(False, "--build", help="unit: rebuild the migrate image first; m3: build images"),
+    jobs: int = typer.Option(4, "--jobs", "-j", help="unit: suites run in parallel"),
+    yes: bool = typer.Option(False, "--yes", help="m3: confirm the destructive run (down -v)"),
+) -> None:
+    """Run the test suites: unit (every package, Go, web), e2e (live stack), m3 (clean-stack pass)."""
+    _guard()
+    p = paths()
+    sel = [x.strip() for x in only.split(",") if x.strip()]
+    if suite not in ("unit", "e2e", "m3", "all"):
+        raise typer.BadParameter("suite must be unit, e2e, m3 or all")
+    if suite == "m3":
+        if not yes:
+            log("m3 tears the stack down with volumes (down -v) and takes 15-20 min; pass --yes to run it")
+            raise typer.Exit(2)
+        raise typer.Exit(testing.m3(p, build=build, log=log))
+    rc = 0
+    if suite in ("unit", "all"):
+        rc = testing.unit(p, only=sel if suite == "unit" else [], fail_fast=fail_fast, junit=junit, slow=slow,
+                          keep_db=keep_db, db=db, build=build, jobs=jobs, log=log)
+        if rc and fail_fast:
+            raise typer.Exit(rc)
+    if suite in ("e2e", "all"):
+        rc = testing.e2e(p, only=sel if suite == "e2e" else [], fail_fast=fail_fast, junit=junit, log=log) or rc
+    raise typer.Exit(rc)
+
+
+@dev.command()
+def prune(
+    images: bool = typer.Option(False, "--images", help="also unused images (keeps replicant :dev, compose, test images)"),
+    volumes: bool = typer.Option(False, "--volumes", help="also anonymous unused volumes and finished sandbox-run volumes"),
+    yes: bool = typer.Option(False, "--yes", help="do not prompt before --images / --volumes removals"),
+) -> None:
+    """Free disk in the Podman VM: finished sandbox containers, exited one-shots, dangling images, fstrim."""
+    _guard()
+    raise typer.Exit(prunemod.run(paths(), images=images, volumes=volumes, yes=yes,
+                                  confirm=lambda q: typer.confirm(q, default=False), log=log))
 
 
 def main() -> None:  # pragma: no cover

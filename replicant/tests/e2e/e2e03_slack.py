@@ -28,9 +28,8 @@ from pathlib import Path
 
 import httpx
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import e2e01_v0 as e1  # noqa: E402
-import e2e02_notify as e2  # noqa: E402
+import replicant_e2e as e1
+import replicant_e2e.notify as e2
 
 CH = os.environ.get("E2E_APPROVAL_CHANNEL", "C0PAYAPPR1")
 SLACK = e2.SLACK
@@ -135,6 +134,7 @@ def run() -> dict:
 
 
 def _run() -> dict:
+    log(f"main reset to the initial commit {e1.reset_repo()[:12]} (the planted bug)")
     for u in ("alice", "bob"):
         e2.no_quiet_hours(u)
     deadline = time.monotonic() + 1500
@@ -212,8 +212,9 @@ def _run() -> dict:
     log(f"D: digest DM to alice: {txt[:240]!r}")
     rb = e2.wait_dm("bob", "job.pr_reminder", t_d, 150)
     EV["D"]["reminder_bob"] = e2.dm_text(rb)[:300]
-    time.sleep(35)                                       # one more sweep: alice must not get the per-item DM
-    assert not [m for m in e2.dms("alice", t_d) if e2.event_key(m) == "job.pr_reminder"], "alice got a per-item reminder"
+    # one more reminder sweep (30 s): alice must not get the per-item DM; fails as soon as one arrives
+    e1.never(lambda: [m for m in e2.dms("alice", t_d) if e2.event_key(m) == "job.pr_reminder"],
+             "alice got a per-item reminder", 35)
     log(f"D: bob reminder DM {e2.dm_text(rb)[:120]!r}; alice: digest only")
 
     # E. App Home

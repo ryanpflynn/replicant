@@ -21,8 +21,10 @@ from pathlib import Path
 
 import httpx
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "e2e"))
-import e2e01_v0 as e  # noqa: E402
+import replicant_e2e as e
+from replicant_e2e import reset_repo
+
+e.TAG = "chaos-v0"
 
 RUNNER = "http://127.0.0.1:8480"
 
@@ -85,25 +87,6 @@ INJECT = {
     "CH-RUN-01": ("implement", lambda: kill_and_restart("runner-local")),
     "CH-PG-01": ("implement", lambda: pause_pg(120)),
 }
-
-
-def reset_repo() -> str:
-    """Force main of acme-payments/ledger-api back to its initial commit (the planted bug), so each case is a real
-    bugfix job on a stack that already merged a fix. Credentials go through GIT_CONFIG_* env, never argv."""
-    import base64
-    import os
-    import tempfile
-    auth = base64.b64encode(f"gitea-admin:{e.secret('gitea_admin_password')}".encode()).decode()
-    env = {**os.environ, "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "http.extraHeader",
-           "GIT_CONFIG_VALUE_0": f"Authorization: Basic {auth}", "GIT_TERMINAL_PROMPT": "0"}
-    url = f"{e.GITEA}/acme-payments/ledger-api.git"
-    with tempfile.TemporaryDirectory() as d:
-        subprocess.run(["git", "clone", "-q", url, d], env=env, check=True, capture_output=True)
-        root = subprocess.run(["git", "-C", d, "rev-list", "--max-parents=0", "HEAD"], capture_output=True, text=True,
-                              check=True).stdout.split()[0]
-        subprocess.run(["git", "-C", d, "push", "-q", "--force", "origin", f"{root}:refs/heads/main"], env=env,
-                       check=True, capture_output=True)
-    return root
 
 
 def run_case(case: str) -> dict:

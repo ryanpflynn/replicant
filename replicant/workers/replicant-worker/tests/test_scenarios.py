@@ -1445,3 +1445,32 @@ async def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     sys.exit(asyncio.run(main(sys.argv[1:])))
+
+
+# ---- pytest entry point: one test per scenario on a session-scoped Temporal dev server.
+# `replicant dev test unit` runs the FAST subset; the rest are marked `slow` (pytest -m slow, or `--slow`).
+# A scenario that raises Skipped reports SKIP, never PASS.
+import pytest  # noqa: E402
+
+FAST = ("bugfix_full", "cancel_during_run", "eval_mode", "repair_budget", "migration")
+
+
+@pytest.fixture(scope="session")
+def scenario_env():
+    loop = asyncio.new_event_loop()
+    env = loop.run_until_complete(start_env())
+    try:
+        yield loop, env
+    finally:
+        loop.run_until_complete(env.shutdown())
+        loop.close()
+
+
+@pytest.mark.parametrize("name", [pytest.param(n, marks=() if n in FAST else pytest.mark.slow, id=n)
+                                  for n in SCENARIOS])
+def test_scenario(scenario_env, name: str) -> None:
+    loop, env = scenario_env
+    try:
+        loop.run_until_complete(asyncio.wait_for(SCENARIOS[name](env), 1500 if name == "history_budget" else 300))
+    except Skipped as e:
+        pytest.skip(str(e))

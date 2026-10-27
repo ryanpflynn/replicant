@@ -132,7 +132,8 @@ async def decide_gate(gate_id: str, request: Request, response: Response, body: 
     if decision in ("reject", "request_changes") and not body.get("comment"):
         raise ProblemError(422, "comment_required")
     g = await _load_gate(request, gate_id)
-    if g is None or not check(request.app.state.auth, principal, "job:read", tenant_id=g.tenant_id):
+    if g is None or not check(request.app.state.auth, principal, "job:read", tenant_id=g.tenant_id,
+                              repo_ids=tuple(g.repo_ids or ())):
         raise ProblemError(404, "not_found")
     if not check(request.app.state.auth, principal, "gate:decide", tenant_id=g.tenant_id,
                  repo_ids=tuple(g.repo_ids or ())) or not await approver_group_ok(request, principal, g):

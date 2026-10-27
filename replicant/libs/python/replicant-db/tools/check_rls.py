@@ -17,10 +17,9 @@ ORDER BY 1
 """
 with psycopg.connect(os.environ.get("REPLICANT_DB_DSN", os.environ.get("REPLICANT_DB_URL", "")).replace("postgresql+psycopg", "postgresql")) as conn:
     bad = conn.execute(SQL).fetchall()
-# audit.events is the documented exception: audit_owner owns it and writes through audit.emit()
-# (C-PG rule 3); its reader policy targets audit_reader only.
-errs = [b for b in bad if not b[1] and b[0] != "audit.events"]
-warns = [b for b in bad if b[1] and not b[2] and b[0] != "audit.events"]
+# No exceptions: audit.events is forced too since 202610270030_audit_events_force (v0 SEC-D1).
+errs = [b for b in bad if not b[1]]
+warns = [b for b in bad if b[1] and not b[2]]
 for rel, enabled, forced in errs:
     print(f"ERROR RLS not enabled: {rel}")
 for rel, enabled, forced in warns:

@@ -445,3 +445,48 @@ async def test_first_project_binding_keeps_static_roles_and_audits(env):
     finally:
         await _reset_bindings(su, baseline=False)
 
+
+
+async def test_notification_preferences_versioned(env):
+    """SEC-D3: PUT /v1/me/notification-preferences honours If-Match / body version like the UI preferences."""
+    c, *_ = env
+    su = os.environ.get("CTL_SU_DSN")
+    if not su:
+        pytest.skip("CTL_SU_DSN not set")
+    from sqlalchemy.ext.asyncio import create_async_engine
+    eng = create_async_engine(su)
+    async with eng.begin() as conn:
+        await conn.execute(text("DELETE FROM notify.preferences WHERE principal_id = :p"), {"p": dev_user_principal("dave")})
+    await eng.dispose()
+    h = {"X-Replicant-Dev-User": "dave"}
+    qh = {"quiet_hours": {"start": "22:00", "end": "07:00", "timezone": "UTC"}}
+    r = await c.get("/v1/me/notification-preferences", headers=h)
+    assert r.status_code == 200 and r.json()["version"] == 1 and r.headers["etag"] == '"1"'
+    # two clients both read version 1 (nothing stored); the first write wins, the second is refused
+    r = await c.put("/v1/me/notification-preferences", headers={**h, "If-Match": '"1"'}, json=qh)
+    assert r.status_code == 200 and r.json()["version"] == 2 and r.headers["etag"] == '"2"', r.text
+    r = await c.put("/v1/me/notification-preferences", headers=h, json={"version": 1, "digest": {"enabled": False}})
+    assert r.status_code == 412 and r.json()["code"] == "version_mismatch" and r.json()["current_version"] == 2
+    assert r.headers["etag"] == '"2"'
+    # body version (If-Match wins over it)
+    r = await c.put("/v1/me/notification-preferences", headers=h, json={**qh, "version": 2})
+    assert r.status_code == 200 and r.json()["version"] == 3
+    r = await c.put("/v1/me/notification-preferences", headers={**h, "If-Match": "2"}, json={**qh, "version": 3})
+    assert r.status_code == 412 and r.json()["current_version"] == 3
+    r = await c.get("/v1/me/notification-preferences", headers=h)
+    assert r.json()["version"] == 3 and r.headers["etag"] == '"3"' and r.json()["quiet_hours"]["start"] == "22:00"
+    # no version: last-writer-wins, as before
+    r = await c.put("/v1/me/notification-preferences", headers=h, json={"digest": {"enabled": False}})
+    assert r.status_code == 200 and r.json()["version"] == 4
+    r = await c.put("/v1/me/notification-preferences", headers=h, json={"version": "x"})
+    assert r.status_code == 422
+    r = await c.put("/v1/me/notification-preferences", headers={**h, "If-Match": "abc"}, json={})
+    assert r.status_code == 400 and r.json()["code"] == "invalid_if_match"
+    # a row written before SEC-D3 can sit at version 1: version 1 then updates it rather than looping on 412
+    eng = create_async_engine(su)
+    async with eng.begin() as conn:
+        await conn.execute(text("UPDATE notify.preferences SET version = 1 WHERE principal_id = :p"),
+                           {"p": dev_user_principal("dave")})
+    await eng.dispose()
+    r = await c.put("/v1/me/notification-preferences", headers={**h, "If-Match": "1"}, json=qh)
+    assert r.status_code == 200 and r.json()["version"] == 2, r.text

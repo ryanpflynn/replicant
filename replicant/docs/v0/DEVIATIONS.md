@@ -606,3 +606,28 @@ User request: "a view of the graph in the UI … a detailed view of what the age
   holds tenant- or platform-scope bindings (seed step 09). Before this, a first project-only access change on a fresh
   install removed every static tenant role, including its author's. Test:
   `test_first_project_binding_keeps_static_roles_and_audits`.
+- **SEC-D1 (fix 2026-10-27) audit.events has forced row-level security.** It was the one tenant table with RLS
+  enabled but not forced, so its owner `audit_owner` (and any SECURITY DEFINER function it owns) bypassed every
+  policy, including for UPDATE and DELETE. Migration `202610270030_audit_events_force` forces RLS on the partitioned
+  parent and gives `audit_owner` only INSERT and SELECT policies (what `audit.emit`/`emit_restored` need), so the table
+  is append-only even for its owner; retention still drops whole partitions. `tools/check_rls.py` no longer exempts
+  it. Test: `tests/test_isolation.py::test_every_tenant_table_has_forced_rls` (every table with `tenant_id`,
+  partitions included, has ENABLE and FORCE; the allowlist is empty).
+- **SEC-D2 (fix 2026-10-27) Isolation suite; hidden projects answer 404 on writes too.** `tests/test_isolation.py`
+  checks RLS behaviour on intake, jobs, gates, deliveries and project configs under a tenant-scoped connection, and
+  an API matrix: payments users against an `acme-retail` job, run, gate and project, and a project-A member against
+  project B of the same tenant (job reads and sub-resources, gate read/decide, job control and steering, project
+  read/patch/config/rollback/access, and the lists). Fixes: project writes (`PATCH /v1/projects/{p}`, `PUT .../config`,
+  `PUT .../repos/{r}/config`, `POST .../config:rollback`, `PUT .../access`) answered 403 for a project the caller
+  cannot read, which confirmed it exists; they now answer 404, and 403 only for callers who can read the project.
+  Read routes requiring `job:read|dev:seed` answer 404 rather than 403 when the caller holds no read anywhere.
+  `PUT /v1/tenants/{t}/github/repos/{r}/settings` refuses (404) a repo that belongs to another tenant's project.
+  `POST /v1/gates/{g}/decisions` checks read access with the gate's repos, so project-scoped members are no longer
+  told 404 for gates they can see.
+- **SEC-D3 (fix 2026-10-27) Notification preferences use optimistic concurrency.** `PUT
+  /v1/me/notification-preferences` takes the version read as `If-Match` or body `version` (If-Match wins), refuses a
+  stale one with 412 `version_mismatch` and `current_version`, and `GET`/`PUT` return an `ETag`, like
+  `/v1/me/ui-preferences`. A PUT without a version is still last-writer-wins. Version 1 means "nothing stored" (the
+  schema minimum, unchanged); new rows start at 2, and a row written earlier at version 1 is still updatable with
+  version 1. The web UI has no notification settings page, so no client change. Test:
+  `test_db_integration.py::test_notification_preferences_versioned`.
