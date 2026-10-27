@@ -477,7 +477,7 @@ flowchart LR
 - **Deviations** CONFIG-D1..D8, interface CONFIG-01.
   - Projects and the UI policy editor are not in the spec.
   - The ADR-013 eval and two-person rule are not applied.
-  - Job lists stay tenant-wide.
+  - Job, approval and waiting lists are scoped per project for project-only members (CONFIG-D9).
 
 **Simple job view.** Everyone starts on a plain view: a one-line status, six steps, "What's needed from you" with the
 approve buttons, links, and milestones. **Show details** switches to the engineering view (graph, runs, activity), and

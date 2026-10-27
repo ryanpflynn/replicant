@@ -14,7 +14,7 @@ from fastapi import APIRouter, Body, Header, Query, Request, Response
 from sqlalchemy import text
 
 from control_plane_api import contracts
-from control_plane_api.auth import check, require
+from control_plane_api.auth import check, require, scope_filter
 from control_plane_api.authz import Principal
 from control_plane_api.db import OPERATOR_SCOPE
 from control_plane_api.ids import derived
@@ -326,14 +326,13 @@ async def list_inbox(request: Request, principal: Principal = require("authentic
     db = request.app.state.db
     if not await db.has_relation("approvals.gates"):
         return {"items": [], "counts": {"mine": 0, "teams": 0, "delegated": 0}}
-    tenants = principal.tenants_with("gate:decide")
-    if tenants is not None and not tenants:
+    p: dict[str, Any] = {"lim": limit}
+    scope = scope_filter(request.app.state.auth, principal, "gate:decide", "jj", p)
+    if scope is None:
         return {"items": [], "counts": {"mine": 0, "teams": 0, "delegated": 0}}
     where = ["g.state = 'open'" if view != "decided" else "g.state <> 'open'"]
-    p: dict[str, Any] = {"lim": limit}
-    if tenants is not None:
-        where.append("g.tenant_id = ANY(:tenants)")
-        p["tenants"] = sorted(tenants)
+    if scope != "TRUE":
+        where.append(f"EXISTS (SELECT 1 FROM jobs_read.jobs jj WHERE jj.job_id = g.job_id AND {scope})")
     if gate_kind:
         where.append("g.kind = ANY(:kinds)")
         p["kinds"] = gate_kind.split(",")

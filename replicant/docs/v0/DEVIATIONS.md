@@ -592,3 +592,8 @@ User request: "a view of the graph in the UI … a detailed view of what the age
 - **CONFIG-D8 E2E-05 on the scripted gateway.** `.env` `REPLICANT_GATEWAY_MODE` was switched to `script` for the
   E2E runs; the e2e asserts every container's image ID and start time and every `localhost/replicant/*` image ID are
   unchanged across the config steps.
+- **CONFIG-D9 (fix 2026-10-27) Lists are scoped by project.** `/v1/jobs`, `/v1/approvals` and "Waiting on you"
+  (`/v1/me/waiting`, digest, App Home) now show whole tenants only to platform or tenant roles. A member with only a
+  project binding sees the jobs, gates and PRs of that project's repos (`auth.scope_filter`; gates are filtered through
+  their job's `repo_ids`). This replaces CONFIG-D8's tenant-wide lists. Test:
+  `test_db_integration.py::test_job_lists_scoped_to_project_bindings`.

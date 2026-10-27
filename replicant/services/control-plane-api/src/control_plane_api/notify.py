@@ -20,7 +20,7 @@ from typing import Any
 from sqlalchemy import text
 
 from control_plane_api import notify_render as R
-from control_plane_api.auth import AuthContext, check
+from control_plane_api.auth import AuthContext, check, scope_filter
 from control_plane_api.db import OPERATOR_SCOPE, Database
 from control_plane_api.ids import derived
 from control_plane_api.notify_policy import QUIET_DELAYED, NotifySettings, channels_for, quiet_hours
@@ -266,19 +266,22 @@ class NotifyService:
     async def waiting_doc(self, principal: Any) -> dict[str, Any]:
         """Gates the principal can decide plus open PRs of non-terminal jobs where they are the requester or a
         reviewer (approved the publish gate). `GET /v1/me/waiting`, the digest and App Home use it."""
+        if getattr(principal, "roles_source", None) != "db":
+            principal = self.auth.effective(principal)   # internal/digest callers pass directory principals
         now = utcnow()
         me = principal.principal_id
         db = self.db
-        gate_tenants = principal.tenants_with("gate:decide")
-        read_tenants = principal.tenants_with("job:read")
+        gp: dict[str, Any] = {}
+        gate_scope = scope_filter(self.auth, principal, "gate:decide", "jj", gp)
+        rp: dict[str, Any] = {"me": me}
+        read_scope = scope_filter(self.auth, principal, "job:read", "j", rp)
         items: list[dict[str, Any]] = []
         prs: list[Any] = []
         async with db.tx(scope=OPERATOR_SCOPE) as conn:
-            if gate_tenants is None or gate_tenants:
-                where, p = ["g.state = 'open'"], {}
-                if gate_tenants is not None:
-                    where.append("g.tenant_id = ANY(:t)")
-                    p["t"] = sorted(gate_tenants)
+            if gate_scope is not None:
+                where, p = ["g.state = 'open'"], gp
+                if gate_scope != "TRUE":
+                    where.append(f"EXISTS (SELECT 1 FROM jobs_read.jobs jj WHERE jj.job_id = g.job_id AND {gate_scope})")
                 gates = (await conn.execute(text(
                     f"SELECT g.* FROM approvals.gates g WHERE {' AND '.join(where)} ORDER BY g.expires_at ASC NULLS LAST, "
                     "g.gate_id LIMIT 200"), p)).all()
@@ -293,12 +296,9 @@ class NotifyService:
                     if g.expires_at:
                         it["expires_at"] = _iso(g.expires_at)
                     items.append(it)
-            if read_tenants is None or read_tenants:
-                p2: dict[str, Any] = {"me": me}
-                tw = ""
-                if read_tenants is not None:
-                    tw = "AND j.tenant_id = ANY(:t)"
-                    p2["t"] = sorted(read_tenants)
+            if read_scope is not None:
+                p2 = rp
+                tw = "" if read_scope == "TRUE" else f"AND {read_scope}"
                 prs = (await conn.execute(text(
                     "SELECT p.job_id, p.tenant_id, p.pr_number, p.url, p.state, p.opened_at, j.title, j.requester, "
                     "j.repos[1] AS repo, (j.requester = :me) AS is_requester FROM jobs_read.job_prs p JOIN jobs_read.jobs j "

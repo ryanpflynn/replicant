@@ -67,18 +67,24 @@ class Principal:
             roles |= set(self.tenant_roles.get(tenant_id, ())) | set(self.tenant_roles.get("*", ()))
         return roles
 
-    def tenants_with(self, permission: str) -> set[str] | None:
-        """Tenants on which the principal holds `permission` (on the tenant or on one of its projects); None means
-        all tenants (platform binding)."""
+    def tenants_with(self, permission: str, include_projects: bool = True) -> set[str] | None:
+        """Tenants on which the principal holds `permission` (on the tenant or, with `include_projects`, on one of its
+        projects); None means all tenants (platform binding)."""
         if any(permission in ROLE_PERMISSIONS.get(r, ()) for r in self.platform_roles):
             return None
         if any(permission in ROLE_PERMISSIONS.get(r, ()) for r in self.tenant_roles.get("*", ())):
             return None
         out = {t for t, rs in self.tenant_roles.items()
                if t != "*" and any(permission in ROLE_PERMISSIONS.get(r, ()) for r in rs)}
+        if not include_projects:
+            return out
         out |= {self.project_tenants[pid] for pid, rs in self.project_roles.items()
                 if self.project_tenants.get(pid) and any(permission in ROLE_PERMISSIONS.get(r, ()) for r in rs)}
         return out
+
+    def projects_with(self, permission: str) -> set[str]:
+        """Projects on which the principal holds `permission` through a project binding."""
+        return {pid for pid, rs in self.project_roles.items() if any(permission in ROLE_PERMISSIONS.get(r, ()) for r in rs)}
 
     def project_roles_for(self, project_id: str | None) -> set[str]:
         return set(self.project_roles.get(project_id, ())) if project_id else set()

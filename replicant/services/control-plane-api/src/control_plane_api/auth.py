@@ -158,3 +158,27 @@ def holds_somewhere(ctx: AuthContext, principal: Principal, permission: str) -> 
         elif principal.tenants_with(alt) != set():
             return True
     return False
+
+
+def scope_filter(ctx: AuthContext, principal: Principal, permission: str, alias: str,
+                 params: dict[str, Any]) -> str | None:
+    """SQL condition limiting `alias` rows (tenant_id, repo_ids) to what `principal` may see with `permission`:
+    whole tenants granted by a platform or tenant role, plus the repos of projects granted by a project role.
+    Returns "TRUE" for everything and None when nothing is visible (callers return an empty or 404 result)."""
+    full = principal.tenants_with(permission, include_projects=False)
+    if full is None:
+        return "TRUE"
+    projects = principal.projects_with(permission)
+    repo_of = ctx.rbac.snap.project_of_repo
+    repos = sorted(r for r, pid in repo_of.items() if pid in projects)
+    parts = []
+    if full:
+        params["scope_tenants"] = sorted(full)
+        parts.append(f"{alias}.tenant_id = ANY(:scope_tenants)")
+    if repos:
+        params["scope_repos"] = repos
+        params["scope_project_tenants"] = sorted({principal.project_tenants[pid] for pid in projects
+                                                  if principal.project_tenants.get(pid)})
+        parts.append(f"({alias}.tenant_id = ANY(:scope_project_tenants) AND {alias}.repo_ids && "
+                     f"CAST(:scope_repos AS text[]))")
+    return "(" + " OR ".join(parts) + ")" if parts else None

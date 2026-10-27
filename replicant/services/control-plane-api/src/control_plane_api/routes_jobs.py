@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Body, Header, Query, Request, Response
 from sqlalchemy import text
 
-from control_plane_api.auth import check, require
+from control_plane_api.auth import check, require, scope_filter
 from control_plane_api.authz import Principal
 from control_plane_api.db import OPERATOR_SCOPE
 from control_plane_api.problems import ProblemError
@@ -114,12 +114,12 @@ async def list_jobs(request: Request, response: Response, principal: Principal =
                     status: str | None = None, view: str = "all", include_evaluation: str = "false",
                     sort: str = "updated_desc", cursor: str | None = None,
                     limit: int = Query(50, ge=1, le=200)) -> dict[str, Any]:
-    tenants = _readable_tenants(request, principal)
-    where = ["1=1"]
+    _readable_tenants(request, principal)
     p: dict[str, Any] = {}
-    if tenants is not None:
-        where.append("j.tenant_id = ANY(:tenants)")
-        p["tenants"] = sorted(tenants)
+    scope = scope_filter(request.app.state.auth, principal, "job:read", "j", p)
+    if scope is None:
+        return {"items": [], "next_cursor": None}
+    where = [scope]
     if tenant_id:
         where.append("j.tenant_id = :tenant_id")
         p["tenant_id"] = tenant_id

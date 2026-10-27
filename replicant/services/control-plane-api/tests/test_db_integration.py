@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 import secrets
 
 import httpx
@@ -338,3 +339,74 @@ async def test_project_config_versions_if_match_rbac_and_rollback(env):
     assert r.status_code == 403 and "higher role" in r.json().get("detail", ""), r.text
     assert (await c.get(f"/v1/projects/{pid}", headers=dave)).status_code == 200
     assert (await c.get("/v1/projects/prj_nope", headers=erin)).status_code == 404
+
+
+async def _reset_bindings(su: str, baseline: bool) -> None:
+    """Role bindings switch off the static dev tenant roles once a version exists: start from a baseline that keeps
+    erin tenant admin, and restore the no-bindings state afterwards so other tests keep their static roles."""
+    from sqlalchemy.ext.asyncio import create_async_engine
+    eng = create_async_engine(su)
+    async with eng.begin() as conn:
+        await conn.execute(text("DELETE FROM identity.role_bindings"))
+        await conn.execute(text("DELETE FROM identity.role_binding_versions"))
+        if baseline:
+            for login, group in (("erin", "payments-admins"), ("frank", "ledger-admins")):
+                pid = dev_user_principal(login)
+                await conn.execute(text(
+                    "INSERT INTO identity.users (principal_id, okta_sub, user_name, display_name) VALUES "
+                    "(:p, :s, :u, :u) ON CONFLICT DO NOTHING"), {"p": pid, "s": f"test-{login}", "u": f"test-{login}"})
+                await conn.execute(text("INSERT INTO identity.groups (group_id, display_name) VALUES (:g, :n) "
+                                        "ON CONFLICT DO NOTHING"), {"g": f"grp_test_{group}", "n": group})
+                await conn.execute(text(
+                    "INSERT INTO identity.memberships (group_id, principal_id) SELECT group_id, :p FROM identity.groups "
+                    "WHERE display_name = :n ON CONFLICT DO NOTHING"), {"p": pid, "n": group})
+            await conn.execute(text("INSERT INTO identity.role_binding_versions (version, is_current, created_by, reason) "
+                                    "VALUES (1, true, 'svc_test', 'baseline')"))
+            await conn.execute(text("INSERT INTO identity.role_bindings (version, binding_id, group_name, scope, tenant_id, "
+                                    "role) VALUES (1, 1, 'payments-admins', 'tenant', 'payments', 'tenant_admin')"))
+    await eng.dispose()
+
+
+async def test_job_lists_scoped_to_project_bindings(env):
+    """A member bound only on project A sees project A's jobs in the job list, not the rest of the tenant."""
+    c, fake, seed_h, *_ = env
+    su = os.environ.get("CTL_SU_DSN")
+    if not su:
+        pytest.skip("CTL_SU_DSN not set")
+    await _reset_bindings(su, baseline=True)
+    try:
+        await _scoped_lists(c, seed_h, su)
+    finally:
+        await _reset_bindings(su, baseline=False)
+
+
+async def _scoped_lists(c: Any, seed_h: dict[str, str], su: str) -> None:
+    tag = secrets.token_hex(3)
+    pa, pb = f"prj_a{tag}", f"prj_b{tag}"
+    ra, rb = (str(800000 + secrets.randbelow(99999)) for _ in range(2))
+    for pid, repo in ((pa, ra), (pb, rb)):
+        r = await c.post("/v1/tenants/payments/projects", headers=seed_h, json={
+            "project_id": pid, "name": pid, "repos": [{"repo_id": repo, "full_name": f"acme-payments/{pid}"}]})
+        assert r.status_code == 201, r.text
+    erin, frank = {"X-Replicant-Dev-User": "erin"}, {"X-Replicant-Dev-User": "frank"}
+    r = await c.put(f"/v1/projects/{pa}/access", headers=erin,
+                    json={"bindings": [{"group": "ledger-admins", "role": "project_admin"}], "reason": "scope test"})
+    assert r.status_code == 200, r.text
+    ja, jb = "job_" + ulid("x")[-26:], "job_" + ulid("y")[-26:]
+    from sqlalchemy.ext.asyncio import create_async_engine
+    eng = create_async_engine(su)
+    async with eng.begin() as conn:
+        for job, repo in ((ja, ra), (jb, rb)):
+            await conn.execute(text(
+                "INSERT INTO jobs_read.jobs (job_id, tenant_id, seq, as_of, workflow_type, status, phase, requester, "
+                "release_bundle_id, created_at, updated_at, snapshot, repo_ids, title) VALUES (:j, 'payments', 1, now(), "
+                "'bugfix', 'running', 'implementing', :req, 'rb_" + "a" * 26 + "', now(), now(), '{}', ARRAY[:r], :t)"),
+                {"j": job, "r": repo, "req": dev_user_principal("alice"), "t": f"scope {tag}"})
+    await eng.dispose()
+    rf = await c.get(f"/v1/jobs?q={tag}", headers=frank)
+    assert rf.status_code == 200, rf.text
+    ids = {i["job_id"] for i in rf.json()["items"]}
+    assert ids == {ja}, ids
+    assert (await c.get(f"/v1/jobs/{jb}", headers=frank)).status_code == 404
+    ids = {i["job_id"] for i in (await c.get(f"/v1/jobs?q={tag}", headers=erin)).json()["items"]}
+    assert ids == {ja, jb}, ids
