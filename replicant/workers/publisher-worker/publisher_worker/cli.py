@@ -19,10 +19,10 @@ def setup_logging() -> None:
 async def run() -> None:
     from temporalio.worker import Worker
 
+    from publisher_worker.activities import ACTIVITIES
     from replicant_temporal import TemporalSettings, connect
     from replicant_temporal.runner import run_workers, set_current_allowed
     from replicant_temporal.versioning import build_id_from_env, deployment_config
-    from publisher_worker.activities import ACTIVITIES
     build = build_id_from_env()
     client = await connect(TemporalSettings.from_env(identity=f"{DEPLOYMENT}@{os.uname().nodename}"))
     w = Worker(client, task_queue=Q, activities=ACTIVITIES, deployment_config=deployment_config(DEPLOYMENT, build),

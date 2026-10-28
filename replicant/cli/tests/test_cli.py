@@ -61,3 +61,35 @@ def test_import_provider_key_never_echoes(tmp_path, monkeypatch, capsys):
     assert "sk-ant" not in capsys.readouterr().out
     secrets.set_env(p, {"REPLICANT_GATEWAY_MODE": "passthrough"})
     assert "REPLICANT_GATEWAY_MODE=passthrough" in p.env_file.read_text()
+
+
+def test_gateway_mode_reads_compose_env(tmp_path, monkeypatch):
+    from replicant_cli import testing
+    monkeypatch.setattr(secrets, "_podman_socket", lambda: "/run/x.sock")
+    p = _fake_repo(tmp_path)
+    assert testing.gateway_mode(p) == "script"                         # no .env yet
+    secrets.ensure(p)
+    assert testing.gateway_mode(p) == "script"                         # default written by ensure
+    secrets.set_env(p, {"REPLICANT_GATEWAY_MODE": "passthrough"})
+    secrets.ensure(p)                                                  # `dev up` keeps it (FIX-D8)
+    assert testing.gateway_mode(p) == "passthrough"
+
+
+def test_auto_prune_only_below_threshold(tmp_path, monkeypatch):
+    from replicant_cli import prune
+    calls = []
+    monkeypatch.setattr(prune, "run", lambda p, **kw: calls.append(kw) or 0)
+    monkeypatch.setattr(prune, "free_gib", lambda: 50.0)
+    assert prune.auto(Paths(tmp_path), lambda m: None) is False and not calls
+    monkeypatch.setattr(prune, "free_gib", lambda: 4.0)
+    msgs: list[str] = []
+    assert prune.auto(Paths(tmp_path), msgs.append) is True
+    assert calls == [calls[0]] and calls[0]["volumes"] is True and calls[0]["images"] is False and calls[0]["yes"]
+    assert "auto-pruning" in msgs[0]
+
+
+def test_worker_env_groups_select_and_deselect():
+    from replicant_cli import testing
+    names = [n for g, _ in testing.WORKER_ENV_GROUPS for n in g]
+    assert {"license_prestep", "mid_run_can", "dependency_outage"} <= set(names)
+    assert testing._scenario_k(("a", "b")) == "test_scenario and (a or b)"

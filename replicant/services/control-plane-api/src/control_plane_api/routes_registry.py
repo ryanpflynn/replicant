@@ -24,10 +24,9 @@ from sqlalchemy import text
 from control_plane_api import audit, contracts, registry
 from control_plane_api.auth import require
 from control_plane_api.authz import Principal
-from replicant_cdef import blob_key, definition_blob
-
 from control_plane_api.ids import jcs, sha256_digest
 from control_plane_api.problems import ProblemError
+from replicant_cdef import blob_key, definition_blob
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -268,7 +267,7 @@ async def build_bundle(request: Request, response: Response, body: dict[str, Any
         try:
             doc = registry.bundle_document(bspec, principal.principal_id, None, spec.get("changeSummary"))
         except registry.BundleInvalid as e:
-            raise ProblemError(422, "invalid_bundle", errors=e.errors)
+            raise ProblemError(422, "invalid_bundle", errors=e.errors) from None
         blob_writer = request.app.state.s3.writer("registry") if settings.s3_endpoint else None
         rb, digest, created = await registry.register_bundle(conn, db, doc, principal.principal_id, blob_writer)
         await conn.execute(text("UPDATE registry.release_bundles SET request_name = coalesce(request_name, :n) WHERE "

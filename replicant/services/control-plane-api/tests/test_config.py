@@ -2,7 +2,8 @@
 compilation (gate rules, graphs, validation, digest reuse)."""
 import time
 
-from control_plane_api import derived, projects as P
+from control_plane_api import derived
+from control_plane_api import projects as P
 from control_plane_api.authz import AuthorizeRequest, Evaluator, Principal, PrincipalLookup
 from control_plane_api.rbac import Binding, RoleResolver, Snapshot, project_permissions
 

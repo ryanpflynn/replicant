@@ -6,10 +6,10 @@ import dataclasses
 import json
 from typing import Any
 
+import fakes
 import pytest
 from temporalio.testing import ActivityEnvironment
 
-import fakes
 from replicant_worker.activities import config, feedback, llm, s3, staging
 
 JOB = "job_01m5z3xz399c11r2jh39kz69de"

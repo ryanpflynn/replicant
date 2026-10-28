@@ -28,8 +28,8 @@ from typing import Any
 import yaml
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from replicant_telemetry.common import bearer_token, token_ok
 
+from replicant_telemetry.common import bearer_token, token_ok
 from slack_mock.render import render_page
 
 log = logging.getLogger("slack_mock")
@@ -192,7 +192,7 @@ async def _args(request: Request) -> dict[str, Any]:
             try:
                 body = json.loads(raw)
             except ValueError:
-                raise _BadRequest("invalid_json")
+                raise _BadRequest("invalid_json") from None
             if not isinstance(body, dict):
                 raise _BadRequest("invalid_json")
             args.update(body)
@@ -203,7 +203,7 @@ async def _args(request: Request) -> dict[str, Any]:
             try:
                 args[k] = json.loads(args[k])
             except ValueError:
-                raise _BadRequest(f"invalid_{k}" if k != "metadata" else "invalid_metadata_format")
+                raise _BadRequest(f"invalid_{k}" if k != "metadata" else "invalid_metadata_format") from None
     return args
 
 

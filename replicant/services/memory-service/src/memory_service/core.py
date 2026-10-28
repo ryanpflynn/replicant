@@ -8,7 +8,6 @@ import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
 
 from replicant_ids import b32_130, jcs
 

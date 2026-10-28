@@ -25,9 +25,33 @@ import uuid
 import httpx
 
 import replicant_e2e as _e
-from replicant_e2e import (API, GITEA, JOB_TIMEOUT_S, ORG, READER, REPO, REQUESTER, ROOT, TENANT,  # noqa: F401
-                           api, approve, assert_projection_matches, get_job, gateway_mode, gitea, log, ok, open_issue,
-                           open_publish_gate, reset_repo, snapshot, wait_ack, wait_pr, wait_until, merge)
+from replicant_e2e import (  # noqa: F401
+    API,
+    GITEA,
+    JOB_TIMEOUT_S,
+    ORG,
+    READER,
+    REPO,
+    REQUESTER,
+    ROOT,
+    TENANT,
+    api,
+    approve,
+    assert_projection_matches,
+    gateway_mode,
+    get_job,
+    gitea,
+    log,
+    merge,
+    ok,
+    open_issue,
+    open_publish_gate,
+    reset_repo,
+    snapshot,
+    wait_ack,
+    wait_pr,
+    wait_until,
+)
 
 _e.TAG = "e2e01-v0"
 

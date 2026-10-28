@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 from temporalio import activity
 
-from replicant_worker.activities.base import implements, http, idempotency_key, retryable_http
+from replicant_worker.activities.base import http, idempotency_key, implements, retryable_http
 from replicant_worker.activities.config import read_secret, settings
 
 

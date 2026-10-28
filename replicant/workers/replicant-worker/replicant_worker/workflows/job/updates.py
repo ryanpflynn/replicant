@@ -14,8 +14,19 @@ from temporalio.exceptions import ActivityError
 
 from replicant_worker import ids
 from replicant_worker.workflows.job.common import (
-    _ID, DEADLINE_OUTCOME, DECISION_SKEW, DECISIONS_BY_KIND, GATE_STATE_FOR, LOG_CHANNELS, MAX_DECISION_DELAY,
-    TERMINAL_STATUSES, _ctl, _etype, _opts, _reject, _winning,
+    _ID,
+    DEADLINE_OUTCOME,
+    DECISION_SKEW,
+    DECISIONS_BY_KIND,
+    GATE_STATE_FOR,
+    LOG_CHANNELS,
+    MAX_DECISION_DELAY,
+    TERMINAL_STATUSES,
+    _ctl,
+    _etype,
+    _opts,
+    _reject,
+    _winning,
 )
 from replicant_worker.workflows.state import GateRecord
 

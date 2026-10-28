@@ -21,7 +21,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from memory_service import analytics, curation, gateway
-from memory_service import candidates as candidate_ops, snapshots as snapshot_ops
+from memory_service import candidates as candidate_ops
+from memory_service import snapshots as snapshot_ops
 from memory_service.auth import Auth, HttpError
 from memory_service.config import Settings
 from memory_service.db import Database

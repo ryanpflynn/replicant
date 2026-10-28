@@ -13,6 +13,16 @@ NET=replicant-core
 for c in runner-local gateway-shim repo-mirror sbx-edge sbx-dns egress-proxy; do
   podman ps --format '{{.Names}}' | grep -qx "replicant_${c}_1" || { echo "v0 service $c is not running (replicant dev up --profile v0)"; exit 2; }
 done
+# SEC-EGRESS and the contract cases run on the scripted gateway: switch gateway-shim to `script` for the run and
+# restore the previous mode afterwards (like `replicant dev test e2e`).
+gw() { (cd "$ROOT" && uv run --no-sync replicant dev gateway-mode "$@"); }
+GW_PREV="$(gw | tail -1)"
+if [ "$GW_PREV" != script ]; then
+  echo "gateway mode is $GW_PREV: switching to script for the run (restored afterwards)"
+  gw script || { echo "could not switch gateway-shim to script"; exit 2; }
+  trap 'gw "$GW_PREV" || echo "WARNING: could not restore gateway mode $GW_PREV (replicant dev gateway-mode $GW_PREV)"' EXIT
+  trap 'exit 130' INT TERM
+fi
 ip() { podman inspect "replicant_$1_1" --format "{{(index .NetworkSettings.Networks \"$NET\").IPAddress}}"; }
 CORE="runner-local=$(ip runner-local):8480 postgres-replicant=$(ip postgres-replicant):5432 temporal=$(ip temporal):7233"
 CORE="$CORE github-token-broker=$(ip github-token-broker):8080 control-plane-api=$(ip control-plane-api):8401"

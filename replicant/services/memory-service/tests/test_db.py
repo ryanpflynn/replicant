@@ -12,13 +12,13 @@ import uuid
 
 import httpx
 import pytest
-from replicant_ids import ulid
 
 from memory_service.app import create_app
 from memory_service.auth import Auth, caller_headers
 from memory_service.config import Settings
 from memory_service.db import Database
 from memory_service.s3 import S3
+from replicant_ids import ulid
 
 DSN = os.environ.get("CTL_MEM_DB_DSN")
 pytestmark = pytest.mark.skipif(not DSN, reason="CTL_MEM_DB_DSN not set (start control-plane-api tests/smoke/env.sh)")
@@ -168,7 +168,7 @@ async def test_candidates_safety_dedupe_conflict(env):  # noqa: ANN001
                           proposal("Return bare errors without wrapping them anywhere in the service code.",
                                    f"gate:{job}:d", subject_key="errors.wrapping"),
                           proposal("A PR review comment from an unlinked user about naming things clearly",
-                                   f"gh-review-comment:1:2", source={"kind": "pr_review_comment",
+                                   "gh-review-comment:1:2", source={"kind": "pr_review_comment",
                                                                      "author_repo_permission": "write",
                                                                      "text": "naming"})]}
     r = (await c.post("/internal/v1/candidates", headers=W, json=env_)).json()

@@ -5,15 +5,15 @@
 Temporal interceptor so every activity runs in a span of its job's trace (T-1) under the root span `job` (T-5a).
 Tracing is off when `OTEL_SDK_DISABLED=true` (the v0 default without the observability profile).
 """
+from replicant_telemetry.common import bearer_ok, bearer_token, iso, read_secret, token_match, token_ok  # noqa: F401
 from replicant_telemetry.core import (  # noqa: F401
-    ReplicantContext,
     JsonLogFormatter,
+    ReplicantContext,
     current_replicant_context,
     job_context,
     set_replicant_context,
     start_job_root_span,
 )
-from replicant_telemetry.common import bearer_ok, bearer_token, iso, read_secret, token_match, token_ok  # noqa: F401
 from replicant_telemetry.jsonlog import JsonFormatter, json_logging  # noqa: F401
 from replicant_telemetry.redact import RedactingFormatter  # noqa: F401
 from replicant_telemetry.runtime import emit_job_root, enabled, job_span, log_context, shutdown, tracer  # noqa: F401

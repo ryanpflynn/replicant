@@ -18,7 +18,7 @@ from temporalio.exceptions import ApplicationError
 
 from replicant_worker import ids
 from replicant_worker.activities import grants, s3
-from replicant_worker.activities.base import implements, http, problem
+from replicant_worker.activities.base import http, implements, problem
 from replicant_worker.activities.config import read_secret, settings
 
 NON_RETRYABLE_CODES = {"invalid_request", "missing_idempotency_key", "forbidden", "run_not_found", "run_expired",

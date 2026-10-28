@@ -12,10 +12,10 @@ import dataclasses
 import hashlib
 import io
 import json
-import os
 import tarfile
 from typing import Any
 
+import fakes
 import httpx
 import pytest
 import zstandard
@@ -25,7 +25,6 @@ from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
-import fakes
 from replicant_worker import ids, local_bundle, resources
 from replicant_worker.activities import base, bundle, config, core, gates, grants, notify, qa, runner, s3, staging
 
@@ -192,6 +191,7 @@ def test_bundle_from_registry_bucket(env) -> None:
 def test_cdef_vectors_and_shared_digests() -> None:
     """The shared C-DEF vectors (libs/python/replicant-cdef) hold for the worker's own JCS too."""
     import importlib.resources
+
     import replicant_cdef
     from replicant_worker.activities import jcs
     v = json.loads(importlib.resources.files("replicant_cdef").joinpath("vectors.json").read_text())

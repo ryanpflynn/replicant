@@ -23,13 +23,13 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from github_integration.clients import S3, Broker, ControlPlane, Temporal
+from github_integration.config import Settings
 from replicant_ids import dev_principal, ulid
-from replicant_telemetry.common import iso
 from replicant_scm import canonical_host
 from replicant_scm.events import NormalizedEvent
 from replicant_scm.gitea import GiteaClient, normalize
-from github_integration.clients import Broker, ControlPlane, S3, Temporal
-from github_integration.config import Settings
+from replicant_telemetry.common import iso
 
 log = logging.getLogger(__name__)
 

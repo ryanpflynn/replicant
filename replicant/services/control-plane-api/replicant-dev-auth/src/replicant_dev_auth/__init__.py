@@ -36,8 +36,8 @@ DEV_USER_HEADER = "x-replicant-dev-user"
 
 def install(app: Any, ctx: Any, settings: Any) -> None:
     """Called by control-plane-api's app factory when this package is importable (dev image)."""
-    from control_plane_api.authz import Principal
     from control_plane_api.auth import bearer, service_principal
+    from control_plane_api.authz import Principal
     from control_plane_api.config import read_secret
     from control_plane_api.ids import dev_user_principal
     from replicant_telemetry.common import token_ok

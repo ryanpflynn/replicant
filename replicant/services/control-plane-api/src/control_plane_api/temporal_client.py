@@ -12,8 +12,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from temporalio.client import Client, WorkflowUpdateFailedError, WorkflowUpdateRPCTimeoutOrCancelledError
-from temporalio.common import (PinnedVersioningOverride, Priority, WorkerDeploymentVersion, WorkflowIDConflictPolicy,
-                               WorkflowIDReusePolicy)
+from temporalio.common import (
+    PinnedVersioningOverride,
+    Priority,
+    WorkerDeploymentVersion,
+    WorkflowIDConflictPolicy,
+    WorkflowIDReusePolicy,
+)
 from temporalio.exceptions import ApplicationError
 from temporalio.service import RPCError, RPCStatusCode
 

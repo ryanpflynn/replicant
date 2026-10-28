@@ -7,9 +7,9 @@ from control_plane_api import contracts, registry
 from control_plane_api.auth import parse_token_map
 from control_plane_api.authz import AuthorizeRequest, Evaluator, Principal, PrincipalLookup
 from control_plane_api.grants import load_jwks
-from control_plane_api.ids import dev_user_principal, derived, release_bundle_id
-from control_plane_api.routes_gates import _precheck
+from control_plane_api.ids import derived, dev_user_principal, release_bundle_id
 from control_plane_api.problems import ProblemError
+from control_plane_api.routes_gates import _precheck
 
 
 def test_cids_vectors_and_dev_principal():

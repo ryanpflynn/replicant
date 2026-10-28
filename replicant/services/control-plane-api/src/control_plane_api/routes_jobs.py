@@ -27,7 +27,7 @@ def _cursor_decode(c: str | None) -> int:
     try:
         return int(json.loads(base64.urlsafe_b64decode(c + "==").decode())["o"])
     except Exception:  # noqa: BLE001
-        raise ProblemError(400, "invalid_cursor")
+        raise ProblemError(400, "invalid_cursor") from None
 
 
 def _cursor_encode(offset: int) -> str:

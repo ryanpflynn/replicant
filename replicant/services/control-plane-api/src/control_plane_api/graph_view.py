@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 import re
 from typing import Any
+
 from replicant_telemetry.common import iso
 
 TERMINAL = ("succeeded", "failed", "cancelled", "rejected", "expired", "taken_over")

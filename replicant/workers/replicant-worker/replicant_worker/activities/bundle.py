@@ -13,9 +13,9 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any
 
-import replicant_cdef
 from temporalio.exceptions import ApplicationError
 
+import replicant_cdef
 from replicant_worker import local_bundle
 from replicant_worker.activities import s3
 

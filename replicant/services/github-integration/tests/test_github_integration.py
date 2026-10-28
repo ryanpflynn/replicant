@@ -13,9 +13,9 @@ from pathlib import Path
 import httpx
 import pytest
 
+from github_integration.consumer import build_job_request, dev_principal
 from replicant_ids import ulid
 from replicant_scm.gitea import normalize
-from github_integration.consumer import build_job_request, dev_principal
 
 SCHEMA = Path(__file__).resolve().parents[2] / "control-plane-api/src/control_plane_api/schemas/job-request.schema.json"
 DSN = os.environ.get("CTL_GI_DB_DSN")

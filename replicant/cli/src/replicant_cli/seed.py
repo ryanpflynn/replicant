@@ -243,9 +243,8 @@ def step_identity_links(c: Ctx) -> str:
     `svc_identity_service` through psql in postgres-replicant (no secret leaves the container)."""
     import subprocess
 
-    from replicant_ids import derived, dev_principal
-
     from replicant_cli import compose
+    from replicant_ids import derived, dev_principal
     ws = yaml.safe_load((c.p.compose_dir / "config" / "slack-mock" / "workspace.yaml").read_text()) or {}
     team = (ws.get("team") or {}).get("id", SLACK_TEAM)
     slack = {u["name"]: u["id"] for u in ws.get("users") or [] if not u.get("is_bot")}
@@ -324,9 +323,8 @@ def step_projects_rbac(c: Ctx) -> str:
     projects, prj_ledger's access (ledger-admins -> project_admin) and its first configuration through the API."""
     import subprocess
 
-    from replicant_ids import derived, dev_principal
-
     from replicant_cli import compose
+    from replicant_ids import derived, dev_principal
     stmts = ["BEGIN;", "SET LOCAL ROLE svc_identity_service;"]
     for g, members in SEED_GROUPS.items():
         gid = derived("grp", "dev", g)

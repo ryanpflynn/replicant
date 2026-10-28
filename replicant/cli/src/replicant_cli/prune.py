@@ -167,3 +167,18 @@ def run(p: Paths, *, images: bool, volumes: bool, yes: bool, confirm: Callable[[
     after = free_gib()
     log(f"host free space: {before:.1f} GiB -> {after:.1f} GiB ({after - before:+.1f})")
     return 0
+
+
+def auto(p: Paths, log: Callable[[str], None], *, threshold_gib: float = LOW_SPACE_GIB) -> bool:
+    """Below threshold_gib free on the host: the safe default prune plus orphan volumes (anonymous unused and
+    finished-run volumes; project volumes never), without asking. Returns True when it pruned."""
+    free = free_gib()
+    if free >= threshold_gib:
+        return False
+    log(f"host free space is {free:.1f} GiB (< {threshold_gib} GiB): auto-pruning (`replicant dev prune --volumes`; "
+        "the Podman VM hangs when the disk fills)")
+    run(p, images=False, volumes=True, yes=True, confirm=lambda _q: True, log=log)
+    left = free_gib()
+    if left < threshold_gib:
+        log(f"WARNING: still {left:.1f} GiB free after the prune; try `replicant dev prune --images`")
+    return True

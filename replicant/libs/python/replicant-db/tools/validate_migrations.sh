@@ -16,10 +16,10 @@ C=${VALIDATE_CONTAINER:-plat-validate-$$}
 PORT=${VALIDATE_PORT:-$(python3 -c "import socket;s=socket.socket();s.bind(('',0));print(s.getsockname()[1])")}
 T=$(mktemp -d)
 PY=(uv run --project "$ROOT" --package replicant-db python)
-cleanup() { podman rm -f "$C" >/dev/null 2>&1 || true; rm -rf "$T"; }
+cleanup() { podman rm -f -v "$C" >/dev/null 2>&1 || true; rm -rf "$T"; }
 if [ "${KEEP:-0}" = 1 ]; then echo "container $C on port $PORT (kept)"; else trap cleanup EXIT; fi
 MIGPW=$(python3 -c "import secrets;print(secrets.token_urlsafe(24))")
-podman rm -f "$C" >/dev/null 2>&1 || true
+podman rm -f -v "$C" >/dev/null 2>&1 || true
 podman run -d --name "$C" -e POSTGRES_PASSWORD=pw -e POSTGRES_DB=replicant -p "127.0.0.1:$PORT:5432" "$IMG" >/dev/null
 until podman exec "$C" pg_isready -U postgres >/dev/null 2>&1; do sleep 1; done; sleep 2
 psqlf() { podman cp "$2" "$C:/tmp/v.sql" >/dev/null; podman exec -e PGOPTIONS="-c client_min_messages=warning" "$C" psql -U "$1" -d "${3:-replicant}" -q -v ON_ERROR_STOP=1 -f /tmp/v.sql >/dev/null; }

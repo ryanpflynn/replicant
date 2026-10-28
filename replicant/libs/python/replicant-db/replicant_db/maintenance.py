@@ -173,7 +173,6 @@ def tenant_partitions(conn: Connection) -> list[str]:
 
 
 if __name__ == "__main__":  # integration check used in tools/validate.sh
-    import os
     import sys
 
     from replicant_db.session import sync_engine_from_env

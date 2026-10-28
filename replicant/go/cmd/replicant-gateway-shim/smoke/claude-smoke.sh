@@ -16,7 +16,7 @@ W=${1:-$(mktemp -d)}
 PORT=${GW_PORT:-18420}
 IMG=localhost/replicant/replicant-gateway-shim:dev
 mkdir -p "$W/keys" "$W/secrets" "$W/usage" "$W/evidence"; chmod 777 "$W/usage"
-cleanup() { podman rm -f gw-smoke-shim >/dev/null 2>&1 || true; }
+cleanup() { podman rm -f -v gw-smoke-shim >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 podman run --rm --name gw-smoke-mint -v "$W/keys:/keys:Z" --user 0 --entrypoint /usr/local/bin/replicant-gateway-shim "$IMG" \
@@ -26,7 +26,7 @@ python3 -c "import secrets;print(secrets.token_urlsafe(32),end='')" > "$W/secret
 printf '"%s": svc_replicant-services\n' "$(cat "$W/secrets/svc_token")" > "$W/secrets/gateway_service_tokens"
 chmod 644 "$W/secrets/"*
 
-podman rm -f gw-smoke-shim >/dev/null 2>&1 || true
+podman rm -f -v gw-smoke-shim >/dev/null 2>&1 || true
 podman run -d --name gw-smoke-shim -p "127.0.0.1:$PORT:8420" \
   -v "$spec_cfg:/etc/gateway-shim:ro" -v "$root/tests/fixtures/gateway-scripts:/cassettes/scripts:ro" \
   -v "$W/keys:/keys:ro" -v "$W/secrets:/run/secrets:ro" -v "$W/usage:/usage" \

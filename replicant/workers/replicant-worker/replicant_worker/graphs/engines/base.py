@@ -10,8 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
-from replicant_worker.graphs.graphspec import GraphSpec
-
 
 class BoundaryReached(Exception):
     """Raised before running node `node_key` when a Continue-As-New boundary applies there.

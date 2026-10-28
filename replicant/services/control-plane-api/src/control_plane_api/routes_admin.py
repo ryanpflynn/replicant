@@ -214,7 +214,7 @@ async def bootstrap_assignment(env: str, request: Request, body: dict[str, Any] 
                                               evidence={"m1_dev_seed": True})
             return await registry.bootstrap(conn, db, env, rb, principal.principal_id, reason)
     except registry.BootstrapConflict as e:
-        raise ProblemError(409, str(e).split(":")[0], detail=str(e))
+        raise ProblemError(409, str(e).split(":")[0], detail=str(e)) from None
 
 
 # ------------------------------------------------------------------------------------------------ internal
@@ -276,7 +276,7 @@ async def put_repo_settings(tenant_id: str, repo_id: str, request: Request, body
                                                                 "tenant_id": tenant_id, "settings": body},
                             headers={"Authorization": request.headers.get("authorization", "")})
     except httpx.HTTPError as e:
-        raise ProblemError(503, "github_integration_unavailable", detail=type(e).__name__)
+        raise ProblemError(503, "github_integration_unavailable", detail=type(e).__name__) from None
     if r.status_code >= 400:
         raise ProblemError(r.status_code if r.status_code < 500 else 502, "repo_settings_rejected", detail=r.text[:300])
     return r.json()

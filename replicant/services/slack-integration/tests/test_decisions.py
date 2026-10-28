@@ -6,8 +6,8 @@ from typing import Any
 
 import httpx
 import pytest
-
 from conftest import FakeRepo, FakeSlack
+
 from slack_integration.blocks import DeliverRequest, build_blocks, home_view, resolved_blocks
 from slack_integration.config import Settings
 from slack_integration.decisions import Decisions

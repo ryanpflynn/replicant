@@ -40,7 +40,8 @@ packages = ["replicant_worker"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = [".", "tests"]
-python_files = ["test_activities.py", "test_worker_smoke.py", "test_units.py", "test_scenarios.py", "test_replay.py"]
+python_files = ["test_activities.py", "test_worker_smoke.py", "test_units.py", "test_scenarios.py", "test_replay.py",
+                "test_memory.py", "test_pr_feedback.py", "test_lint_activity_ids.py"]
 # Scenarios other than the fast five are `slow`: deselected by default; `-m "slow or not slow"` runs everything.
 addopts = "-m 'not slow'"
 markers = ["slow: long Temporal scenario (tests/test_scenarios.py); run with -m slow or `replicant dev test --slow`"]

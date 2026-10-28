@@ -5,7 +5,6 @@ import asyncio
 import uuid
 from datetime import timedelta
 
-import pytest
 from temporalio import activity, workflow
 from temporalio.common import VersioningBehavior
 from temporalio.testing import WorkflowEnvironment
@@ -13,8 +12,14 @@ from temporalio.worker import Worker
 
 from replicant_temporal.interceptors import ReplicantContext, ReplicantContextInterceptor, current_context, use_context
 from replicant_temporal.search_attributes import dev_server_args, job_start_attributes
-from replicant_temporal.versioning import (BUILD_ID_RE, current_build_id, deployment_config, describe_version_queues,
-                                         dev_build_id, set_current_version)
+from replicant_temporal.versioning import (
+    BUILD_ID_RE,
+    current_build_id,
+    deployment_config,
+    describe_version_queues,
+    dev_build_id,
+    set_current_version,
+)
 
 
 @activity.defn(name="t.echo_ctx")

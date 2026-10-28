@@ -24,6 +24,7 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:  # noqa: BLE001
             return 1
     import uvicorn
+
     from slack_integration.app import create_app
     uvicorn.run(create_app(s), host="0.0.0.0", port=s.http_port, log_config=None, access_log=False)
     return 0

@@ -134,7 +134,7 @@ class Intake:
                     res = await registry.resolve(conn, self.env, tenant, job_id, jr.get("requested_release_bundle_id"),
                                                  may_pin, evaluation_mode, req["principal_id"])
                 except registry.PinNotAllowed:
-                    raise ProblemError(403, "release_pin_required")
+                    raise ProblemError(403, "release_pin_required") from None
                 if proj is not None and jr.get("requested_release_bundle_id") is None and \
                         not projects.is_default_pinned(proj[2]) and self.app_state is not None:
                     try:
@@ -142,7 +142,7 @@ class Intake:
                                                            tenant, proj[0], proj[2], "svc_control-plane-api")
                     except derived.CompileError as e:
                         raise ProblemError(503, "project_config_unbuildable", detail=str(e)[:300],
-                                           headers={"Retry-After": "30"})
+                                           headers={"Retry-After": "30"}) from None
                     reason = res.assignment_reason if res.assignment_reason.endswith("+layer") \
                         else res.assignment_reason + "+layer"
                     res = dataclasses.replace(res, release_bundle_id=drb, assignment_reason=reason)
@@ -175,7 +175,7 @@ class Intake:
                                                              "assignment_reason": res.assignment_reason}})
         except registry.AssignmentError as e:
             log.warning("bundle_unresolvable tenant=%s reason=%s", tenant, e)
-            raise ProblemError(503, "bundle_unresolvable", detail=str(e), headers={"Retry-After": "30"})
+            raise ProblemError(503, "bundle_unresolvable", detail=str(e), headers={"Retry-After": "30"}) from None
 
         # 8. after commit: start the workflow (never inside the intake transaction, XD-FIX-R2-048a)
         start_status = await self.start(job_id, tenant, res.release_bundle_id, res.worker_build_id, jr, wf_type)

@@ -118,12 +118,25 @@ def _status(r: Result, rc: int) -> Result:
 
 def _run_logged(cmd: list[str], log: Path, cwd: Path | None = None, env: dict[str, str] | None = None,
                 timeout: float | None = None) -> int:
+    """Run cmd with output to log. On timeout the process gets SIGTERM first (pytest then tears down its fixtures,
+    e.g. the worker scenarios' Temporal dev server) and SIGKILL 30 s later."""
     with log.open("w") as f:
+        proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT)
         try:
-            return subprocess.run(cmd, cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT, timeout=timeout).returncode
+            return proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
+            proc.terminate()
+            try:
+                proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
             f.write(f"\n*** timed out after {timeout}s\n")
             return 124
+        except BaseException:
+            proc.terminate()
+            proc.wait()
+            raise
 
 
 # ---------------------------------------------------------------------------------------------------------- python
@@ -140,18 +153,46 @@ def python_packages(p: Paths) -> list[tuple[str, str, Path]]:
     return out
 
 
+# Worker scenarios gated on a build-time variable (replicant_worker/build_config.py) that would change every other
+# scenario: with --slow they run in their own pytest invocation with that variable set.
+WORKER_ENV_GROUPS: tuple[tuple[tuple[str, ...], dict[str, str]], ...] = (
+    (("license_prestep",), {"REPLICANT_EXTRA_NODE_MODULES": "replicant_worker.nodes.license_scan"}),
+    (("mid_run_can",), {"REPLICANT_HISTORY_CAN_EVENTS": "150"}),
+    (("dependency_outage", "dependency_giveup", "identity_outage"), {"REPLICANT_TEST_FAST_RETRY": "1"}),
+)
+
+
+def _scenario_k(names: tuple[str, ...]) -> str:
+    return "test_scenario and (" + " or ".join(names) + ")"
+
+
 def _run_pytest(ctx: Ctx, s: Suite) -> list[Result]:
     r = Result(s.name, log=ctx.out / f"{s.name}.log")
-    xml = ctx.out / f"junit-{s.name}.xml"
-    cmd = ["uv", "run", "--no-sync", "--package", s.package, "python", "-m", "pytest", "-q", "-p", "no:cacheprovider",
-           f"--junitxml={xml}", "-o", "junit_family=xunit2"]
+    base = ["uv", "run", "--no-sync", "--package", s.package, "python", "-m", "pytest", "-q", "-p", "no:cacheprovider",
+            "-o", "junit_family=xunit2"]
+    runs: list[tuple[list[str], dict[str, str]]] = [([], {})]
     if s.name == WORKER and ctx.slow:
-        cmd += ["-m", "slow or not slow"]
+        gated = tuple(n for names, _ in WORKER_ENV_GROUPS for n in names)
+        runs = [(["-m", "slow or not slow", "-k", f"not ({_scenario_k(gated)})"], {})]
+        runs += [(["-m", "slow or not slow", "-k", _scenario_k(names), "tests/test_scenarios.py"], extra)
+                 for names, extra in WORKER_ENV_GROUPS]
     t0 = time.monotonic()
-    rc = _run_logged(cmd, r.log, cwd=s.cwd, env=ctx.env, timeout=7200)
+    rc = 0
+    for i, (args, extra) in enumerate(runs):
+        sfx = f"-{i}" if i else ""
+        xml = ctx.out / f"junit-{s.name}{sfx}.xml"
+        log = r.log if not i else ctx.out / f"{s.name}{sfx}.log"
+        if extra:
+            ctx.log(f"     {s.name}: {' '.join(f'{k}={v}' for k, v in extra.items())} -k '{args[3]}'")
+        one = _run_logged([*base, f"--junitxml={xml}", *args], log, cwd=s.cwd, env={**ctx.env, **extra}, timeout=7200)
+        rc = rc or (0 if one in (0, 5) else one)
+        if xml.is_file():
+            p, f, sk = _junit_counts(xml)
+            r.passed, r.failed, r.skipped = r.passed + p, r.failed + f, r.skipped + sk
+        if i:
+            with r.log.open("a") as main_log:  # one log per suite: append the gated runs to the main one
+                main_log.write(f"\n===== {' '.join(f'{k}={v}' for k, v in extra.items())} =====\n" + log.read_text())
     r.seconds = time.monotonic() - t0
-    if xml.is_file():
-        r.passed, r.failed, r.skipped = _junit_counts(xml)
     return [_status(r, rc)]
 
 
@@ -220,6 +261,51 @@ def _run_go(ctx: Ctx, s: Suite) -> list[Result]:
         _write_junit(ctx.out / f"junit-{r.name.replace(':', '-')}.xml", r.name, junit)
         out.append(_status(r, mrc))
     return out
+
+
+# ---------------------------------------------------------------------------------------------------------- lint
+def _lint_result(ctx: Ctx, name: str, cases: list[tuple[str, str, float, str]], log: Path, rc: int) -> Result:
+    r = Result(name, log=log, seconds=sum(c[2] for c in cases))
+    r.passed = sum(c[1] == "pass" for c in cases)
+    r.failed = sum(c[1] == "fail" for c in cases)
+    _write_junit(ctx.out / f"junit-{name.replace(':', '-')}.xml", name, cases)
+    return _status(r, 0 if not r.failed and rc == 0 else (rc or 1))
+
+
+def _run_lint_python(ctx: Ctx, s: Suite) -> list[Result]:
+    """ruff check with the root pyproject's lenient config (pyflakes, import order, a bugbear subset)."""
+    log = ctx.out / "lint-python.log"
+    t0 = time.monotonic()
+    rc = _run_logged(["uv", "run", "--no-sync", "ruff", "check", "--no-cache", "."], log, cwd=ctx.p.root, env=ctx.env,
+                     timeout=600)
+    return [_lint_result(ctx, s.name, [("ruff.check", "pass" if rc == 0 else "fail", time.monotonic() - t0,
+                                        log.read_text(errors="replace"))], log, rc)]
+
+
+def _run_lint_go(ctx: Ctx, s: Suite) -> list[Result]:
+    """go vet ./... in every go.work module (vet writes no binaries into the module directories)."""
+    mods = go_modules(ctx.p)
+    log = ctx.out / "lint-go.log"
+    script = ('for m in ' + " ".join(mods) + '; do s=$(date +%s.%N); echo "@@BEGIN $m"; (cd "$m" && go vet ./... 2>&1); '
+              'echo "@@END $m $? $s $(date +%s.%N)"; done')
+    vols = []
+    for v, mnt in zip(GO_CACHE_VOLUMES, ("/go/pkg/mod", "/root/.cache"), strict=True):
+        vols += ["-v", f"{v}:{mnt}"]
+    rc = _run_logged(["podman", "run", "--rm", "-v", f"{ctx.p.root}:/src", "-w", "/src", *vols, "-e", "GOTOOLCHAIN=local",
+                      "-e", "GOFLAGS=-buildvcs=false", GO_IMAGE, "sh", "-c", script], log, timeout=1200)
+    cases, out, cur = [], [], None
+    for line in log.read_text(errors="replace").splitlines():
+        if line.startswith("@@BEGIN "):
+            cur, out = line.split()[1], []
+        elif line.startswith("@@END "):
+            _, m, mrc, a, b = line.split()
+            cases.append((f"go vet {m}", "pass" if mrc == "0" else "fail", float(b) - float(a), "\n".join(out)))
+            cur = None
+        elif cur:
+            out.append(line)
+    if len(cases) != len(mods):
+        cases.append(("go vet [container]", "fail", 0.0, f"container exit {rc}; see {log}"))
+    return [_lint_result(ctx, s.name, cases, log, 0 if len(cases) == len(mods) else rc or 1)]
 
 
 # ---------------------------------------------------------------------------------------------------------- web
@@ -334,6 +420,8 @@ def unit_suites(p: Paths) -> list[Suite]:
               for n, pkg, d in python_packages(p)]
     suites.sort(key=lambda s: s.name != WORKER)  # the long pole starts first
     suites.append(Suite("go", _run_go, rows=[_go_row(m) for m in go_modules(p)]))
+    suites.append(Suite("lint:python", _run_lint_python))
+    suites.append(Suite("lint:go", _run_lint_go))
     suites.append(Suite("web", _run_web, rows=["web:tsc", "web:vitest"]))
     return suites
 
@@ -523,7 +611,16 @@ def _run_playwright(ctx: Ctx, s: Suite) -> list[Result]:
     return [_status(r, rc)]
 
 
-def _set_gateway_mode(p: Paths, mode: str, log: Callable[[str], None]) -> None:
+def gateway_mode(p: Paths) -> str:
+    """REPLICANT_GATEWAY_MODE as written in dev/compose/.env (what gateway-shim runs with); script when unset."""
+    if p.env_file.is_file():
+        for line in p.env_file.read_text().splitlines():
+            if line.startswith("REPLICANT_GATEWAY_MODE="):
+                return line.split("=", 1)[1].strip() or "script"
+    return "script"
+
+
+def set_gateway_mode(p: Paths, mode: str, log: Callable[[str], None]) -> bool:
     """Set REPLICANT_GATEWAY_MODE and recreate only gateway-shim, then wait until it is healthy again."""
     from replicant_cli import secrets
     secrets.set_env(p, {"REPLICANT_GATEWAY_MODE": mode})
@@ -534,9 +631,10 @@ def _set_gateway_mode(p: Paths, mode: str, log: Callable[[str], None]) -> None:
         c = compose.containers().get("gateway-shim")
         if c and c.status == "running" and getattr(c, "health", "healthy") in ("healthy", "", None):
             log(f"gateway-shim is up in `{mode}` mode")
-            return
+            return True
         time.sleep(3)
     log(f"WARNING: gateway-shim not healthy after switching to `{mode}`")
+    return False
 
 
 def e2e(p: Paths, *, only: list[str], fail_fast: bool, junit: str | None, log: Callable[[str], None]) -> int:
@@ -552,16 +650,16 @@ def e2e(p: Paths, *, only: list[str], fail_fast: bool, junit: str | None, log: C
     suites = _selected(suites, only)
     out = out_dir(p)
     # The E2Es use the scripted gateway (deterministic, no model cost): switch for the run, restore afterwards.
-    mode = compose.env_values(p).get("REPLICANT_GATEWAY_MODE", "script")
+    mode = gateway_mode(p)
     if mode != "script":
         log(f"gateway mode is {mode!r}: switching to `script` for the E2Es (restored afterwards)")
-        _set_gateway_mode(p, "script", log)
+        set_gateway_mode(p, "script", log)
     try:
         log(f"running {len(suites)} E2E suite(s) one at a time (shared stack); logs in {out}")
         results = run_suites(Ctx(p, out, dict(os.environ), log=log), suites, 1, fail_fast)
     finally:
         if mode != "script":
-            _set_gateway_mode(p, mode, log)
+            set_gateway_mode(p, mode, log)
     print_table(results, time.monotonic() - t0, log)
     copy_junit(out, junit, log)
     return 1 if any(r.status in ("FAIL", "NOT RUN") for r in results) else 0

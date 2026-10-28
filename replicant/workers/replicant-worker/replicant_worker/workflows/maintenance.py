@@ -18,7 +18,13 @@ from datetime import timedelta
 from typing import Any
 
 from temporalio import workflow
-from temporalio.common import Priority, SearchAttributeKey, SearchAttributePair, TypedSearchAttributes, VersioningBehavior
+from temporalio.common import (
+    Priority,
+    SearchAttributeKey,
+    SearchAttributePair,
+    TypedSearchAttributes,
+    VersioningBehavior,
+)
 from temporalio.exceptions import ApplicationError
 
 from replicant_worker import ids

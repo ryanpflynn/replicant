@@ -26,16 +26,22 @@ from temporalio import workflow
 from temporalio.common import VersioningBehavior
 from temporalio.exceptions import ActivityError
 
+from replicant_worker import nodes as _nodes  # noqa: F401  (registers core node types)
 from replicant_worker.graphs.dsl import Guard
 from replicant_worker.graphs.engines.base import BoundaryReached, EngineResult
 from replicant_worker.graphs.graphspec import GraphSpec
 from replicant_worker.registry import NodeFailed
-from replicant_worker.workflows.state import TERMINAL_STATUS_FOR_OUTCOME, JobState
-from replicant_worker import nodes as _nodes  # noqa: F401  (registers core node types)
 from replicant_worker.workflows.job.activities import ActivitiesMixin
 from replicant_worker.workflows.job.can import CanMixin
-from replicant_worker.workflows.job.common import _Can, _etype, _evaluation, _PrologueInterrupt, _summary, _target
-from replicant_worker.workflows.job.common import steering_backlog_input  # noqa: F401  (re-exported for callers)
+from replicant_worker.workflows.job.common import (
+    _Can,
+    _etype,
+    _evaluation,
+    _PrologueInterrupt,
+    _summary,
+    _target,
+    steering_backlog_input,  # noqa: F401  (re-exported for callers)
+)
 from replicant_worker.workflows.job.nodes import NodesMixin
 from replicant_worker.workflows.job.projection import ProjectionMixin
 from replicant_worker.workflows.job.prologue import PrologueMixin
@@ -44,6 +50,7 @@ from replicant_worker.workflows.job.signals import SignalsMixin
 from replicant_worker.workflows.job.terminal import TerminalMixin
 from replicant_worker.workflows.job.updates import UpdatesMixin
 from replicant_worker.workflows.job.waits import WaitsMixin
+from replicant_worker.workflows.state import TERMINAL_STATUS_FOR_OUTCOME, JobState
 
 
 @dataclass

@@ -12,6 +12,7 @@ from typing import Any, AsyncIterator
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from support.stubs import FakeWorld  # noqa: E402
 from temporalio.client import Client, WorkflowHandle  # noqa: E402
 from temporalio.common import SearchAttributeKey, SearchAttributePair, TypedSearchAttributes  # noqa: E402
 from temporalio.testing import WorkflowEnvironment  # noqa: E402
@@ -19,7 +20,6 @@ from temporalio.worker import Replayer, Worker, WorkerDeploymentConfig  # noqa: 
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner, SandboxRestrictions  # noqa: E402
 
 from replicant_worker import ids  # noqa: E402
-from support.stubs import FakeWorld  # noqa: E402
 from replicant_worker.workflows.maintenance import MaintenanceBatch, MaintenanceShard  # noqa: E402
 from replicant_worker.workflows.replicant_job import ReplicantJob, ReplicantJobInput  # noqa: E402
 
@@ -35,6 +35,7 @@ PASSTHROUGH = ("typing_extensions", "pydantic", "pydantic_core", "replicant_work
 RUNNER = SandboxedWorkflowRunner(restrictions=SandboxRestrictions.default.with_passthrough_modules(*PASSTHROUGH))
 
 from replicant_worker.resources import CONTRACTS  # noqa: E402
+
 JOB_REQUEST = json.loads((CONTRACTS / "job-request.schema.json").read_text())["examples"][0]
 BUNDLE = "rb_ds5p3wmcj4dag2e9a8ncp4py6k"
 ALICE = "usr_01knk8dfr0fvjc7v0b9vhvkzaa"

@@ -10,9 +10,9 @@ from pathlib import Path
 
 import httpx
 import pytest
+from conftest import BOT_TOKEN, CALLER_TOKEN, DELIVERY, PRINCIPAL, SIGNING_SECRET, FakeRepo, deliver_body
 from fastapi.testclient import TestClient
 
-from conftest import BOT_TOKEN, CALLER_TOKEN, DELIVERY, PRINCIPAL, SIGNING_SECRET, FakeRepo, deliver_body
 from slack_integration.app import create_app
 from slack_integration.config import Settings
 from slack_integration.slack import SlackGateway

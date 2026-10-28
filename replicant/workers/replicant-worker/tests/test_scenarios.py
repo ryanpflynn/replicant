@@ -14,11 +14,24 @@ from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from harness import (ALICE, BOB, decide_req, histories, new_job_id, open_gate, pr_event, replay_all,
-                     side_effect_activity_ids, snapshot, start_env, start_job, wait_for, workers)
-from temporalio.client import WorkflowUpdateFailedError
-
+from harness import (
+    ALICE,
+    BOB,
+    decide_req,
+    histories,
+    new_job_id,
+    open_gate,
+    pr_event,
+    replay_all,
+    side_effect_activity_ids,
+    snapshot,
+    start_env,
+    start_job,
+    wait_for,
+    workers,
+)
 from support.stubs import FakeWorld
+from temporalio.client import WorkflowUpdateFailedError
 
 
 class Skipped(Exception):
@@ -197,7 +210,7 @@ async def s_gate_expiry(env) -> str:
         check(res["outcome"] == "gate_expired" and res["status"] == "expired", f"result {res}")
         check(len(world.called("notify.gate_reminder")) >= 2, "reminders")
         check(len(world.called("notify.gate_escalated")) == 1, "escalation")
-        info = await common_checks("gate_expiry", c, world, job)
+        await common_checks("gate_expiry", c, world, job)
     return f"reminders={len(world.called('notify.gate_reminder'))}"
 
 
@@ -473,11 +486,13 @@ async def s_maintenance_batch(env) -> str:
 async def s_tenant_codec(env) -> str:
     """XD-09-06: every payload encrypted with the job's tenant key, routed by serialization context."""
     import dataclasses
+
+    from harness import RUNNER
     from temporalio.client import Client
     from temporalio.converter import DataConverter
     from temporalio.worker import Replayer
+
     from replicant_worker.codec import ENCODING, LocalKeyProvider, TenantContextCodec, TenantDirectory
-    from harness import RUNNER
     from replicant_worker.workflows.maintenance import MaintenanceBatch
     from replicant_worker.workflows.replicant_job import ReplicantJob
     directory = TenantDirectory()
@@ -1318,7 +1333,7 @@ async def s_maintenance_shards(env) -> str:
             await c.get_workflow_handle(cid).signal("pr.event", pr_event(cid, "pull_request_merged", 300 + i))
         res = await h.result()
         check(res["children_by_status"] == {"succeeded": 5} and res["shards"] == 3, f"batch {res}")
-        shard_ids = [w.id async for w in c.list_workflows(f"WorkflowType = 'MaintenanceShard'")]
+        shard_ids = [w.id async for w in c.list_workflows("WorkflowType = 'MaintenanceShard'")]
         check(sorted(shard_ids) == [f"{parent}:shard:{n}" for n in (1, 2, 3)], f"shards {shard_ids}")
         check(not world.invalid_projections and not world.contract_errors, "projections and peer schemas")
         hists = await histories(c, parent)
@@ -1455,15 +1470,65 @@ import pytest  # noqa: E402
 FAST = ("bugfix_full", "cancel_during_run", "eval_mode", "repair_budget", "migration")
 
 
+def _dev_servers() -> set[int]:
+    """PIDs of `temporal server start-dev` processes that are children of this pytest process."""
+    import subprocess
+    r = subprocess.run(["pgrep", "-P", str(os.getpid()), "-f", "server start-dev"], capture_output=True, text=True)
+    return {int(x) for x in r.stdout.split()}
+
+
+def _interrupt(signum, _frame):
+    raise KeyboardInterrupt(f"signal {signum}")  # pytest then runs session teardown (stops the dev server)
+
+
 @pytest.fixture(scope="session")
 def scenario_env():
+    """One Temporal dev server for every scenario. Stopped at the end of the session, also when pytest is
+    terminated (SIGTERM/SIGHUP become KeyboardInterrupt) and when env.shutdown() fails: a dev server this fixture
+    started never outlives the session."""
+    import signal
+    import time as _time
+    before = _dev_servers()
+    prev = {s: signal.signal(s, _interrupt) for s in (signal.SIGTERM, signal.SIGHUP)}
     loop = asyncio.new_event_loop()
-    env = loop.run_until_complete(start_env())
+    env, mine = None, set()
     try:
+        env = loop.run_until_complete(start_env())
+        mine = _dev_servers() - before
         yield loop, env
     finally:
-        loop.run_until_complete(env.shutdown())
-        loop.close()
+        try:
+            if env is not None:
+                loop.run_until_complete(asyncio.wait_for(env.shutdown(), 60))
+        except BaseException:  # noqa: BLE001  (fall through to the kill below)
+            pass
+        finally:
+            mine |= _dev_servers() - before
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                alive = {p for p in mine if _alive(p)}
+                for pid in alive:
+                    os.kill(pid, sig)
+                deadline = _time.monotonic() + 10
+                while alive and _time.monotonic() < deadline:
+                    _time.sleep(0.2)
+                    alive = {p for p in alive if _alive(p)}
+                if not alive:
+                    break
+            loop.close()
+            for s, h in prev.items():
+                signal.signal(s, h)
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.waitpid(pid, os.WNOHANG)  # reap if it is our zombie
+    except ChildProcessError:
+        pass
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
 
 
 @pytest.mark.parametrize("name", [pytest.param(n, marks=() if n in FAST else pytest.mark.slow, id=n)

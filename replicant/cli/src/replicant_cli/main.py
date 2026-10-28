@@ -9,7 +9,9 @@ import time
 
 import typer
 
-from replicant_cli import compose, prune as prunemod, secrets, seed as seedmod, testing
+from replicant_cli import compose, secrets, testing
+from replicant_cli import prune as prunemod
+from replicant_cli import seed as seedmod
 from replicant_cli.paths import paths
 
 app = typer.Typer(no_args_is_help=True, add_completion=False, help="Replicant CLI")
@@ -102,18 +104,17 @@ def up(
     services: str = typer.Option("", help="comma-separated subset (plus their dependencies)"),
     with_observability: bool = typer.Option(False, "--with-observability",
                                             help="add Alloy, Loki, Tempo, Prometheus, Grafana; turn on OTel export"),
-    gateway: str = typer.Option("script", help="gateway backend: script (default, no key) or passthrough"),
+    gateway: str = typer.Option(None, help="gateway backend: script or passthrough (default: keep the mode in "
+                                           "dev/compose/.env; script when unset)"),
 ) -> None:
     """Generate secrets, build images, start the stack and wait until healthy."""
     _guard()
     p = paths()
-    if gateway not in ("script", "passthrough"):
+    if gateway not in (None, "script", "passthrough"):
         raise typer.BadParameter("--gateway must be script or passthrough")
     created = secrets.ensure(p)
-    free = prunemod.free_gib()
-    if free < prunemod.LOW_SPACE_GIB:
-        log(f"WARNING: host free space is {free:.1f} GiB (< {prunemod.LOW_SPACE_GIB}); the Podman VM hangs when the "
-            "disk fills. Run `replicant dev prune` (or --images/--volumes).")
+    gateway = gateway or testing.gateway_mode(p)
+    prunemod.auto(p, log)
     if gateway == "passthrough" and not secrets.import_provider_key(p):
         log("--gateway passthrough needs ANTHROPIC_API_KEY in replicant/dev/.env (not found or empty)")
         raise typer.Exit(2)
@@ -134,7 +135,7 @@ def up(
         r = compose.run_compose(p, profile, ["up", "-d", "--no-build", *names], timeout=timeout)
     except subprocess.TimeoutExpired:
         log("podman-compose up timed out")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     if r.returncode != 0:
         log("podman-compose up reported errors:\n" + "\n".join((r.stdout + r.stderr).splitlines()[-30:]))
     # podman-compose 1.6 removes exited dependents when it recreates a changed service but does not recreate them;
@@ -176,14 +177,14 @@ def down(volumes: bool = typer.Option(False, "--volumes", "-v", help="also delet
             pass
     left = compose.containers()
     if left:
-        subprocess.run(["podman", "rm", "-f", *[c.name for c in left.values()]], capture_output=True)
+        subprocess.run(["podman", "rm", "-f", "-v", *[c.name for c in left.values()]], capture_output=True)
     if volumes:  # stack.md §7: sandbox containers and volumes labelled with a run id go with the state
         sel = "label=replicant.example.com/run-id"
         for _ in range(3):  # pause containers go last: the rest of each pod group shares their netns
             r = subprocess.run(["podman", "ps", "-a", "-q", "--filter", sel], capture_output=True, text=True)
             if not r.stdout.split():
                 break
-            subprocess.run(["podman", "rm", "-f", "--depend", *r.stdout.split()], capture_output=True)
+            subprocess.run(["podman", "rm", "-f", "-v", "--depend", *r.stdout.split()], capture_output=True)
         r = subprocess.run(["podman", "volume", "ls", "-q", "--filter", sel], capture_output=True, text=True)
         if r.stdout.split():
             subprocess.run(["podman", "volume", "rm", "-f", *r.stdout.split()], capture_output=True)
@@ -199,7 +200,7 @@ def down(volumes: bool = typer.Option(False, "--volumes", "-v", help="also delet
                 break
             left = compose.containers()
             if left:
-                subprocess.run(["podman", "rm", "-f", *[c.name for c in left.values()]], capture_output=True)
+                subprocess.run(["podman", "rm", "-f", "-v", *[c.name for c in left.values()]], capture_output=True)
             subprocess.run(["podman", "volume", "rm", "-f", *left_vols], capture_output=True)
             time.sleep(2)
         if left_vols:
@@ -293,6 +294,7 @@ def test(
         if not yes:
             log("m3 tears the stack down with volumes (down -v) and takes 15-20 min; pass --yes to run it")
             raise typer.Exit(2)
+        prunemod.auto(p, log)
         raise typer.Exit(testing.m3(p, build=build, log=log))
     rc = 0
     if suite in ("unit", "all"):
@@ -301,8 +303,30 @@ def test(
         if rc and fail_fast:
             raise typer.Exit(rc)
     if suite in ("e2e", "all"):
+        prunemod.auto(p, log)
         rc = testing.e2e(p, only=sel if suite == "e2e" else [], fail_fast=fail_fast, junit=junit, log=log) or rc
     raise typer.Exit(rc)
+
+
+@dev.command("gateway-mode")
+def gateway_mode(
+    mode: str = typer.Argument(None, help="script | passthrough; omit to print the current mode"),
+) -> None:
+    """Print or switch the gateway backend (REPLICANT_GATEWAY_MODE), recreating only gateway-shim."""
+    _guard()
+    p = paths()
+    if mode is None:
+        typer.echo(testing.gateway_mode(p))
+        return
+    if mode not in ("script", "passthrough"):
+        raise typer.BadParameter("mode must be script or passthrough")
+    if mode == "passthrough" and not secrets.import_provider_key(p):
+        log("passthrough needs ANTHROPIC_API_KEY in replicant/dev/.env (not found or empty)")
+        raise typer.Exit(2)
+    if testing.gateway_mode(p) == mode and (c := compose.containers().get("gateway-shim")) and c.status == "running":
+        log(f"gateway-shim already in `{mode}` mode")
+        return
+    raise typer.Exit(0 if testing.set_gateway_mode(p, mode, log) else 1)
 
 
 @dev.command()

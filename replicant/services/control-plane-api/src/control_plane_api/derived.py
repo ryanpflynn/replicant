@@ -25,7 +25,8 @@ import yaml
 from jsonschema import Draft202012Validator
 from sqlalchemy import text
 
-from control_plane_api import graph_view, projects as P, registry
+from control_plane_api import graph_view, registry
+from control_plane_api import projects as P
 from control_plane_api.ids import jcs
 
 log = logging.getLogger(__name__)

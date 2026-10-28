@@ -56,8 +56,8 @@ up() {
 }
 
 down() {
-  podman rm -f ctl-pg ctl-temporal ctl-migrate >/dev/null 2>&1 || true
-  podman ps -a --format '{{.Names}}' | grep '^ctl-' | xargs -r podman rm -f >/dev/null 2>&1 || true
+  podman rm -f -v ctl-pg ctl-temporal ctl-migrate >/dev/null 2>&1 || true
+  podman ps -a --format '{{.Names}}' | grep '^ctl-' | xargs -r podman rm -f -v >/dev/null 2>&1 || true
   podman network rm $NET >/dev/null 2>&1 || true
   echo "ctl env down"
 }

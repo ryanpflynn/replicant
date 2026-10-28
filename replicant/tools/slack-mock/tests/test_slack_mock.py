@@ -11,7 +11,6 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-
 from slack_mock.app import Workspace, create_app, sign
 from slack_mock.render import mrkdwn
 

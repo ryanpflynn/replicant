@@ -28,7 +28,7 @@ import httpx
 from fastapi import APIRouter, Depends, Request, Response
 
 from control_plane_api import audit
-from control_plane_api.auth import check, current_principal, require
+from control_plane_api.auth import current_principal, require
 from control_plane_api.authz import Principal
 from control_plane_api.config import read_secret
 from control_plane_api.problems import ProblemError

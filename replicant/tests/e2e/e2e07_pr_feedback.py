@@ -24,9 +24,29 @@ import time
 import uuid
 
 import replicant_e2e as e
-from replicant_e2e import (JOB_TIMEOUT_S, ORG, READER, REPO, api, approve, gateway_mode, get_job, gitea, log, merge, never,
-                           ok, open_issue, open_publish_gate, reset_repo, snapshot, wait_ack, wait_for, wait_pr,
-                           wait_until)
+from replicant_e2e import (
+    JOB_TIMEOUT_S,
+    ORG,
+    READER,
+    REPO,
+    api,
+    approve,
+    gateway_mode,
+    get_job,
+    gitea,
+    log,
+    merge,
+    never,
+    ok,
+    open_issue,
+    open_publish_gate,
+    reset_repo,
+    snapshot,
+    wait_ack,
+    wait_for,
+    wait_pr,
+    wait_until,
+)
 
 e.TAG = "e2e07-pr-feedback"
 REVIEWER, UNLINKED = "carol", "zed"

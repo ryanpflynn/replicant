@@ -27,11 +27,22 @@ import sys
 import time
 from pathlib import Path
 
-
 import replicant_e2e as e1
 from replicant_e2e import log
-from replicant_e2e.notify import (SLACK, SLACK_IDS, comments, dm_text, dms, event_key, no_quiet_hours,  # noqa: F401
-                                 overrides, reassert_overrides, wait_comment, wait_dm, waiting)
+from replicant_e2e.notify import (  # noqa: F401
+    SLACK,
+    SLACK_IDS,
+    comments,
+    dm_text,
+    dms,
+    event_key,
+    no_quiet_hours,
+    overrides,
+    reassert_overrides,
+    wait_comment,
+    wait_dm,
+    waiting,
+)
 
 REMINDER_S = float(os.environ.get("E2E_REMINDER_S", "120"))
 EVIDENCE: dict = {}

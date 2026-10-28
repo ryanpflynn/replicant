@@ -22,8 +22,8 @@ import os
 from functools import lru_cache
 from typing import Any
 
-from replicant_worker import resources
 import replicant_cdef
+from replicant_worker import resources
 
 CLI_IMAGE = os.environ.get("REPLICANT_LOCAL_CLI_IMAGE", "localhost/replicant/cli-claude-code:dev")
 ENV_IMAGE = os.environ.get("REPLICANT_LOCAL_ENV_IMAGE", "localhost/replicant/env-go-service:dev")

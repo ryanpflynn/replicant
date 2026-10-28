@@ -3,8 +3,8 @@
 # with one commit. Prints "<port> <token>" (the token is a test-only credential of the throwaway container).
 set -euo pipefail
 cmd=$1; C=$2
-if [ "$cmd" = down ]; then podman rm -f "$C" >/dev/null 2>&1 || true; exit 0; fi
-podman rm -f "$C" >/dev/null 2>&1 || true
+if [ "$cmd" = down ]; then podman rm -f -v "$C" >/dev/null 2>&1 || true; exit 0; fi
+podman rm -f -v "$C" >/dev/null 2>&1 || true
 podman run -d --name "$C" --memory 512m -p 127.0.0.1::3000 \
   -e GITEA__security__INSTALL_LOCK=true -e GITEA__database__DB_TYPE=sqlite3 -e GITEA__server__ROOT_URL=http://localhost:3000/ \
   -e GITEA__service__DISABLE_REGISTRATION=true -e GITEA__log__LEVEL=Warn docker.io/gitea/gitea:28.1.0-rootless >/dev/null

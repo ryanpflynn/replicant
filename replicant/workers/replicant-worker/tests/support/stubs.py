@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import pathlib
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -22,12 +21,10 @@ import yaml
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from replicant_worker import ids
-from replicant_worker import registry
+from replicant_worker import ids, registry
+from replicant_worker import resources as _res
 from replicant_worker.activities.options import CATALOG
 from replicant_worker.graphs.graphspec import compose, parse_definition, validate_composed
-
-from replicant_worker import resources as _res
 
 ROOT = _res.ORCH  # vendored copy of spec/01-orchestration
 CONTRACTS = _res.CONTRACTS

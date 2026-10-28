@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import create_engine, pool, text
+from sqlalchemy import text
 
 # 64-bit key for pg_advisory_lock: first 8 bytes of sha256("replicant.migrate"). Same key in every
 # environment; only one migrate process per database can hold it (session-level lock, released
@@ -97,7 +97,8 @@ def _live_reader_revisions() -> dict[str, str]:
     BUILT_REVISION). Pinned replicant-worker versions are separate Deployments per build ID, so
     old pinned workers are included until drained. Uses the in-cluster ServiceAccount with a
     read-only ClusterRole on apps/deployments (config/k8s/migrate-rbac.yaml)."""
-    from kubernetes import client, config as kcfg  # type: ignore[import-not-found]
+    from kubernetes import client  # type: ignore[import-not-found]
+    from kubernetes import config as kcfg
 
     kcfg.load_incluster_config()
     apps = client.AppsV1Api()

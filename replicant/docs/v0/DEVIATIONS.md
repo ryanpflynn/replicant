@@ -515,6 +515,48 @@ User request: "a view of the graph in the UI … a detailed view of what the age
 - **FIX-D5 Codec test vector after the rename.** Vector 2 (`replicant-system`) had been encrypted with the old AAD
   `factory-system`, so `test_codec_test_vectors` failed. Its `expected.data_b64` was regenerated in both the spec and
   the worker copies. No other bytes changed.
+- **FIX-D6 Sandbox containers no longer leak anonymous volumes.** `engine.Client.Remove` sent `force=true` only, so
+  every anonymous volume of a sandbox container survived its removal (679 orphans, 23 GB, filled the host disk twice).
+  It now sends `force=true&v=true`; in both the Docker and the Podman compat API `v` removes the container's anonymous
+  volumes only, never named ones (the per-run `ar-*-<name>` volumes are still removed by `gcContainers`). GC runs for
+  every terminal run once `gc.container_ttl_after_terminal` (local: 1h) has passed since `FinishedAt`, including runs
+  that fail before Running: every terminal phase is set in `deriveAndApply`, which also sets `FinishedAt`, and the
+  minute GC tick resumes every record that is not `ContainersGCed`. Test: `engine_test.go`. The same leak in test
+  fixtures (publisher `gitea_fixture.sh`, projector `pg_fixture.sh`, the control-plane-api smoke scripts, the runner and
+  gateway-shim smoke scripts, `validate_migrations.sh`) and in `replicant dev down` is fixed with `podman rm -f -v`.
+- **FIX-D7 `tests/runner-contract/run-v0.sh` runs on the scripted gateway.** In passthrough it ran against the real
+  model and failed SEC-EGRESS-01..07. It now switches gateway-shim to `script` for the run and restores the previous
+  mode on exit (also on INT/TERM), through the new `replicant dev gateway-mode [script|passthrough]` (no argument
+  prints the current mode; switching recreates only gateway-shim, as `dev test e2e` does).
+- **FIX-D8 `replicant dev up` keeps the gateway mode.** Without `--gateway` it keeps `REPLICANT_GATEWAY_MODE` from
+  `dev/compose/.env` (`script` only when unset); before, every `dev up` reset it to `script`.
+- **FIX-D9 Auto-prune on low disk.** `dev up`, `dev test e2e` and `dev test m3` run `dev prune --volumes` without asking
+  (finished sandbox containers, exited one-shots, dangling images, anonymous unused and finished-run volumes, fstrim;
+  project volumes never) when the host has less than 10 GiB free, and say so. Before, `dev up` only warned.
+- **FIX-D10 `replicant dev test` gaps.**
+  - `--slow` runs the env-gated worker scenarios in their own pytest invocations with the variable they need
+    (`license_prestep` with `REPLICANT_EXTRA_NODE_MODULES=replicant_worker.nodes.license_scan`, `mid_run_can` with
+    `REPLICANT_HISTORY_CAN_EVENTS=150`, `dependency_outage`/`dependency_giveup`/`identity_outage` with
+    `REPLICANT_TEST_FAST_RETRY=1`), so `--slow` reports no SKIP or FAIL for them. They stay in one result row.
+  - The worker's `python_files` gains `test_memory.py`, `test_pr_feedback.py` (they never ran) and
+    `test_lint_activity_ids.py` (runs `tools/lint_activity_ids.py replicant_worker`).
+  - The scenario session fixture stops the Temporal dev server it started even when `env.shutdown()` fails or pytest
+    gets SIGTERM/SIGHUP (turned into KeyboardInterrupt so teardown runs); it kills only its own child dev server. A
+    suite that hits its timeout now gets SIGTERM, then SIGKILL 30 s later (it was SIGKILL, which orphaned the server).
+- **FIX-D11 Publisher: unexpected Gitea 4xx is an error.** `Gitea._call` returned the error document for any 4xx other
+  than 401/403/429, so `github.post_reply` could succeed with `comment_id: None` and `publisher.close_pr` reported
+  `closed` on 404/422. Any 4xx the caller does not handle now raises non-retryable `ScmRejected`. Lookups (`branch`,
+  `commit`) still read a 4xx as "not there"; `create_pull` keeps its 409/422 "already exists" path. `close_pr` returns
+  `{"state": "not_found"}` on 404 (the PR or repo is gone: nothing is left open, but it was not closed by Replicant),
+  and raises `ScmRejected` unless Gitea answers with `state: closed`. `post_reply` raises when Gitea returns no comment
+  id. Test: `test_publisher.py::test_publish_idempotent` against the Gitea container.
+- **FIX-D12 Lint gate.** `replicant dev test unit` has two more suites: `lint:python` (ruff, root dev dependency, config
+  in the root `pyproject.toml`: pyflakes `F`, import order `I` with every workspace package first-party, bugbear
+  `B006`/`B008`/`B904`; FastAPI/Typer markers and the repo's `require(...)` dependency factories are immutable calls;
+  no formatter) and `lint:go` (`go vet ./...` per `go.work` module in `golang:1.26`; vet writes no binaries). Existing
+  findings were fixed: 19 unused imports (among them `_ts`/`utcnow` in `routes_notify.py`), 2 f-strings without
+  placeholders, 2 unused locals, 16 `raise` in `except` without `from` (now `from None`; responses are unchanged) and
+  import order in 82 files. No per-file ignores were needed; `go vet` had no findings.
 
 ## WEB-UIPREF (Simple job view and per-user UI preferences, 2026-10-27)
 

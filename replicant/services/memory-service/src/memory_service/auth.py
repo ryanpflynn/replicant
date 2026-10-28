@@ -16,9 +16,9 @@ from typing import Any
 
 import yaml
 from fastapi import Request
-from replicant_telemetry.common import bearer_token, token_match
 
 from memory_service.config import Settings
+from replicant_telemetry.common import bearer_token, token_match
 
 log = logging.getLogger(__name__)
 

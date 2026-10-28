@@ -5,7 +5,7 @@ Encoding (§1), the identifier catalog's derived IDs (§2), Temporal naming (§4
 """
 from __future__ import annotations
 
-from replicant_ids.encoding import ALPHABET, b32_130, derived, ulid, UlidGenerator, ulid_timestamp_ms
+from replicant_ids.encoding import ALPHABET, UlidGenerator, b32_130, derived, ulid, ulid_timestamp_ms
 from replicant_ids.ids import (
     agentrun_name,
     artifact_index_id,
@@ -14,13 +14,13 @@ from replicant_ids.ids import (
     dev_principal,
     gate_id,
     idempotency_key,
+    jcs,
     logical_activity_id,
     new_id,
     notification_id,
     release_bundle_id,
-    jcs,
-    run_id,
     run_body,
+    run_id,
     system_workflow_id,
     takeover_id,
     worker_deployment_version,

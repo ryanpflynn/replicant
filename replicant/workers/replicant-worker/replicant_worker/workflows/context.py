@@ -18,9 +18,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from temporalio import workflow
 from temporalio.common import Priority
 
-
-from replicant_worker import build_config
-from replicant_worker import ids
+from replicant_worker import build_config, ids
 from replicant_worker.activities.options import CATALOG
 from replicant_worker.graphs.engines.base import BoundaryReached
 from replicant_worker.registry import NodeFailed

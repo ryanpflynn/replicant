@@ -24,7 +24,7 @@ if [ "$BUILD" = 1 ]; then
 fi
 
 cleanup() {
-  for n in $(podman ps -a --format '{{.Names}}' | grep -E '^(run-(s3|temporal|shim|mirror|runner|driver)|ar-)'); do podman rm -f "$n" >/dev/null 2>&1 || true; done
+  for n in $(podman ps -a --format '{{.Names}}' | grep -E '^(run-(s3|temporal|shim|mirror|runner|driver)|ar-)'); do podman rm -f -v "$n" >/dev/null 2>&1 || true; done
   for v in $(podman volume ls --format '{{.Name}}' | grep -E '^ar-'); do podman volume rm -f "$v" >/dev/null 2>&1 || true; done
   podman volume rm -f run-runner-state run-mirror-cache >/dev/null 2>&1 || true
   podman network rm -f "$NET" >/dev/null 2>&1 || true

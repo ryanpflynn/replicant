@@ -17,15 +17,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import dataclasses
 import hashlib
 import io
 import json
-import os
 import tarfile
 from datetime import datetime, timezone
 from typing import Any
 
+import fakes
 import httpx
 import pytest
 import zstandard
@@ -33,12 +32,11 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from temporalio import activity
 from temporalio.client import Client
-from temporalio.common import Priority, VersioningOverride, PinnedVersioningOverride, WorkerDeploymentVersion  # noqa: F401
+from temporalio.common import PinnedVersioningOverride, Priority, VersioningOverride, WorkerDeploymentVersion  # noqa: F401
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
-import fakes
 from replicant_temporal.search_attributes import dev_server_args, job_start_attributes
 from replicant_temporal.versioning import set_current_version
 from replicant_worker import ids, resources

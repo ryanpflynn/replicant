@@ -15,10 +15,10 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
-from replicant_scm.gitea import GiteaClient, GiteaError
 from temporalio.exceptions import ApplicationError
 
 from publisher_worker.config import read_secret, settings
+from replicant_scm.gitea import GiteaClient, GiteaError
 
 _http: httpx.AsyncClient | None = None
 _tokens: dict[tuple, tuple[str, float]] = {}
@@ -101,7 +101,7 @@ async def token(repo: Repo, *, purpose: str, job_id: str | None, activity_id: st
     return d["token"]
 
 
-_BODY = object()
+_RAISE = object()
 
 
 class Gitea:
@@ -112,10 +112,12 @@ class Gitea:
         self.repo = repo
         self.client = GiteaClient(repo.web, token=tok, http=http())
 
-    async def _call(self, what: str, fn: Any, *a: Any, other_4xx: Any = _BODY, raise_for: tuple[int, ...] = (),
+    async def _call(self, what: str, fn: Any, *a: Any, other_4xx: Any = _RAISE, raise_for: tuple[int, ...] = (),
                     **kw: Any) -> Any:
-        """401/403 -> PermissionDenied (non-retryable), 429/5xx and transport errors -> ScmUnavailable; any other 4xx
-        returns `other_4xx` (default: the error document, as the Publisher has always read it) unless in `raise_for`."""
+        """401/403 -> PermissionDenied (non-retryable), 429/5xx and transport errors -> ScmUnavailable; a status in
+        `raise_for` re-raises the GiteaError for the caller; any other 4xx returns `other_4xx` when given (lookups:
+        None = "not there") and otherwise raises ScmRejected (non-retryable). An unexpected 4xx is never read as a
+        success (FIX-D11)."""
         try:
             return await fn(self.repo.owner, self.repo.name, *a, **kw)
         except httpx.HTTPError as e:
@@ -128,7 +130,10 @@ class Gitea:
                 raise ApplicationError(f"gitea {what}: HTTP {e.status}", type="ScmUnavailable") from None
             if e.status in raise_for:
                 raise
-            return e.body if other_4xx is _BODY else other_4xx
+            if other_4xx is _RAISE:
+                raise ApplicationError(f"gitea {what}: HTTP {e.status}", type="ScmRejected",
+                                       non_retryable=True) from None
+            return other_4xx
 
     async def repo_info(self) -> dict[str, Any]:
         return await self._call("GET ", self.client.get_repo)
@@ -159,8 +164,8 @@ class Gitea:
             raise ApplicationError(f"gitea refused the PR: HTTP {e.status}", type="InvalidInput",
                                    non_retryable=True) from None
 
-    async def edit_pull(self, number: int, **fields: Any) -> dict[str, Any]:
-        return await self._call(f"PATCH /pulls/{number}", self.client.edit_pull, number, **fields)
+    async def edit_pull(self, number: int, *, raise_for: tuple[int, ...] = (), **fields: Any) -> dict[str, Any]:
+        return await self._call(f"PATCH /pulls/{number}", self.client.edit_pull, number, raise_for=raise_for, **fields)
 
     async def comments(self, number: int) -> list[dict[str, Any]]:
         return await self._call(f"GET /issues/{number}/comments", self.client.list_issue_comments, number) or []

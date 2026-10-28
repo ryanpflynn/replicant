@@ -5,8 +5,15 @@ from importlib import resources
 
 import pytest
 
-from replicant_cdef import (BlobDigestMismatch, blob_key, bundle_blob, bundle_pointer, definition_blob, read_bundle_spec,
-                          verify_blob)
+from replicant_cdef import (
+    BlobDigestMismatch,
+    blob_key,
+    bundle_blob,
+    bundle_pointer,
+    definition_blob,
+    read_bundle_spec,
+    verify_blob,
+)
 
 V = json.loads(resources.files("replicant_cdef").joinpath("vectors.json").read_text("utf-8"))
 

@@ -16,11 +16,11 @@ from typing import Any
 
 import yaml
 from fastapi import Depends, Request
-from replicant_telemetry.common import bearer_token, token_match
 
 from control_plane_api.authz import AuthorizeRequest, Evaluator, Principal, PrincipalLookup
 from control_plane_api.config import Settings
 from control_plane_api.problems import ProblemError
+from replicant_telemetry.common import bearer_token, token_match
 
 log = logging.getLogger(__name__)
 

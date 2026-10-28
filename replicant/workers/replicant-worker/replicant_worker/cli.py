@@ -49,8 +49,8 @@ def env(name: str, default: str | None = None) -> str:
 
 
 def setup_logging() -> None:
-    from replicant_temporal.interceptors import ContextLogFilter
     from replicant_telemetry.jsonlog import JsonFormatter, json_logging
+    from replicant_temporal.interceptors import ContextLogFilter
     json_logging(JsonFormatter(ts=True, context="tail", record_keys=("job_id", "tenant_id", "run_id"), exc_limit=2000),
                  format_env="json_or_plain", filters=[ContextLogFilter()])
 
@@ -95,8 +95,8 @@ def build_workers(client: Any, activities_by_queue: dict[str, list[Any]], build:
 
     from replicant_temporal.versioning import deployment_config
     from replicant_worker.activities.options import Q_JOBS, Q_LLM, Q_RUNNER
-    from replicant_worker.workflows.replicant_job import ReplicantJob
     from replicant_worker.workflows.maintenance import MaintenanceBatch, MaintenanceShard
+    from replicant_worker.workflows.replicant_job import ReplicantJob
 
     dep = deployment_config(DEPLOYMENT, build)
     runner = SandboxedWorkflowRunner(restrictions=SandboxRestrictions.default.with_passthrough_modules(*PASSTHROUGH))

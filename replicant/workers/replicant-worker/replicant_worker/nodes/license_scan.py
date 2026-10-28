@@ -19,8 +19,8 @@ from __future__ import annotations
 from typing import Any
 
 from replicant_worker.activities.options import CATALOG, IO_INTERNAL, ActivityDef
-from replicant_worker.workflows.context import NodeContext
 from replicant_worker.registry import NodeResult, NodeType, node_type
+from replicant_worker.workflows.context import NodeContext
 
 # The new activity ships in the same build (code). It is read-only: SBOM + config -> verdict.
 CATALOG["policy.evaluate_licenses"] = ActivityDef("policy.evaluate_licenses", IO_INTERNAL, False)

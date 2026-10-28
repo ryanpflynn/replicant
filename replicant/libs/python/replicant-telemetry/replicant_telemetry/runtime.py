@@ -35,9 +35,9 @@ def _providers(service: str | None = None) -> tuple[TracerProvider, TracerProvid
         return None
     with _lock:
         if "main" not in _state:
-            from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-
             import sys
+
+            from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
             name = (os.environ.get("OTEL_SERVICE_NAME") or service
                     or os.path.basename(sys.argv[0] or "") or "replicant").removesuffix(".py")
             endpoint = os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://alloy:4318/v1/traces")

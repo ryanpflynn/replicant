@@ -10,7 +10,13 @@ from temporalio import workflow
 from temporalio.exceptions import ActivityError
 
 from replicant_worker.workflows.job.common import (
-    HANDOFF_ROUTING_TIMEOUT, PROJECTION_DRAIN, SA_BUNDLE, SA_CYCLE, _Can, _opts, steering_backlog_input,
+    HANDOFF_ROUTING_TIMEOUT,
+    PROJECTION_DRAIN,
+    SA_BUNDLE,
+    SA_CYCLE,
+    _Can,
+    _opts,
+    steering_backlog_input,
 )
 
 if TYPE_CHECKING:  # ReplicantJobInput stays beside ReplicantJob; imported in the method body at run time

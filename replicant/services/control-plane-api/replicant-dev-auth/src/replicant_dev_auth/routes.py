@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, Request
 from sqlalchemy import text
+
 from replicant_telemetry.common import iso
 
 router = APIRouter()
@@ -71,7 +72,7 @@ async def register_dev_bundle(request: Request, body: dict[str, Any] = Body(...)
         doc = registry.bundle_document(spec, principal.principal_id, md.get("display_version"),
                                        md.get("change_summary") or "local dev bundle (replicant dev seed)")
     except registry.BundleInvalid as e:
-        raise ProblemError(422, "invalid_bundle", errors=e.errors)
+        raise ProblemError(422, "invalid_bundle", errors=e.errors) from None
     db = request.app.state.db
     blob_writer = pointer_writer = None
     if settings.s3_endpoint:
@@ -83,7 +84,7 @@ async def register_dev_bundle(request: Request, body: dict[str, Any] = Body(...)
             rb, digest, created = await registry.register_bundle(conn, db, doc, principal.principal_id, blob_writer,
                                                                  pointer_writer)
         except Exception as e:  # noqa: BLE001
-            raise ProblemError(502, "registry_blob_write_failed", detail=f"{type(e).__name__}: {str(e)[:200]}")
+            raise ProblemError(502, "registry_blob_write_failed", detail=f"{type(e).__name__}: {str(e)[:200]}") from None
         await registry.mark_worker_ready(conn, build, image, body.get("node_catalog_digest") or zero)
         state = (await conn.execute(text("SELECT promotion_state FROM registry.release_bundles WHERE "
                                          "release_bundle_id = :rb"), {"rb": rb})).scalar_one()
@@ -98,7 +99,7 @@ async def register_dev_bundle(request: Request, body: dict[str, Any] = Body(...)
                 out["assignment"] = await registry.dev_set_default(conn, db, settings.replicant_env, rb,
                                                                     principal.principal_id, reason)
             except registry.BootstrapConflict as e:
-                raise ProblemError(409, str(e).split(":")[0], detail=str(e))
+                raise ProblemError(409, str(e).split(":")[0], detail=str(e)) from None
     elif body.get("bootstrap"):
         async with db.tx(role="svc_cpa_registry") as conn:
             a = await registry.get_assignment(conn, settings.replicant_env)
@@ -106,7 +107,7 @@ async def register_dev_bundle(request: Request, body: dict[str, Any] = Body(...)
                 try:
                     a = await registry.bootstrap(conn, db, settings.replicant_env, rb, principal.principal_id, reason)
                 except registry.BootstrapConflict as e:
-                    raise ProblemError(409, str(e).split(":")[0], detail=str(e))
+                    raise ProblemError(409, str(e).split(":")[0], detail=str(e)) from None
             out["assignment"] = a
     async with db.tx(role="svc_cpa_registry") as conn:
         out["promotion_state"] = (await conn.execute(text("SELECT promotion_state FROM registry.release_bundles WHERE "
@@ -142,7 +143,7 @@ async def put_notify_overrides(request: Request, body: dict[str, Any] = Body(...
     try:
         vals = {k: NOTIFY_OVERRIDABLE[k](v) for k, v in body.items()}
     except (TypeError, ValueError):
-        raise ProblemError(422, "invalid_override")
+        raise ProblemError(422, "invalid_override") from None
     base = NotifySettings.from_env(request.app.state.settings.web_origin)
     request.app.state.notify.ns = dataclasses.replace(base, **vals)
     request.app.state.notify_overrides = vals

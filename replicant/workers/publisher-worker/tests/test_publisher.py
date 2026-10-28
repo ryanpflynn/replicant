@@ -104,8 +104,9 @@ def test_publish_idempotent(gitea, monkeypatch) -> None:
     args = {"job_id": JOB, "tenant_id": T, "repo": repo, "pr": None, "draft": False,
             "diff_bundle_uri": f"s3://local-replicant-local-artifacts/{key}",
             "approved_diff_sha256": hashlib.sha256(bundle).hexdigest(), "approval_decision_id": "dec_01m5p7x7r0bt69j0h0fbxepw92"}
-    from publisher_worker import activities as A
     from temporalio.common import RetryPolicy  # noqa: F401
+
+    from publisher_worker import activities as A
     env = ActivityEnvironment()
     env.info = env.info.__class__(**{**env.info.__dict__, "workflow_id": JOB, "activity_id": "publish.c0.n1.publish"})
 
@@ -124,10 +125,19 @@ def test_publish_idempotent(gitea, monkeypatch) -> None:
         c1 = await env.run(A.github_post_reply, reply)
         c2 = await env.run(A.github_post_reply, reply)  # same activity: the marked comment is reused
         closed = await env.run(A.publisher_close_pr, {"job_id": JOB, "pr": pr})
-        return r1, r2, rb, cb, bad, (c1, c2, closed)
-    r1, r2, rb, cb, bad, (c1, c2, closed) = asyncio.run(go())
+        again = await env.run(A.publisher_close_pr, {"job_id": JOB, "pr": pr})  # closing a closed PR: still closed
+        gone = await env.run(A.publisher_close_pr, {"job_id": JOB, "pr": {**pr, "number": 9999}})
+        rejected = None  # FIX-D11: an unexpected 4xx (404: the repo does not exist) is an error, not a success
+        try:
+            await env.run(A.github_post_reply, {**reply, "repo": {**repo, "name": "no-such-repo"}})
+        except ApplicationError as e:
+            rejected = e
+        return r1, r2, rb, cb, bad, (c1, c2, closed, again, gone, rejected)
+    r1, r2, rb, cb, bad, (c1, c2, closed, again, gone, rejected) = asyncio.run(go())
     assert c1["comment_id"] and c2 == {"comment_id": c1["comment_id"], "duplicate": True}, (c1, c2)
-    assert closed == {"state": "closed"}
+    assert closed == {"state": "closed"} and again == {"state": "closed"}, (closed, again)
+    assert gone == {"state": "not_found"}, gone
+    assert rejected is not None and rejected.type == "ScmRejected" and rejected.non_retryable, rejected
     assert r1["pr_number"] == r2["pr_number"] and r1["head_sha"] == r2["head_sha"], (r1, r2)
     assert r1["branch"] == f"replicant/{JOB}" and r1["url"].endswith(f"/pulls/{r1['pr_number']}")
     assert rb == {"base_ref": "main", "base_sha": base} and cb["moved"] is False
@@ -173,6 +183,7 @@ def test_reply_templates_and_sanitize():
 def test_push_update_commits_on_top_of_the_branch(tmp_path, monkeypatch):
     """The cumulative patch (from base) becomes one new commit whose parent is the PR head; the branch is not rewritten."""
     import subprocess
+
     from publisher_worker import scm
     origin = tmp_path / "origin.git"
     work = tmp_path / "w"

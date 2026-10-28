@@ -4,9 +4,9 @@
 # Usage: pg_fixture.sh up <name> <spec-dir> | pg_fixture.sh down <name>
 set -euo pipefail
 cmd=$1; C=$2
-if [ "$cmd" = down ]; then podman rm -f "$C" >/dev/null 2>&1 || true; exit 0; fi
+if [ "$cmd" = down ]; then podman rm -f -v "$C" >/dev/null 2>&1 || true; exit 0; fi
 SPEC=$3
-podman rm -f "$C" >/dev/null 2>&1 || true
+podman rm -f -v "$C" >/dev/null 2>&1 || true
 podman run -d --name "$C" --memory 512m -e POSTGRES_PASSWORD=pw -e POSTGRES_DB=replicant -p 127.0.0.1::5432 \
   docker.io/pgvector/pgvector:0.8.2-pg17-bookworm >/dev/null
 until podman exec "$C" pg_isready -U postgres >/dev/null 2>&1; do sleep 1; done; sleep 2

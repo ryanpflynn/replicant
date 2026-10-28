@@ -10,12 +10,11 @@ import random
 import shutil
 import subprocess
 
+import events as E
 import pytest
 
 from replicant_projector import mapping
 from replicant_projector.activities import validate
-
-import events as E
 
 HERE = pathlib.Path(__file__).resolve().parent
 SPEC = pathlib.Path(os.environ.get("REPLICANT_SPEC_DIR", HERE.parents[3] / "spec"))

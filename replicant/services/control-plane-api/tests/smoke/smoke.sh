@@ -20,7 +20,7 @@ PY="${PYTHON:-python3}"
 
 if [ "${1:-}" = down ]; then
   pkill -f "stub_worker.py" 2>/dev/null || true
-  podman rm -f ctl-cpa ctl-grants ctl-gi ctl-broker ctl-gitea >/dev/null 2>&1 || true
+  podman rm -f -v ctl-cpa ctl-grants ctl-gi ctl-broker ctl-gitea >/dev/null 2>&1 || true
   podman volume rm ctl-gitea-data ctl-gitea-config >/dev/null 2>&1 || true
   "$HERE/env.sh" down
   exit 0

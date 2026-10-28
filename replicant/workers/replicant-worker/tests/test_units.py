@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import json
 import os
 import pathlib
@@ -11,16 +10,23 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
-from replicant_worker.resources import ORCH as SPEC  # noqa: E402  (vendored spec/01-orchestration)
-
 import jsonschema  # noqa: E402
 import yaml  # noqa: E402
 
-from replicant_worker import ids, registry  # noqa: E402
-from replicant_worker import nodes  # noqa: E402,F401
+from replicant_worker import (  # noqa: E402
+    ids,
+    nodes,  # noqa: E402,F401
+    registry,
+)
 from replicant_worker.graphs.dsl import FglError, Guard  # noqa: E402
-from replicant_worker.graphs.graphspec import (GraphValidationError, compose, parse_definition, validate,  # noqa: E402
-                                             validate_composed)
+from replicant_worker.graphs.graphspec import (  # noqa: E402
+    GraphValidationError,
+    compose,
+    parse_definition,
+    validate,
+    validate_composed,
+)
+from replicant_worker.resources import ORCH as SPEC  # noqa: E402  (vendored spec/01-orchestration)
 from replicant_worker.workflows.state import CARRY_BUDGET_BYTES, CarryTooLarge, JobState  # noqa: E402
 
 GRAPHS = sorted((SPEC / "graphs" / "definitions").glob("*.yaml"))
@@ -137,6 +143,7 @@ def test_nodecatalog_export_valid():
 def test_batch_child_activity_ids_unique():
     """R1-011: child indices spread over the cycle field; IDs stay inside the C-IDS grammar and unique."""
     import re
+
     from replicant_worker.workflows.maintenance import child_activity_id
     pat = re.compile(r"^[a-z][a-z0-9_]{0,40}\.c[0-9]{1,3}\.n[0-9]{1,3}\.[a-z][a-z0-9_]{0,30}$")  # C-RUNNER/C-IDS
     got = [child_activity_id(i) for i in range(5000)]
@@ -148,6 +155,7 @@ def test_batch_child_activity_ids_unique():
 def test_terminal_outcomes_match_contract_pattern():
     """R1-009: every terminal outcome satisfies JobSnapshot.terminal.outcome ^[a-z][a-z_]{1,63}$."""
     import re
+
     from replicant_worker.workflows.state import TERMINAL_STATUS_FOR_OUTCOME
     bad = [o for o in TERMINAL_STATUS_FOR_OUTCOME if not re.match(r"^[a-z][a-z_]{1,63}$", o)]
     assert not bad, bad
@@ -157,7 +165,9 @@ def test_codec_test_vectors():
     """XD-FIX-R1-044: codec/testvectors.json decrypts with the stated DEK, nonce and AAD to the inner Payload,
     and re-encrypts byte-for-byte (WS-02's Go encoder consumes the same file)."""
     import base64
+
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
     from replicant_worker.codec import aesgcm_encrypt_with_dek
     doc = json.loads((SPEC / "codec" / "testvectors.json").read_text())
     assert len(doc["vectors"]) == 3
@@ -174,9 +184,11 @@ def test_steering_backlog_input_matches_ws04():
     """XD-W2-04-08: the workflow's steering.stage_backlog input validates against WS-04's schema, messages[] in
     message_ids[] order, and WS-04's result pattern accepts the stub's keys."""
     import asyncio
-    from replicant_worker.workflows.state import JobState
-    from replicant_worker.workflows.replicant_job import steering_backlog_input
+
     from support.stubs import FakeWorld
+
+    from replicant_worker.workflows.replicant_job import steering_backlog_input
+    from replicant_worker.workflows.state import JobState
     s = JobState(job_id="job_" + "a" * 26, tenant_id="payments", release_bundle_id="rb_" + "b" * 26, worker_build_id="b",
                  requester="usr_" + "c" * 26, priority="normal", title="t", targets=[], request=None, request_summary={})
     s.segment, s.resume_at = 2, "implement"

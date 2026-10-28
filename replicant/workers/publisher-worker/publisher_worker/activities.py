@@ -14,6 +14,7 @@ from temporalio.exceptions import ApplicationError
 
 from publisher_worker import storage
 from publisher_worker.scm import Gitea, Repo, build_and_push_async, token
+from replicant_scm.gitea import GiteaError
 
 NEVER_PUBLISH = [".github/workflows/**", ".github/actions/**", ".gitea/workflows/**"]
 AGENT_FILES = ["**/.replicant*", ".replicant*", "**/CLAUDE.md", "CLAUDE.md", "**/AGENTS.md", "AGENTS.md", ".claude/**",
@@ -213,7 +214,13 @@ async def publisher_close_pr(a: dict[str, Any]) -> dict[str, Any]:
     repo = Repo("gitea", host, owner, name, None)
     _, aid, _ = _ids()
     g = Gitea(repo, await token(repo, purpose="publisher.close_pr", job_id=a.get("job_id"), activity_id=aid))
-    await g.edit_pull(int(pr["number"]), state="closed")
+    try:
+        got = await g.edit_pull(int(pr["number"]), state="closed", raise_for=(404,))
+    except GiteaError:  # the PR (or its repo) no longer exists: nothing is left open, but it was not closed by us
+        return {"state": "not_found"}
+    if (got or {}).get("state") != "closed":
+        raise ApplicationError(f"gitea did not close PR #{pr['number']} (state {(got or {}).get('state')!r})",
+                               type="ScmRejected", non_retryable=True)
     return {"state": "closed"}
 
 
@@ -307,7 +314,9 @@ async def github_post_reply(a: dict[str, Any]) -> dict[str, Any]:
         if marker in (c.get("body") or ""):
             return {"comment_id": c.get("id"), "duplicate": True}
     c = await g.comment(int(pr["number"]), reply_body(a["template"], a, triage, key))
-    return {"comment_id": c.get("id")}
+    if not (c or {}).get("id"):
+        raise ApplicationError("gitea returned no comment id", type="ScmRejected", non_retryable=True)
+    return {"comment_id": c["id"]}
 
 
 @activity.defn(name="publisher.push_takeover_branch")

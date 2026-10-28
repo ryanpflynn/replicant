@@ -27,7 +27,7 @@ from control_plane_api import notify_render as R
 from control_plane_api.config import read_secret
 from control_plane_api.db import OPERATOR_SCOPE
 from control_plane_api.locks import locked_loop
-from control_plane_api.notify import NOTIFY_ROLE, NotifyService, Planned, utcnow, _ts
+from control_plane_api.notify import NOTIFY_ROLE, NotifyService, Planned, _ts, utcnow
 from control_plane_api.notify_policy import channels_for, quiet_hours
 
 log = logging.getLogger("control_plane_api.notify")

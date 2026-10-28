@@ -6,7 +6,6 @@ import json
 import re
 from typing import Any
 
-from replicant_ids import ulid
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
@@ -15,7 +14,7 @@ from memory_service.auth import AdminPrincipal, HttpError
 from memory_service.candidates import _PROV_INSERT, _insert_version, _prov
 from memory_service.db import Database, jdump, one, rows
 from memory_service.store import TRANSITIONS, _emit, _jsonable, _now
-
+from replicant_ids import ulid
 
 # ================================================================================================ admin: reads
 LIST_SQL = """

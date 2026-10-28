@@ -20,14 +20,13 @@ from __future__ import annotations
 
 import hashlib
 import importlib
-import os
 import pathlib
 import re
 import time
 
 from alembic import context
 from alembic.runtime.migration import MigrationInfo
-from sqlalchemy import create_engine, pool, text
+from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from replicant_db.naming import METADATA, SCHEMAS

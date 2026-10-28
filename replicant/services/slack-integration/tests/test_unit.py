@@ -6,11 +6,11 @@ import urllib.parse
 from typing import Any
 
 import pytest
+from conftest import CALLER_TOKEN, DELIVERY, PRINCIPAL, SIGNING_SECRET, FakeRepo, FakeSlack, deliver_body
 from fastapi.testclient import TestClient
 from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_slack_response import AsyncSlackResponse
 
-from conftest import (CALLER_TOKEN, DELIVERY, PRINCIPAL, SIGNING_SECRET, FakeRepo, FakeSlack, deliver_body)
 from slack_integration import signing
 from slack_integration.app import NOT_LOCAL_TEXT, create_app
 from slack_integration.blocks import DeliverRequest, build_blocks, escape, fallback_text, truncate_mrkdwn

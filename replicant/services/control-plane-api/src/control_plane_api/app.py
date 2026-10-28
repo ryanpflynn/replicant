@@ -11,12 +11,18 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.routing import Route
 
-from control_plane_api import routes_admin, routes_gates, routes_jobs, routes_notify, routes_registry, routes_web
-from control_plane_api import routes_graph
-from control_plane_api import routes_projects
-from control_plane_api.projects import LiveConfig
-from control_plane_api import routes_ui_prefs
-from control_plane_api import routes_memory
+from control_plane_api import (
+    routes_admin,
+    routes_gates,
+    routes_graph,
+    routes_jobs,
+    routes_memory,
+    routes_notify,
+    routes_projects,
+    routes_registry,
+    routes_ui_prefs,
+    routes_web,
+)
 from control_plane_api.auth import AuthContext
 from control_plane_api.config import Settings
 from control_plane_api.db import Database
@@ -26,6 +32,7 @@ from control_plane_api.notify_loops import NotifyLoops
 from control_plane_api.notify_policy import NotifySettings
 from control_plane_api.outbox import Outbox
 from control_plane_api.problems import ProblemError, problem_handler, request_id, validation_handler
+from control_plane_api.projects import LiveConfig
 from control_plane_api.s3 import S3
 from control_plane_api.temporal_client import TemporalGateway
 

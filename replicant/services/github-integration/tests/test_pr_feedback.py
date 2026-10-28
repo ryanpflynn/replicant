@@ -7,9 +7,9 @@ from typing import Any
 import httpx
 import pytest
 
-from replicant_scm.gitea import normalize
 from github_integration.config import Settings
 from github_integration.consumer import Consumer, parse_commands
+from replicant_scm.gitea import normalize
 
 JOB = "job_01m5z3xz399c11r2jh39kz69de"
 REPO = {"id": 1, "name": "ledger-api", "full_name": "acme-payments/ledger-api", "owner": {"login": "acme-payments"}}

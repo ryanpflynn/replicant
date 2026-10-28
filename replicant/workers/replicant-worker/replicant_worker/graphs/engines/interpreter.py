@@ -14,8 +14,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from replicant_worker.graphs.graphspec import TERMINAL_PREFIX, GraphSpec
 from replicant_worker.graphs.engines.base import EngineResult
+from replicant_worker.graphs.graphspec import TERMINAL_PREFIX, GraphSpec
 
 
 class _Interrupted(Exception):

@@ -17,7 +17,7 @@ from temporalio.exceptions import ApplicationError
 from replicant_worker import local_bundle
 from replicant_worker.activities import bundle as bundles
 from replicant_worker.activities import s3
-from replicant_worker.activities.base import implements, http, info_ids, parse_lid, retryable_http
+from replicant_worker.activities.base import http, implements, info_ids, parse_lid, retryable_http
 from replicant_worker.activities.config import read_secret, settings
 
 RUN_AUDIENCES = {  # RUNNER-02 per role; ai-gateway + runner-sandbox + repo-mirror always (agentd needs them)

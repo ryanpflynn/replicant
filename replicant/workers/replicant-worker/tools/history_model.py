@@ -33,7 +33,7 @@ def model(measured: dict) -> dict:
     # 30-day timeline assumptions (documented in history-budget.md section 2)
     plan_gate_reminders = 3 + 1  # waits 2 days: reminders at 4 h, 24 h, 48 h + escalation at 24 h
     publish_gate_reminders = 2 + 1  # waits 1 day
-    push_gate_reminders = 5 * 1  # each repair push waits about 4 h: one reminder
+    _push_gate_reminders = 5 * 1  # (documented, not used in the totals) each repair push waits about 4 h: one reminder
     pr_reminders = 2  # day 7 and day 21 without activity, once over the job
     extra_hints = 3 * runner_runs  # notifier: Provisioning, Running, Finalizing, Succeeded (fake sent 1)
     added_initial = (plan_gate_reminders + publish_gate_reminders) * COST_REMINDER + 3 * 5 * COST_EXTRA_HINT

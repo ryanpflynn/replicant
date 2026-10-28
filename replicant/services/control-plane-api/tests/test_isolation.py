@@ -16,10 +16,10 @@ from typing import Any
 
 import pytest
 from sqlalchemy import text
+from test_db_integration import _reset_bindings, env  # noqa: F401  (fixture)
 
 from control_plane_api.db import OPERATOR_SCOPE
 from control_plane_api.ids import dev_user_principal, ulid
-from test_db_integration import _reset_bindings, env  # noqa: F401  (fixture)
 
 DSN = os.environ.get("CTL_DB_DSN")
 SU = os.environ.get("CTL_SU_DSN")

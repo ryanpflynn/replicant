@@ -14,7 +14,7 @@ from control_plane_api import contracts
 from control_plane_api.auth import require
 from control_plane_api.authz import Principal
 from control_plane_api.db import OPERATOR_SCOPE
-from control_plane_api.notify import NOTIFY_ROLE, _ts, utcnow
+from control_plane_api.notify import NOTIFY_ROLE
 from control_plane_api.problems import ProblemError
 from control_plane_api.routes_ui_prefs import parse_if_match
 

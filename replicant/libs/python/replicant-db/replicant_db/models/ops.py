@@ -2,8 +2,23 @@
 `alembic check` (CI) proves it."""
 from __future__ import annotations
 
-from sqlalchemy import (ARRAY, BigInteger, Boolean, CheckConstraint, Column, ForeignKeyConstraint, Identity,
-                        Index, Integer, PrimaryKeyConstraint, SmallInteger, String, Table, Text, text)
+from sqlalchemy import (
+    ARRAY,
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    Column,
+    ForeignKeyConstraint,
+    Identity,
+    Index,
+    Integer,
+    PrimaryKeyConstraint,
+    SmallInteger,
+    String,
+    Table,
+    Text,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
 
 from replicant_db.naming import METADATA

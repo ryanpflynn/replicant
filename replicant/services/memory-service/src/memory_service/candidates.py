@@ -5,13 +5,13 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from replicant_ids import ulid
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from memory_service import core
 from memory_service.db import Database, jdump, one
 from memory_service.store import EXTRACTOR_DEFAULT, HUMAN_KINDS, ORIGIN_BY_KIND, SOURCE_PREFIX, SVC, _key, _now, _ok
+from replicant_ids import ulid
 
 
 # ================================================================================================ write path

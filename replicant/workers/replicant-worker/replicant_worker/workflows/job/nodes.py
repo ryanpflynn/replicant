@@ -17,7 +17,13 @@ from replicant_worker.registry import NodeFailed
 from replicant_worker.registry import get as get_node_type
 from replicant_worker.workflows.context import NodeContext
 from replicant_worker.workflows.job.common import (
-    PAUSE_EXPIRY, SA_HUMAN, SA_OPEN_GATES, SA_PHASE, SA_RISK, SA_STATUS, SA_WAITING,
+    PAUSE_EXPIRY,
+    SA_HUMAN,
+    SA_OPEN_GATES,
+    SA_PHASE,
+    SA_RISK,
+    SA_STATUS,
+    SA_WAITING,
 )
 from replicant_worker.workflows.state import GateRecord
 

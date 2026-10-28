@@ -37,8 +37,11 @@ make test | make test-e2e | make prune        # the same, ARGS="..." for options
   unless `--keep-db`, or unless it was already running. `--no-db` skips them. The `migrate` image is rebuilt
   automatically when `libs/python/replicant-db` changed after it was built (`--build` forces it).
 - Worker scenarios (`workers/replicant-worker/tests/test_scenarios.py`) are pytest tests on a session-scoped Temporal
-  dev server; all but five are marked `slow`. Scenarios that need `REPLICANT_HISTORY_CAN_EVENTS=150` or
-  `REPLICANT_TEST_FAST_RETRY=1` report SKIP unless that variable is set.
+  dev server; all but five are marked `slow`. With `--slow`, the scenarios gated on `REPLICANT_EXTRA_NODE_MODULES`,
+  `REPLICANT_HISTORY_CAN_EVENTS=150` or `REPLICANT_TEST_FAST_RETRY=1` run in extra pytest invocations with that variable.
+- **lint:python** is `ruff check` (config in the root `pyproject.toml`); **lint:go** is `go vet ./...` per Go module.
+- The E2Es and `tests/runner-contract/run-v0.sh` switch the gateway to `script` for the run and restore it after.
+  `uv run replicant dev gateway-mode [script|passthrough]` prints or switches it; `dev up` keeps it unless `--gateway`.
 - Logs and JUnit XML of the last run are in `.test-results/`. The E2E drivers share helpers in `tests/e2e/replicant_e2e`
   (installed by `uv sync --all-packages`) and reset the sample repo to the planted bug before each job.
 
@@ -50,7 +53,8 @@ uv run replicant dev prune --images --volumes # + unused images (keeps replicant
                                               #   and anonymous / finished-run volumes; asks first unless --yes
 ```
 
-The Podman VM hangs when the host disk fills; `replicant dev up` warns below 10 GiB free. Named volumes of project
+The Podman VM hangs when the host disk fills; below 10 GiB free, `replicant dev up` and `dev test e2e|m3` run
+`dev prune --volumes` on their own first. Named volumes of project
 `replicant` (Postgres, S3, Gitea, ...) are never removed by `prune`.
 
 Web UI: http://127.0.0.1:8400 ("Waiting on you" at /waiting). Slack mock: http://127.0.0.1:8410. Gitea: http://127.0.0.1:3300. Temporal UI: http://127.0.0.1:8233 (namespace

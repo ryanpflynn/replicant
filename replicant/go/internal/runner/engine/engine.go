@@ -356,9 +356,11 @@ func (c *Client) Kill(ctx context.Context, id, signal string) error {
 	return err
 }
 
-// Remove force-removes a container.
+// Remove force-removes a container together with its anonymous volumes (v=true: image VOLUME directives and
+// unnamed mounts). Named volumes are never removed by the Docker or Podman API here; the executor removes the
+// per-run named volumes itself (gcContainers).
 func (c *Client) Remove(ctx context.Context, id string) error {
-	err := c.do(ctx, http.MethodDelete, "/containers/"+url.PathEscape(id), url.Values{"force": {"true"}}, nil, nil)
+	err := c.do(ctx, http.MethodDelete, "/containers/"+url.PathEscape(id), url.Values{"force": {"true"}, "v": {"true"}}, nil, nil)
 	if IsNotFound(err) {
 		return nil
 	}

@@ -24,11 +24,11 @@ from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from replicant_scm import canonical_host, verify_gitea_signature
-from replicant_telemetry.common import bearer_ok, bearer_token, token_ok
-from github_integration.clients import Broker, ControlPlane, S3, Temporal
+from github_integration.clients import S3, Broker, ControlPlane, Temporal
 from github_integration.config import Settings, read_secret
 from github_integration.consumer import Consumer, register_repo
+from replicant_scm import canonical_host, verify_gitea_signature
+from replicant_telemetry.common import bearer_ok, bearer_token, token_ok
 
 log = logging.getLogger("github_integration")
 MAX_BODY = 26 * 1024 * 1024

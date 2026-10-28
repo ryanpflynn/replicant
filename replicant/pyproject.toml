@@ -33,3 +33,31 @@ members = [
   "services/slack-integration",
   "tools/slack-mock",
 ]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.17.3",
+]
+
+# Lint gate (`replicant dev test unit` suite lint:python): lenient on purpose. pyflakes, import sorting and a small
+# bugbear subset; no formatter. Per-file ignores only where a fix would change behaviour.
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["**/node_modules", "web", "**/.venv", "evals", "docs"]
+# first-party = every workspace package (import sorting groups them after third-party)
+src = [".", "cli/src", "tests/e2e", "tools/slack-mock", "services/*", "services/*/src",
+       "services/control-plane-api/replicant-dev-auth/src", "workers/*", "libs/python/*", "libs/python/*/src"]
+
+[tool.ruff.lint]
+select = ["F", "I", "B006", "B008", "B904"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI / Typer parameter markers and this repo's dependency factories (they return Depends(...)): evaluated once
+# at import by design.
+extend-immutable-calls = [
+  "fastapi.Body", "fastapi.Depends", "fastapi.Header", "fastapi.Query", "fastapi.Path", "fastapi.Security",
+  "typer.Argument", "typer.Option",
+  "control_plane_api.auth.require", "control_plane_api.routes_memory.require_memory_admin",
+  "replicant_dev_auth.routes._require_seed",
+]

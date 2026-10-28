@@ -25,7 +25,8 @@ import httpx
 from fastapi import APIRouter, Body, Header, Request
 from sqlalchemy import text
 
-from control_plane_api import audit, derived, projects as P
+from control_plane_api import audit, derived
+from control_plane_api import projects as P
 from control_plane_api.auth import check, require
 from control_plane_api.authz import Principal
 from control_plane_api.config import read_secret
@@ -364,7 +365,7 @@ async def _apply(request: Request, principal: Principal, row: Any, scope_key: st
         v = await P.write_config(request.app.state.db, row.project_id, row.tenant_id, scope_key, config, if_match,
                                  principal.principal_id, reason.strip(), rolled_back_from)
     except P.VersionConflict as e:
-        raise ProblemError(412, "version_conflict", current_version=e.current)
+        raise ProblemError(412, "version_conflict", current_version=e.current) from None
     request.app.state.live_config.invalidate()
     synced = []
     if any(c["path"].startswith("triggers.") for c in res["changes"]):

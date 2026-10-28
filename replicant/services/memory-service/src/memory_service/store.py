@@ -9,12 +9,12 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from replicant_ids import ulid
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from memory_service import core
 from memory_service.db import jdump
+from replicant_ids import ulid
 
 log = logging.getLogger(__name__)
 SVC = "svc_memory-service"

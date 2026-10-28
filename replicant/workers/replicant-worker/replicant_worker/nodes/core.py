@@ -12,10 +12,10 @@ from typing import Any
 from temporalio import workflow
 
 from replicant_worker import ids
-from replicant_worker.workflows.context import NodeContext
 from replicant_worker.graphs.dsl import RISK_ORDER
-from replicant_worker.registry import NodeFailed, NodeResult, NodeType, node_type
 from replicant_worker.nodes.qa_routing import QaRoutingInput, route_after_qa
+from replicant_worker.registry import NodeFailed, NodeResult, NodeType, node_type
+from replicant_worker.workflows.context import NodeContext
 
 AGENT_CONFIG = {
     "type": "object", "additionalProperties": False, "required": ["agent"],

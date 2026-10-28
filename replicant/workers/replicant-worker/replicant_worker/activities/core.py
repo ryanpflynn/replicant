@@ -16,7 +16,7 @@ from temporalio.exceptions import ApplicationError
 from replicant_worker import ids, local_bundle, nodes, registry  # noqa: F401  (nodes registers the NodeCatalog)
 from replicant_worker.activities import bundle as bundles
 from replicant_worker.activities import s3
-from replicant_worker.activities.base import implements, info_ids, parse_lid
+from replicant_worker.activities.base import implements
 from replicant_worker.activities.config import settings
 from replicant_worker.graphs.dsl import RISK_ORDER
 from replicant_worker.graphs.graphspec import compose, parse_definition, validate_composed

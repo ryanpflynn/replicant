@@ -25,13 +25,19 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import ValidationError
-from replicant_telemetry.common import bearer_ok
 
+from replicant_telemetry.common import bearer_ok
 from slack_integration import signing
-from slack_integration.blocks import (DeliverRequest, build_blocks, fallback_text, home_view, metadata,
-                                     thread_parent_blocks)
-from slack_integration.decisions import Decisions
+from slack_integration.blocks import (
+    DeliverRequest,
+    build_blocks,
+    fallback_text,
+    home_view,
+    metadata,
+    thread_parent_blocks,
+)
 from slack_integration.config import Settings, read_secret
+from slack_integration.decisions import Decisions
 from slack_integration.repo import MessageRef, PgRepo, Post, Repo, make_engine
 from slack_integration.slack import SlackFailure, SlackGateway
 

@@ -6,8 +6,8 @@
 from __future__ import annotations
 
 import os
-from typing import Any
 import secrets
+from typing import Any
 
 import httpx
 import pytest
@@ -244,8 +244,8 @@ async def test_registry_publish_and_build(env):
 
 async def test_bundle_registry_objects_follow_cdef(env):
     """Writer side of the shared replicant_cdef vectors: what a reader (runner-local, replicant-worker) dereferences."""
-    from replicant_cdef import read_bundle_spec
     from control_plane_api import registry
+    from replicant_cdef import read_bundle_spec
     c, *_ = env
     app = c._transport.app  # type: ignore[attr-defined]
     store: dict[str, bytes] = {}
