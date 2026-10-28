@@ -6,5 +6,9 @@ WS-08 shared telemetry for Python services, from `spec/08-observability/code` (`
   T-1/T-5a), `job_span()`; off when `OTEL_SDK_DISABLED=true`.
 - `temporal.TracingInterceptor`: spans for workflow start, Signals/Updates and every activity, in the job trace.
   `replicant_temporal.connect()` installs it when this package is importable.
+- `jsonlog`: `JsonFormatter` (the stdout JSON line of every service and worker, with per-service switches) and
+  `json_logging()`, which wraps it in `RedactingFormatter`.
+- `common`: `read_secret()`, `iso()` and the static bearer-token checks (`bearer_ok`, `token_ok`, `token_match`) every
+  service shares. Slack request signing stays in slack-integration.
 
 Tests: `uv run --package replicant-telemetry --group dev pytest libs/python/replicant-telemetry`

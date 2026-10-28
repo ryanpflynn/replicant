@@ -23,7 +23,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from replicant_ids import derived, ulid
+from replicant_ids import dev_principal, ulid
+from replicant_telemetry.common import iso
 from replicant_scm import canonical_host
 from replicant_scm.events import NormalizedEvent
 from replicant_scm.gitea import GiteaClient, normalize
@@ -39,11 +40,6 @@ WORKER_ID = f"{socket.gethostname()}:{ulid('wrk')[-8:]}"
 
 class Retry(Exception):
     """Transient failure: back off and retry the delivery."""
-
-
-def dev_principal(login: str) -> str:
-    """Static M1 identity links (no identity-service): the same rule as control-plane-api (CONTROL-02)."""
-    return derived("usr", "replicant-dev-user", login)
 
 
 def backoff_s(attempts: int) -> float:
@@ -335,7 +331,7 @@ class Consumer:
             actor["principal_id"] = linked_pid
         sig: dict[str, Any] = {"schema": "replicant.msg.pr-event/v1", "delivery_id": ev.delivery_id[:64], "event": event,
                                "job_id": job_id, "repo": ev.repo.ref, "pr_number": ev.pull_request.number,
-                               "actor": actor, "payload_uri": f"s3://{bucket}/{key}", "received_at": _iso(received_at)}
+                               "actor": actor, "payload_uri": f"s3://{bucket}/{key}", "received_at": _received_iso(received_at)}
         if ev.pull_request.head_sha and re.match(r"^[0-9a-f]{40}([0-9a-f]{24})?$", ev.pull_request.head_sha):
             sig["head_sha"] = ev.pull_request.head_sha
         try:
@@ -409,7 +405,7 @@ class Consumer:
         actor_doc = {"id": ev.sender.id, "login": ev.sender.login, "principal_id": principal_id, "repo_permission": perm}
         payload = {"schema": "replicant.pr-event-payload/v1", "provider": "gitea", "delivery_id": ev.delivery_id,
                    "event": event, "repo": ev.repo.ref, "pr_number": number, "review_state": ev.review_state,
-                   "actor": actor_doc, "comments": comments, "received_at": _iso(received_at)}
+                   "actor": actor_doc, "comments": comments, "received_at": _received_iso(received_at)}
         if self.s.s3_endpoint:
             try:
                 await self.s3.put(bucket, key, json.dumps(payload, sort_keys=True).encode())
@@ -423,7 +419,7 @@ class Consumer:
                                "actor": {"github_user_id": max(1, ev.sender.id), "login": ev.sender.login[:64],
                                          "is_bot": False, "linked": True, "principal_id": principal_id,
                                          "repo_permission": perm},
-                               "payload_uri": f"s3://{bucket}/{key}", "received_at": _iso(received_at)}
+                               "payload_uri": f"s3://{bucket}/{key}", "received_at": _received_iso(received_at)}
         if refs:
             sig["comment_refs"] = refs
         if is_review and ev.review_state:
@@ -507,12 +503,9 @@ def parse_commands(body: str) -> dict[str, bool]:
             "command_only": bool(found) and not rest.strip()}
 
 
-def _iso(v: Any) -> str:
-    if isinstance(v, dt.datetime):
-        if v.tzinfo is None:
-            v = v.replace(tzinfo=dt.UTC)
-        return v.astimezone(dt.UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-    return dt.datetime.now(dt.UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+def _received_iso(v: Any) -> str:
+    """`received_at` in UTC with milliseconds; now when it is not a datetime."""
+    return iso(v if isinstance(v, dt.datetime) else dt.datetime.now(dt.UTC), utc=True, timespec="milliseconds")
 
 
 def requested_type(settings: dict[str, Any]) -> str:
@@ -546,7 +539,7 @@ def build_job_request(ev: NormalizedEvent, *, tenant: str, installation_id: int,
         "workflow_type": requested_type(settings or {}),
         "priority": (settings or {}).get("default_priority") if (settings or {}).get("default_priority") in
         ("low", "normal", "high") else "normal",
-        "received_at": _iso(received_at),
+        "received_at": _received_iso(received_at),
     }
     if ev.issue.html_url:
         jr["source"]["url"] = ev.issue.html_url[:2048]

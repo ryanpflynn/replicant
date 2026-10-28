@@ -15,7 +15,6 @@ Both loops are singletons across replicas through Postgres advisory locks (like 
 """
 from __future__ import annotations
 
-import asyncio
 import datetime as dt
 import json
 import logging
@@ -27,6 +26,7 @@ from sqlalchemy import text
 from control_plane_api import notify_render as R
 from control_plane_api.config import read_secret
 from control_plane_api.db import OPERATOR_SCOPE
+from control_plane_api.locks import locked_loop
 from control_plane_api.notify import NOTIFY_ROLE, NotifyService, Planned, utcnow, _ts
 from control_plane_api.notify_policy import channels_for, quiet_hours
 
@@ -288,33 +288,10 @@ class NotifyLoops:
         return total
 
     # ------------------------------------------------------------------ loops
-    async def _locked_loop(self, lock: tuple[int, int], interval: float, fn: Any, name: str) -> None:
-        while True:
-            try:
-                async with self.db.engine.connect() as lock_conn:
-                    got = (await lock_conn.execute(text("SELECT pg_try_advisory_lock(:a, :b)"),
-                                                   {"a": lock[0], "b": lock[1]})).scalar()
-                    await lock_conn.commit()
-                    if got:
-                        try:
-                            while True:
-                                try:
-                                    await fn()
-                                except asyncio.CancelledError:
-                                    raise
-                                except Exception as e:  # noqa: BLE001 - one bad row never stops the loop
-                                    log.warning("%s: %s: %s", name, type(e).__name__, str(e)[:300])
-                                await asyncio.sleep(interval)
-                        finally:
-                            await lock_conn.execute(text("SELECT pg_advisory_unlock(:a, :b)"), {"a": lock[0], "b": lock[1]})
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:  # noqa: BLE001
-                log.warning("%s lock: %s: %s", name, type(e).__name__, str(e)[:300])
-            await asyncio.sleep(max(interval, 5))
-
     async def dispatcher_loop(self) -> None:
-        await self._locked_loop(DISPATCH_LOCK, self.ns.dispatch_seconds, self.dispatch_once, "notify dispatcher")
+        await locked_loop(self.db, DISPATCH_LOCK, self.ns.dispatch_seconds, self.dispatch_once,
+                          "notify dispatcher", retry_s=max(self.ns.dispatch_seconds, 5))
 
     async def scheduler_loop(self) -> None:
-        await self._locked_loop(SCHEDULER_LOCK, self.ns.sweep_seconds, self.sweep_once, "notify scheduler")
+        await locked_loop(self.db, SCHEDULER_LOCK, self.ns.sweep_seconds, self.sweep_once,
+                          "notify scheduler", retry_s=max(self.ns.sweep_seconds, 5))

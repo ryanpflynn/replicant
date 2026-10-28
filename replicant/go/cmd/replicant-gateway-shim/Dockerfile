@@ -2,8 +2,9 @@
 #   podman build -f go/cmd/replicant-gateway-shim/Dockerfile -t localhost/replicant/replicant-gateway-shim:dev .
 FROM docker.io/library/golang:1.26 AS build
 WORKDIR /src/go/cmd/replicant-gateway-shim
+COPY go/internal/runner /src/go/internal/runner
 COPY go/cmd/replicant-gateway-shim/go.mod go/cmd/replicant-gateway-shim/go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod go mod download
+RUN --mount=type=cache,target=/go/pkg/mod GOWORK=off go mod download
 COPY go/cmd/replicant-gateway-shim/ ./
 ARG REPLICANT_VERSION=dev
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \

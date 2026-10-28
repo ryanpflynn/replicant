@@ -13,6 +13,8 @@ from replicant_telemetry.core import (  # noqa: F401
     set_replicant_context,
     start_job_root_span,
 )
+from replicant_telemetry.common import bearer_ok, bearer_token, iso, read_secret, token_match, token_ok  # noqa: F401
+from replicant_telemetry.jsonlog import JsonFormatter, json_logging  # noqa: F401
 from replicant_telemetry.redact import RedactingFormatter  # noqa: F401
 from replicant_telemetry.runtime import emit_job_root, enabled, job_span, log_context, shutdown, tracer  # noqa: F401
 from replicant_telemetry.trace_ids import job_root_span_id, job_trace_id, run_span_id  # noqa: F401

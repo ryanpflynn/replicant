@@ -7,46 +7,9 @@
 from __future__ import annotations
 
 import argparse
-import json
-import logging
-import sys
 import urllib.request
 
-
-def _log_ctx(record: logging.LogRecord) -> dict:
-    """job_id / run_id / trace_id / span_id for the line (replicant-telemetry, M2); {} when not installed."""
-    try:
-        from replicant_telemetry import log_context
-    except ImportError:
-        return {}
-    try:
-        return log_context(record)
-    except Exception:  # noqa: BLE001 - logging must never fail
-        return {}
-
-
-class JsonFormatter(logging.Formatter):
-    def format(self, record: logging.LogRecord) -> str:
-        msg = record.getMessage()
-        base = {"level": record.levelname.lower(), "logger": record.name, "service": "control-plane-api", **_log_ctx(record)}
-        if msg.startswith("{") and record.name == "replicant.audit":
-            try:
-                return json.dumps({**base, **json.loads(msg)})
-            except ValueError:
-                pass
-        out = {**base, "msg": msg}
-        if record.exc_info:
-            out["exc"] = self.formatException(record.exc_info)[-4000:]
-        return json.dumps(out)
-
-
-def _logging() -> None:
-    import os
-    from replicant_telemetry.redact import RedactingFormatter
-    h = logging.StreamHandler(sys.stdout)
-    if os.environ.get("REPLICANT_LOG_FORMAT", "json") == "json":
-        h.setFormatter(RedactingFormatter(JsonFormatter()))
-    logging.basicConfig(level=os.environ.get("REPLICANT_LOG_LEVEL", "INFO"), handlers=[h], force=True)
+from replicant_telemetry.jsonlog import JsonFormatter, json_logging
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -60,7 +23,8 @@ def main(argv: list[str] | None = None) -> int:
     hc.add_argument("--url", default=None)
     a = ap.parse_args(argv)
     cmd = a.cmd or "serve"
-    _logging()
+    json_logging(JsonFormatter("control-plane-api", context="head", merge_json="replicant.audit"),
+                 format_env="json_or_default")
     import uvicorn
 
     from control_plane_api.config import Settings

@@ -6,7 +6,9 @@ import argparse
 import json
 import logging
 import os
-import sys
+
+from replicant_telemetry.common import read_secret
+from replicant_telemetry.jsonlog import JsonFormatter, json_logging
 
 
 def _env(name: str, default: str | None = None) -> str | None:
@@ -14,35 +16,13 @@ def _env(name: str, default: str | None = None) -> str | None:
     return v if v not in (None, "") else default
 
 
-def _secret(path: str | None) -> str | None:
-    if not path:
-        return None
-    try:
-        with open(path, encoding="utf-8") as f:
-            return f.read().strip() or None
-    except FileNotFoundError:
-        return None
-
-
-class JsonFormatter(logging.Formatter):
-    def format(self, record: logging.LogRecord) -> str:
-        msg = record.getMessage()
-        base = {"level": record.levelname.lower(), "logger": record.name, "service": "slack-mock"}
-        if msg.startswith("{"):
-            try:
-                return json.dumps({**base, **json.loads(msg)})
-            except ValueError:
-                pass
-        return json.dumps({**base, "msg": msg})
-
-
 def build_app():  # noqa: ANN201
     from slack_mock.app import Workspace, create_app
     log = logging.getLogger("slack_mock")
     cfg = _env("SLACK_MOCK_CONFIG", "/etc/slack-mock/workspace.yaml") or ""
     ws = Workspace.load(cfg)
-    token = _secret(_env("SLACK_MOCK_BOT_TOKEN_FILE"))
-    secret = _secret(_env("SLACK_MOCK_SIGNING_SECRET_FILE"))
+    token = read_secret(_env("SLACK_MOCK_BOT_TOKEN_FILE"))
+    secret = read_secret(_env("SLACK_MOCK_SIGNING_SECRET_FILE"))
     if not token:
         log.warning(json.dumps({"msg": "no bot token configured: every Web API call answers invalid_auth"}))
     if not secret:
@@ -60,9 +40,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="slack-mock")
     ap.add_argument("cmd", nargs="?", default="serve", choices=["serve"])
     ap.parse_args(argv)
-    h = logging.StreamHandler(sys.stdout)
-    h.setFormatter(JsonFormatter())
-    logging.basicConfig(level=os.environ.get("REPLICANT_LOG_LEVEL", "INFO"), handlers=[h], force=True)
+    json_logging(JsonFormatter("slack-mock", merge_json=True, exc_limit=None))
     import uvicorn
     uvicorn.run(build_app(), host="0.0.0.0", port=int(_env("SLACK_MOCK_PORT", "8410") or 8410), log_config=None,
                 access_log=False)

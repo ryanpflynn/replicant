@@ -102,6 +102,12 @@ def worker_deployment_version(deployment_name: str, build_id: str) -> str:
     return f"{deployment_name}:{build_id}"
 
 
+def dev_principal(login: str) -> str:
+    """The static local-dev user principal (no identity-service): `derived("usr", "replicant-dev-user", login)`.
+    control-plane-api's dev auth, github-integration and `replicant seed` share this rule (INTERFACES-LOG CONTROL-02)."""
+    return derived("usr", "replicant-dev-user", login)
+
+
 # --- release_bundle_id: rb_<b32_130(sha256(JCS(spec)))> -----------------------------------------
 
 def _jcs_number(x: float | int) -> str:

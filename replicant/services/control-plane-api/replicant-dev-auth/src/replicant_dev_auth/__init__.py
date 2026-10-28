@@ -11,7 +11,6 @@ Every credential here is honoured only when REPLICANT_ENV=local; `install()` ref
 """
 from __future__ import annotations
 
-import hmac
 import logging
 from typing import Any
 
@@ -41,6 +40,7 @@ def install(app: Any, ctx: Any, settings: Any) -> None:
     from control_plane_api.auth import bearer, service_principal
     from control_plane_api.config import read_secret
     from control_plane_api.ids import dev_user_principal
+    from replicant_telemetry.common import token_ok
 
     if not settings.is_local:
         raise SystemExit("P1 security: replicant_dev_auth is installed but REPLICANT_ENV != local")
@@ -65,7 +65,7 @@ def install(app: Any, ctx: Any, settings: Any) -> None:
 
     def seed_auth(request: Any) -> Any:
         tok = bearer(request)
-        if seed_token and tok and hmac.compare_digest(tok, seed_token):
+        if token_ok(tok, seed_token):
             return seeder
         return None
 

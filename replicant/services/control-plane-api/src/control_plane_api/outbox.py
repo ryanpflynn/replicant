@@ -4,7 +4,6 @@ on timeout/unavailable: stay `pending|retry` and answer 202 {state: recording}. 
 backoff to 2 min, advisory-lock singleton) re-sends with the same Update ID."""
 from __future__ import annotations
 
-import asyncio
 import datetime as dt
 import json
 import logging
@@ -14,6 +13,7 @@ from typing import Any
 from sqlalchemy import text
 
 from control_plane_api.db import Database
+from control_plane_api.locks import locked_loop
 from control_plane_api.problems import ProblemError
 from control_plane_api.temporal_client import TemporalGateway, UpdateOutcome
 
@@ -97,25 +97,7 @@ class Outbox:
         return len(rows)
 
     async def retrier_loop(self, interval_s: float = 2.0) -> None:
-        while True:
-            try:
-                async with self.db.engine.connect() as lock_conn:
-                    got = (await lock_conn.execute(text("SELECT pg_try_advisory_lock(:a, :b)"),
-                                                   {"a": OUTBOX_LOCK[0], "b": OUTBOX_LOCK[1]})).scalar()
-                    await lock_conn.commit()
-                    if got:
-                        try:
-                            while True:
-                                await self.retry_due()
-                                await asyncio.sleep(interval_s)
-                        finally:
-                            await lock_conn.execute(text("SELECT pg_advisory_unlock(:a, :b)"),
-                                                    {"a": OUTBOX_LOCK[0], "b": OUTBOX_LOCK[1]})
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:  # noqa: BLE001
-                log.warning("outbox retrier: %s: %s", type(e).__name__, str(e)[:300])
-            await asyncio.sleep(interval_s)
+        await locked_loop(self.db, OUTBOX_LOCK, interval_s, self.retry_due, "outbox retrier")
 
 
 def utcnow_iso() -> str:

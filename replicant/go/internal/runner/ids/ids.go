@@ -89,6 +89,14 @@ func ULID(prefix string) string {
 	return prefix + "_" + encode130(n)
 }
 
+// ULIDFromSeed returns a deterministic, ULID-shaped 26-character body (no prefix) from a seed: the first 16 bytes
+// of sha256(seed) read as a ULID (48-bit "time" then 80 "random" bits). The gateway shim uses it for scripted
+// message, tool-use and request ids.
+func ULIDFromSeed(seed string) string {
+	h := sha256.Sum256([]byte(seed))
+	return encode130(new(big.Int).SetBytes(h[:16]))
+}
+
 // Body returns the 26-character body of an ID like run_xxx.
 func Body(id string) string {
 	if i := strings.IndexByte(id, '_'); i >= 0 {

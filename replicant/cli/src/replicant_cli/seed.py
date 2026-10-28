@@ -238,12 +238,12 @@ def _sql_lit(v: object) -> str:
 
 def step_identity_links(c: Ctx) -> str:
     """stack.md §5 step 5: Gitea user ids and slack-mock user ids linked to each dev principal
-    (derived("usr", "replicant-dev-user", login), the rule control-plane-api and github-integration use).
+    (`replicant_ids.dev_principal`, the rule control-plane-api and github-integration use).
     identity-service (the writer of `identity`) is not in v0: the rows are written as its DB role
     `svc_identity_service` through psql in postgres-replicant (no secret leaves the container)."""
     import subprocess
 
-    from replicant_ids import derived
+    from replicant_ids import derived, dev_principal
 
     from replicant_cli import compose
     ws = yaml.safe_load((c.p.compose_dir / "config" / "slack-mock" / "workspace.yaml").read_text()) or {}
@@ -252,7 +252,7 @@ def step_identity_links(c: Ctx) -> str:
     stmts = ["BEGIN;", "SET LOCAL ROLE svc_identity_service;"]
     linked = []
     for login in DEV_LOGINS:
-        pid = derived("usr", "replicant-dev-user", login)
+        pid = dev_principal(login)
         stmts.append(
             "INSERT INTO identity.users (principal_id, okta_sub, user_name, display_name, email, status) VALUES "
             f"({_sql_lit(pid)}, {_sql_lit('dev|' + login)}, {_sql_lit(login + '@acme.test')}, "
@@ -324,7 +324,7 @@ def step_projects_rbac(c: Ctx) -> str:
     projects, prj_ledger's access (ledger-admins -> project_admin) and its first configuration through the API."""
     import subprocess
 
-    from replicant_ids import derived
+    from replicant_ids import derived, dev_principal
 
     from replicant_cli import compose
     stmts = ["BEGIN;", "SET LOCAL ROLE svc_identity_service;"]
@@ -333,7 +333,7 @@ def step_projects_rbac(c: Ctx) -> str:
         stmts.append(f"INSERT INTO identity.groups (group_id, display_name) VALUES ({_sql_lit(gid)}, {_sql_lit(g)}) "
                      "ON CONFLICT (display_name) DO NOTHING;")
         for login in members:
-            pid = derived("usr", "replicant-dev-user", login)
+            pid = dev_principal(login)
             stmts.append(
                 "INSERT INTO identity.memberships (group_id, principal_id) SELECT g.group_id, u.principal_id FROM "
                 f"identity.groups g, identity.users u WHERE g.display_name = {_sql_lit(g)} AND u.principal_id = "

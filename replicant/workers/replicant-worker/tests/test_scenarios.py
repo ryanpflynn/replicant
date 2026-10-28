@@ -18,7 +18,7 @@ from harness import (ALICE, BOB, decide_req, histories, new_job_id, open_gate, p
                      side_effect_activity_ids, snapshot, start_env, start_job, wait_for, workers)
 from temporalio.client import WorkflowUpdateFailedError
 
-from replicant_worker.testing.stubs import FakeWorld
+from support.stubs import FakeWorld
 
 
 class Skipped(Exception):

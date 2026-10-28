@@ -2,28 +2,9 @@
 from __future__ import annotations
 
 import argparse
-import json
-import logging
-import os
-import sys
 import urllib.request
 
-
-class JsonFormatter(logging.Formatter):
-    def format(self, record: logging.LogRecord) -> str:
-        out = {"level": record.levelname.lower(), "logger": record.name, "service": "memory-service",
-               "msg": record.getMessage()}
-        if record.exc_info:
-            out["exc"] = self.formatException(record.exc_info)[-4000:]
-        return json.dumps(out)
-
-
-def _logging() -> None:
-    from replicant_telemetry.redact import RedactingFormatter
-    h = logging.StreamHandler(sys.stdout)
-    if os.environ.get("REPLICANT_LOG_FORMAT", "json") == "json":
-        h.setFormatter(RedactingFormatter(JsonFormatter()))
-    logging.basicConfig(level=os.environ.get("REPLICANT_LOG_LEVEL", "INFO"), handlers=[h], force=True)
+from replicant_telemetry.jsonlog import JsonFormatter, json_logging
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -37,7 +18,7 @@ def main(argv: list[str] | None = None) -> int:
     from memory_service.config import Settings
     settings = Settings.from_env()
     if (a.cmd or "serve") == "serve":
-        _logging()
+        json_logging(JsonFormatter("memory-service"), format_env="json_or_default")
         import uvicorn
 
         from memory_service.app import create_app

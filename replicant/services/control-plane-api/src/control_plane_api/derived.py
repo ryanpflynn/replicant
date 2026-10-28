@@ -26,6 +26,7 @@ from jsonschema import Draft202012Validator
 from sqlalchemy import text
 
 from control_plane_api import graph_view, projects as P, registry
+from control_plane_api.ids import jcs
 
 log = logging.getLogger(__name__)
 
@@ -41,7 +42,7 @@ class CompileError(Exception):
 
 
 def config_digest(base_rb: str, pinned: dict[str, Any]) -> str:
-    return "sha256:" + hashlib.sha256(P.jcs({"base": base_rb, "pinned": pinned, "v": 1})).hexdigest()
+    return "sha256:" + hashlib.sha256(jcs({"base": base_rb, "pinned": pinned, "v": 1})).hexdigest()
 
 
 # ------------------------------------------------------------------------------------------------ registry I/O
@@ -257,7 +258,7 @@ async def compile_graphs(reg: Registry, base_spec: dict[str, Any], eff: dict[str
             errs += [{**x, "path": f"/workflows/{wt}{x['path']}"} for x in verrs]
             continue
         base_name = pin["ref"].split("/", 1)[1].split("@", 1)[0]
-        name = f"{base_name}-c{hashlib.sha256(P.jcs(doc)).hexdigest()[:10]}"
+        name = f"{base_name}-c{hashlib.sha256(jcs(doc)).hexdigest()[:10]}"
         doc = copy.deepcopy(doc)
         md = doc.setdefault("metadata", {})
         md["name"] = name

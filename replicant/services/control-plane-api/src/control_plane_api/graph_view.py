@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 import re
 from typing import Any
+from replicant_telemetry.common import iso
 
 TERMINAL = ("succeeded", "failed", "cancelled", "rejected", "expired", "taken_over")
 RUN_LIVE = ("Pending", "Provisioning", "Running", "Finalizing")
@@ -26,10 +27,6 @@ def _ts(v: Any) -> dt.datetime | None:
         except ValueError:
             return None
     return None
-
-
-def _iso(v: dt.datetime | None) -> str | None:
-    return v.isoformat().replace("+00:00", "Z") if v else None
 
 
 def edge_label(when: str | None) -> str | None:
@@ -148,12 +145,12 @@ def build_view(spec: dict[str, Any], timeline: list[dict[str, Any]], snapshot: d
             "is_gate": nd.get("type") == "human_gate",
             "has_guard": nd.get("when") is not None,
             "duration_ms": total_ms if entered else None,
-            "started_at": _iso(first), "finished_at": _iso(last.get("finished_at")) if not last.get("open") else None,
+            "started_at": iso(first), "finished_at": iso(last.get("finished_at")) if not last.get("open") else None,
             "current": key == cur and not terminal,
             "runs": [{k: r.get(k) for k in ("run_id", "role", "phase", "cycle", "ordinal", "started_at", "finished_at",
                                               "result_outcome", "qa_verdict", "reason") if r.get(k) is not None}
                      for r in nruns],
-            "history": [{"started_at": _iso(x.get("started_at")), "finished_at": _iso(x.get("finished_at")),
+            "history": [{"started_at": iso(x.get("started_at")), "finished_at": iso(x.get("finished_at")),
                          **({"outcome": x["outcome"]} if x.get("outcome") else {}),
                          **({"reason": x["reason"]} if x.get("reason") else {})} for x in v["visits"][-20:]],
         }

@@ -100,10 +100,6 @@ def permissions_needed(chs: list[dict[str, Any]]) -> set[str]:
     return need
 
 
-def jcs(o: Any) -> bytes:
-    return json.dumps(o, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-
-
 # ------------------------------------------------------------------------------------------------ data access
 async def project_row(db: Any, project_id: str) -> Any:
     async with db.tx(scope=OPERATOR_SCOPE) as conn:

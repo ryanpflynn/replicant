@@ -14,14 +14,11 @@ from control_plane_api.auth import check, require, scope_filter
 from control_plane_api.authz import Principal
 from control_plane_api.db import OPERATOR_SCOPE
 from control_plane_api.problems import ProblemError
+from replicant_telemetry.common import iso
 
 router = APIRouter()
 
 TERMINAL = ("succeeded", "failed", "cancelled", "rejected", "expired", "taken_over")
-
-
-def _iso(v: Any) -> Any:
-    return v.isoformat().replace("+00:00", "Z") if isinstance(v, dt.datetime) else v
 
 
 def _cursor_decode(c: str | None) -> int:
@@ -64,7 +61,7 @@ def _summary(r: Any, gates: dict[str, dict[str, Any]], prs: dict[str, dict[str, 
     out: dict[str, Any] = {
         "job_id": r.job_id, "tenant_id": r.tenant_id, "title": r.title or "", "status": r.status, "phase": r.phase,
         "workflow_type": r.workflow_type, "requester": r.requester, "repos": list(r.repos or []),
-        "updated_at": _iso(r.updated_at), "created_at": _iso(r.created_at), "release_bundle_id": r.release_bundle_id,
+        "updated_at": iso(r.updated_at), "created_at": iso(r.created_at), "release_bundle_id": r.release_bundle_id,
     }
     for k in ("current_node", "sub_status", "risk_level", "on_behalf_of", "sub_status_detail"):
         v = getattr(r, k)
@@ -91,7 +88,7 @@ async def _side_tables(request: Request, conn: Any, job_ids: list[str]) -> tuple
     if await db.has_relation("approvals.gates"):
         for g in (await conn.execute(text("SELECT gate_id, job_id, kind, expires_at FROM approvals.gates WHERE "
                                           "state = 'open' AND job_id = ANY(:j)"), {"j": job_ids})).all():
-            gates[g.job_id] = {"gate_id": g.gate_id, "kind": g.kind, **({"expires_at": _iso(g.expires_at)}
+            gates[g.job_id] = {"gate_id": g.gate_id, "kind": g.kind, **({"expires_at": iso(g.expires_at)}
                                                                         if g.expires_at else {})}
     if await db.has_relation("jobs_read.job_prs"):
         for p in (await conn.execute(text("SELECT job_id, pr_number, url, state FROM jobs_read.job_prs WHERE "
@@ -202,7 +199,7 @@ async def get_job(job_id: str, request: Request, response: Response,
                                           "ORDER BY started_at DESC NULLS LAST LIMIT 1"), {"j": job_id})).first()
             if lr is not None:
                 live = {"run_id": lr.run_id, "node_key": lr.node_key, "phase": lr.phase,
-                        **({"started_at": _iso(lr.started_at)} if lr.started_at else {})}
+                        **({"started_at": iso(lr.started_at)} if lr.started_at else {})}
     response.headers["X-Replicant-Projection-Seq"] = str(r.seq)
     lag = 0 if r.status in TERMINAL else max(0, int((dt.datetime.now(dt.UTC) - r.as_of).total_seconds()))
     response.headers["X-Replicant-Projection-Lag-Seconds"] = str(lag)
@@ -224,7 +221,7 @@ async def get_timeline(job_id: str, request: Request, principal: Principal = req
                                    {"j": job_id, "a": after_seq, "n": limit})).all()
     items = []
     for t in rows:
-        it = {"seq": t.seq, "type": t.type, "at": _iso(t.at), "summary": t.summary}
+        it = {"seq": t.seq, "type": t.type, "at": iso(t.at), "summary": t.summary}
         if t.actor:
             it["actor"] = t.actor
         if t.refs:
@@ -243,7 +240,7 @@ def _run_row(r: Any) -> dict[str, Any]:
     for k in ("started_at", "finished_at"):
         v = getattr(r, k, None)
         if v is not None:
-            out[k] = _iso(v)
+            out[k] = iso(v)
     return out
 
 
@@ -277,7 +274,7 @@ async def list_artifacts(job_id: str, request: Request, principal: Principal = r
     items = []
     for a in rows:
         it = {"artifact_id": a.artifact_id, "type": a.type, "name": a.name, "bucket_class": a.bucket_class,
-              "size_bytes": int(a.size_bytes or 0), "created_at": _iso(a.created_at)}
+              "size_bytes": int(a.size_bytes or 0), "created_at": iso(a.created_at)}
         for k in ("run_id", "content_type", "sha256", "redacted"):
             if getattr(a, k) is not None:
                 it[k] = getattr(a, k)

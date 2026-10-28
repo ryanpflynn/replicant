@@ -24,6 +24,7 @@ from control_plane_api.auth import AuthContext, check, scope_filter
 from control_plane_api.db import OPERATOR_SCOPE, Database
 from control_plane_api.ids import derived
 from control_plane_api.notify_policy import QUIET_DELAYED, NotifySettings, channels_for, quiet_hours
+from replicant_telemetry.common import iso
 
 log = logging.getLogger("control_plane_api.notify")
 NOTIFY_ROLE = "svc_cpa_notify"
@@ -44,10 +45,6 @@ def _ts(v: Any) -> dt.datetime | None:
         except ValueError:
             return None
     return None
-
-
-def _iso(v: Any) -> Any:
-    return v.astimezone(dt.UTC).isoformat().replace("+00:00", "Z") if isinstance(v, dt.datetime) else v
 
 
 def short_hash(s: str, n: int = 16) -> str:
@@ -290,11 +287,11 @@ class NotifyService:
                         continue
                     it = {"kind": "gate", "gate_id": g.gate_id, "job_id": g.job_id, "tenant_id": g.tenant_id,
                           "gate_kind": g.kind, "title": g.title or "", "repo": g.repo or "", "risk_level": g.risk_level or "low",
-                          "requester": g.requester, "opened_at": _iso(g.opened_at), "waiting_since": _iso(g.opened_at),
+                          "requester": g.requester, "opened_at": iso(g.opened_at, utc=True), "waiting_since": iso(g.opened_at, utc=True),
                           "why": "suggested_approver" if g.suggested_approver == me else "eligible_approver",
                           "href": f"/approvals/{g.gate_id}"}
                     if g.expires_at:
-                        it["expires_at"] = _iso(g.expires_at)
+                        it["expires_at"] = iso(g.expires_at, utc=True)
                     items.append(it)
             if read_scope is not None:
                 p2 = rp
@@ -321,12 +318,12 @@ class NotifyService:
             opened = _ts(r.opened_at)
             items.append({"kind": "pr", "job_id": r.job_id, "tenant_id": r.tenant_id, "title": r.title or "",
                           "repo": r.repo or "", "requester": r.requester, "role": "requester" if r.is_requester else "reviewer",
-                          "pr": {"number": r.pr_number, "url": url, "state": r.state, "opened_at": _iso(r.opened_at)},
-                          "waiting_since": _iso(r.opened_at),
+                          "pr": {"number": r.pr_number, "url": url, "state": r.state, "opened_at": iso(r.opened_at, utc=True)},
+                          "waiting_since": iso(r.opened_at, utc=True),
                           "idle_seconds": int((now - opened).total_seconds()) if opened else None,
-                          "last_reminded_at": _iso(last.get(r.job_id)), "href": f"/jobs/{r.job_id}"})
+                          "last_reminded_at": iso(last.get(r.job_id), utc=True), "href": f"/jobs/{r.job_id}"})
         n_g = sum(1 for i in items if i["kind"] == "gate")
-        return {"items": items, "counts": {"gates": n_g, "prs": len(items) - n_g, "total": len(items)}, "as_of": _iso(now)}
+        return {"items": items, "counts": {"gates": n_g, "prs": len(items) - n_g, "total": len(items)}, "as_of": iso(now, utc=True)}
 
     # ------------------------------------------------------------------ intents (POST /internal/v1/notifications)
     async def accept_intent(self, body: dict[str, Any]) -> dict[str, Any]:

@@ -50,28 +50,9 @@ def env(name: str, default: str | None = None) -> str:
 
 def setup_logging() -> None:
     from replicant_temporal.interceptors import ContextLogFilter
-
-    class Json(logging.Formatter):
-        def format(self, r: logging.LogRecord) -> str:
-            d = {"ts": self.formatTime(r), "level": r.levelname.lower(), "logger": r.name, "msg": r.getMessage()}
-            for k in ("job_id", "tenant_id", "run_id"):
-                if getattr(r, k, None):
-                    d[k] = getattr(r, k)
-            try:  # trace_id / span_id of the current activity span (replicant-telemetry, M2)
-                from replicant_telemetry import log_context
-                d.update({k: v for k, v in log_context(r).items() if k not in d})
-            except Exception:  # noqa: BLE001 - logging must never fail
-                pass
-            if r.exc_info:
-                d["exc"] = self.formatException(r.exc_info)[-2000:]
-            return json.dumps(d)
-
-    from replicant_telemetry.redact import RedactingFormatter
-    h = logging.StreamHandler(sys.stdout)
-    h.addFilter(ContextLogFilter())
-    h.setFormatter(RedactingFormatter(Json() if os.environ.get("REPLICANT_LOG_FORMAT", "json") == "json" else
-                                      logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")))
-    logging.basicConfig(level=os.environ.get("REPLICANT_LOG_LEVEL", "INFO"), handlers=[h], force=True)
+    from replicant_telemetry.jsonlog import JsonFormatter, json_logging
+    json_logging(JsonFormatter(ts=True, context="tail", record_keys=("job_id", "tenant_id", "run_id"), exc_limit=2000),
+                 format_env="json_or_plain", filters=[ContextLogFilter()])
 
 
 _RUNTIME = None

@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"example.com/replicant/internal/runner/jose"
 	"gopkg.in/yaml.v3"
-	"replicant.example.com/go/cmd/replicant-gateway-shim/internal/jose"
 )
 
 // RunClaims is C-RUNNER RunTokenClaims (2.x, CCR-09-01/02/03).
@@ -158,10 +158,11 @@ func audMatches(raw json.RawMessage, want string) bool {
 
 // VerifyRunToken implements GW-2 (gateway.md §3) and C-RUNNER verifier obligations 1, 2 and 4.
 func (a *Authenticator) VerifyRunToken(tok string) (*RunClaims, error) {
-	_, payload, _, _, err := jose.Split(tok)
+	p, err := jose.Parse(tok)
 	if err != nil {
 		return nil, unauth("malformed token")
 	}
+	payload := p.Payload
 	var pre RunClaims
 	if err := json.Unmarshal(payload, &pre); err != nil {
 		return nil, unauth("malformed claims")

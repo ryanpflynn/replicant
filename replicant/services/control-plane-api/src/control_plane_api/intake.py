@@ -7,7 +7,6 @@ intake retrier (every 5 s, advisory-lock singleton) restarts pending rows, and U
 """
 from __future__ import annotations
 
-import asyncio
 import dataclasses
 import datetime as dt
 import json
@@ -22,6 +21,7 @@ from control_plane_api.auth import AuthContext, check
 from control_plane_api.authz import Principal
 from control_plane_api.db import OPERATOR_SCOPE, Database
 from control_plane_api.ids import ulid
+from control_plane_api.locks import locked_loop
 from control_plane_api.problems import ProblemError
 from control_plane_api.temporal_client import TemporalGateway
 
@@ -232,25 +232,8 @@ class Intake:
         return n
 
     async def retrier_loop(self, interval_s: float = 5.0) -> None:
-        while True:
-            try:
-                async with self.db.engine.connect() as lock_conn:
-                    got = (await lock_conn.execute(text("SELECT pg_try_advisory_lock(:a, :b)"),
-                                                   {"a": INTAKE_RETRIER_LOCK, "b": INTAKE_RETRIER_LOCK2})).scalar()
-                    await lock_conn.commit()
-                    if got:
-                        try:
-                            while True:
-                                await self.retry_pending()
-                                await asyncio.sleep(interval_s)
-                        finally:
-                            await lock_conn.execute(text("SELECT pg_advisory_unlock(:a, :b)"),
-                                                    {"a": INTAKE_RETRIER_LOCK, "b": INTAKE_RETRIER_LOCK2})
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:  # noqa: BLE001
-                log.warning("intake retrier: %s: %s", type(e).__name__, str(e)[:300])
-            await asyncio.sleep(interval_s)
+        await locked_loop(self.db, (INTAKE_RETRIER_LOCK, INTAKE_RETRIER_LOCK2), interval_s, self.retry_pending,
+                          "intake retrier")
 
     async def _check_intake_switch(self, tenant: str, repos: list[str]) -> None:
         if not await self.db.has_relation("tenancy.kill_switches"):

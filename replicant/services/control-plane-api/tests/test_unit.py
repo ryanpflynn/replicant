@@ -117,3 +117,37 @@ def test_jwks_strips_private_members(tmp_path):
     f.write_text(json.dumps({"keys": [{"kty": "EC", "crv": "P-256", "kid": "rg-local-1", "x": "x", "y": "y", "d": "SECRET"}]}))
     out = load_jwks(Settings(run_grant_jwks_file=str(f)))
     assert out == {"keys": [{"kty": "EC", "crv": "P-256", "kid": "rg-local-1", "x": "x", "y": "y"}]}
+
+
+# Derived-bundle request digests (derived.config_digest) used projects.jcs = json.dumps(sort_keys) before they moved to
+# replicant_ids.jcs (RFC 8785). The two encodings agree on every config the schema allows without floats, so existing
+# derived bundles are still found; these are the digests of the local stack's prj_ledger configs (versions 6, 11, 18).
+LEGACY_DIGESTS = [
+    ({"gates": {"plan": "always", "publish": "always", "requester_may_decide": True},
+      "risk": {"forbidden_paths": [], "large_change_files": 20, "sensitive_paths": []}, "workflows": {}},
+     "sha256:0e9e7a07a64ba719f81d2daf6eb05e8c95121afb277c0ed5359aa4219955c91f"),
+    ({"gates": {"plan": "off", "publish": "always", "requester_may_decide": True},
+      "risk": {"forbidden_paths": [], "large_change_files": 0, "sensitive_paths": []},
+      "workflows": {"bugfix": {"params": {"max_review_rounds": 1}}}},
+     "sha256:2a2dce0189cf2561bca903564d10688fcdb77a38de72f71dbaad24ce16c4fa4c"),
+    (None, "sha256:603c4c504ad5e9d73630e826106301dfa2a4f96b3fca1a977a1641f1d88d68bc"),  # the defaults
+]
+
+
+def test_derived_digest_unchanged_by_jcs_dedupe():
+    from control_plane_api import projects as P
+    from control_plane_api.derived import config_digest
+    from control_plane_api.ids import jcs
+
+    def legacy(o):
+        return json.dumps(o, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+
+    for pinned, want in LEGACY_DIGESTS:
+        pinned = pinned or P.pinned_part(P.DEFAULTS)
+        doc = {"base": "rb_232k9k8qj2km565gcrapktkgkf", "pinned": pinned, "v": 1}
+        assert jcs(doc) == legacy(doc)
+        assert config_digest("rb_232k9k8qj2km565gcrapktkgkf", pinned) == want
+    eff = P.merge({"triggers": {"label": "x"}, "approvals": {"approver_groups": ["g"], "slack_channel": "#c"},
+                   "risk": {"sensitive_paths": ["ünï/**", "😀"]},
+                   "workflows": {"feature": {"params": {"a": -3, "b": "q\"\\\n "}, "max_visits": {"qa": 2}}}})
+    assert jcs(eff) == legacy(eff)

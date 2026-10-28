@@ -119,8 +119,15 @@ def test_publish_idempotent(gitea, monkeypatch) -> None:
             await env.run(A.publisher_publish, {**args, "approved_diff_sha256": "0" * 64})
         except ApplicationError as e:
             bad = e
-        return r1, r2, rb, cb, bad
-    r1, r2, rb, cb, bad = asyncio.run(go())
+        pr = {"number": r1["pr_number"], "repo": r1["repo"], "head_sha": r1["head_sha"], "url": r1["url"]}
+        reply = {"job_id": JOB, "repo": repo, "pr": pr, "template": "budget_exhausted"}
+        c1 = await env.run(A.github_post_reply, reply)
+        c2 = await env.run(A.github_post_reply, reply)  # same activity: the marked comment is reused
+        closed = await env.run(A.publisher_close_pr, {"job_id": JOB, "pr": pr})
+        return r1, r2, rb, cb, bad, (c1, c2, closed)
+    r1, r2, rb, cb, bad, (c1, c2, closed) = asyncio.run(go())
+    assert c1["comment_id"] and c2 == {"comment_id": c1["comment_id"], "duplicate": True}, (c1, c2)
+    assert closed == {"state": "closed"}
     assert r1["pr_number"] == r2["pr_number"] and r1["head_sha"] == r2["head_sha"], (r1, r2)
     assert r1["branch"] == f"replicant/{JOB}" and r1["url"].endswith(f"/pulls/{r1['pr_number']}")
     assert rb == {"base_ref": "main", "base_sha": base} and cb["moved"] is False
@@ -132,6 +139,7 @@ def test_publish_idempotent(gitea, monkeypatch) -> None:
         assert f"Replicant-Diff: sha256:{hashlib.sha256(bundle).hexdigest()}" in b["commit"]["message"]
         prs = c.get(f"http://127.0.0.1:{port}/api/v1/repos/acme-payments/ledger-api/pulls?state=all", headers=h).json()
         assert len(prs) == 1 and prs[0]["title"].startswith("Refund ledger") and "Fixes #1" in prs[0]["body"]
+        assert prs[0]["state"] == "closed"
     assert all(tok not in json.dumps(m) for m in minted)
 
 

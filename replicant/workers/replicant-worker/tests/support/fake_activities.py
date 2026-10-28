@@ -1,5 +1,5 @@
 """`FakeActivities`: in-process fakes for every activity in the WS-01 catalog, grouped by task queue
-(XD-FIX-R1-267, WS-11). A thin facade over `replicant_worker.testing.stubs.FakeWorld`, so WS-11 and other
+(XD-FIX-R1-267, WS-11). A thin facade over `tests/support/stubs.py` (`FakeWorld`), so WS-11 and other
 workstreams get the same scripted behaviour the WS-01 scenarios use. No environment variable selects task queues:
 each activity's queue comes from `replicant_worker.activities.options.CATALOG`.
 
@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any, Callable, Mapping
 
 from replicant_worker.activities.options import CATALOG, ActivityDef
-from replicant_worker.testing.stubs import FakeWorld
+from support.stubs import FakeWorld
 
 
 class FakeActivities:

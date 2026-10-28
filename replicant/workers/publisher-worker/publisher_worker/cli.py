@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import logging
 import os
 import sys
@@ -13,13 +12,8 @@ Q = "replicant-publisher"
 
 
 def setup_logging() -> None:
-    class Json(logging.Formatter):
-        def format(self, r: logging.LogRecord) -> str:
-            return json.dumps({"ts": self.formatTime(r), "level": r.levelname.lower(), "logger": r.name, "msg": r.getMessage()})
-    from replicant_telemetry.redact import RedactingFormatter
-    h = logging.StreamHandler(sys.stdout)
-    h.setFormatter(RedactingFormatter(Json()))
-    logging.basicConfig(level=os.environ.get("REPLICANT_LOG_LEVEL", "INFO"), handlers=[h], force=True)
+    from replicant_telemetry.jsonlog import JsonFormatter, json_logging
+    json_logging(JsonFormatter(ts=True, exc_limit=None))
 
 
 async def run() -> None:

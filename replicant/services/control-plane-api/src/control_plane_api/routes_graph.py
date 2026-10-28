@@ -27,6 +27,7 @@ from control_plane_api.auth import require
 from control_plane_api.authz import Principal
 from control_plane_api.problems import ProblemError
 from control_plane_api.routes_jobs import load_job_row
+from replicant_telemetry.common import iso
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -145,7 +146,7 @@ async def get_job_graph(job_id: str, request: Request, response: Response,
     timeline = [{"seq": t.seq, "type": t.type, "at": t.at, "summary": t.summary, "refs": t.refs} for t in tl]
     runs = await _job_runs(request, r)
     out: dict[str, Any] = {"job_id": job_id, "workflow_type": wt, "release_bundle_id": r.release_bundle_id,
-                           "as_of": graph_view._iso(dt.datetime.now(dt.UTC))}
+                           "as_of": iso(dt.datetime.now(dt.UTC))}
     g = await load_graph(request, r.release_bundle_id, wt) if r.release_bundle_id and wt and wt != "unrouted" else None
     if g is None:
         out["graph"] = None
@@ -302,7 +303,7 @@ async def get_run_activity(job_id: str, run_id: str, request: Request, response:
     prefix = f"tenants/{r.tenant_id}/jobs/{r.job_id}/runs/{run_id}/"   # ids validated; never from the client
     live = run.get("phase") in graph_view.RUN_LIVE
     out: dict[str, Any] = {"job_id": job_id, "run": run, "live": live,
-                           "as_of": graph_view._iso(dt.datetime.now(dt.UTC))}
+                           "as_of": iso(dt.datetime.now(dt.UTC))}
     try:
         spool = await _thread(read_spool, s3, st.bucket("transcripts"), prefix)
     except Exception as e:  # noqa: BLE001 - S3 down: the rest of the page keeps working
@@ -313,7 +314,7 @@ async def get_run_activity(job_id: str, run_id: str, request: Request, response:
     feed = activity.build_feed(cli, tr, spool.get("sandbox_log", []))
     out.update(feed)
     out["source"] = {"chunks": spool.get("chunks", 0), "provisional_chunks": spool.get("provisional", 0),
-                     "last_upload_at": graph_view._iso(spool.get("last_modified")),
+                     "last_upload_at": iso(spool.get("last_modified")),
                      **({"skipped_chunks": spool["skipped_chunks"]} if spool.get("skipped_chunks") else {}),
                      **({"error": spool["error"]} if spool.get("error") else {})}
     if not live:

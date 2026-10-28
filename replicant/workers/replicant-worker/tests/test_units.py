@@ -176,7 +176,7 @@ def test_steering_backlog_input_matches_ws04():
     import asyncio
     from replicant_worker.workflows.state import JobState
     from replicant_worker.workflows.replicant_job import steering_backlog_input
-    from replicant_worker.testing.stubs import FakeWorld
+    from support.stubs import FakeWorld
     s = JobState(job_id="job_" + "a" * 26, tenant_id="payments", release_bundle_id="rb_" + "b" * 26, worker_build_id="b",
                  requester="usr_" + "c" * 26, priority="normal", title="t", targets=[], request=None, request_summary={})
     s.segment, s.resume_at = 2, "implement"

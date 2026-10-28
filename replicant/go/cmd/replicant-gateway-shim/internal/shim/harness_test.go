@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"replicant.example.com/go/cmd/replicant-gateway-shim/internal/ids"
-	"replicant.example.com/go/cmd/replicant-gateway-shim/internal/jose"
-	"replicant.example.com/go/cmd/replicant-gateway-shim/internal/usage"
+	"example.com/replicant/cmd/replicant-gateway-shim/internal/usage"
+	"example.com/replicant/internal/runner/ids"
+	"example.com/replicant/internal/runner/jose"
 )
 
 const testConfig = `
@@ -113,12 +113,12 @@ func newHarness(t *testing.T, backend, upstream string, env map[string]string) *
 	h.runKey, _ = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	h.grantKey, _ = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	jw := func(name string, k *ecdsa.PrivateKey, kid string) string {
-		b, _ := json.Marshal(jose.JWKSet{Keys: []jose.JWK{jose.PublicJWK(&k.PublicKey, kid)}})
+		b, _ := json.Marshal(jose.JWKS{Keys: []jose.JWK{jose.PublicJWK(&k.PublicKey, kid)}})
 		p := filepath.Join(h.dir, name)
 		writeFile(t, p, string(b))
 		return "file://" + p
 	}
-	h.svcToken = "svc-" + ids.ULID()
+	h.svcToken = "svc-" + ids.Body(ids.ULID(""))
 	writeFile(t, filepath.Join(h.dir, "svc.yaml"), h.svcToken+": system:serviceaccount:replicant-workers:replicant-worker\nadmin-"+h.svcToken+": svc_control-plane-api\n")
 	scripts := filepath.Join(h.dir, "scripts")
 	_ = os.MkdirAll(scripts, 0o755)
@@ -201,13 +201,13 @@ func (h *harness) mint(o runOpts) minted {
 	if o.exp == 0 {
 		o.exp = time.Hour
 	}
-	m := minted{runID: ids.New("run"), jobID: o.jobID, tenant: "acme-payments", role: o.role, budget: o.budget}
+	m := minted{runID: ids.ULID("run"), jobID: o.jobID, tenant: "acme-payments", role: o.role, budget: o.budget}
 	if m.jobID == "" {
-		m.jobID = ids.New("job")
+		m.jobID = ids.ULID("job")
 	}
 	now := time.Now()
-	gj, af := ids.New("rgr"), ids.New("usr")
-	grant, err := jose.SignES256(o.grantKey, jose.Header{Alg: "ES256", Kid: "g1", Typ: "replicant-run-grant+jwt"}, map[string]any{
+	gj, af := ids.ULID("rgr"), ids.ULID("usr")
+	grant, err := (&jose.Signer{Key: o.grantKey, Kid: "g1"}).Sign("replicant-run-grant+jwt", map[string]any{
 		"iss": "replicant-local-core", "typ": "replicant-run-grant+jwt", "jti": gj, "iat": now.Unix(), "exp": now.Add(2 * time.Hour).Unix(),
 		"tenant_id": m.tenant, "job_id": m.jobID, "run_id": m.runID, "role": o.role, "repo_ids": []string{"r1"},
 		"audiences": []string{"ai-gateway"}, "scopes": []string{"gateway:invoke"}, "budget_usd": o.grantBudget, "acting_for": af,
@@ -215,10 +215,10 @@ func (h *harness) mint(o runOpts) minted {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	m.token, err = jose.SignES256(h.runKey, jose.Header{Alg: "ES256", Kid: "r1"}, map[string]any{
+	m.token, err = (&jose.Signer{Key: h.runKey, Kid: "r1"}).Sign("", map[string]any{
 		"iss": "http://runner-local:8480", "sub": "run:" + m.runID, "aud": o.aud, "exp": now.Add(o.exp).Unix(), "iat": now.Unix(),
-		"jti": ids.New("rtk"), "tenant_id": m.tenant, "job_id": m.jobID, "run_id": m.runID, "role": o.role,
-		"release_bundle_id": ids.New("rb"), "scopes": o.scopes, "budget_usd": o.budget, "acting_for": af, "grant": grant, "grant_jti": gj})
+		"jti": ids.ULID("rtk"), "tenant_id": m.tenant, "job_id": m.jobID, "run_id": m.runID, "role": o.role,
+		"release_bundle_id": ids.ULID("rb"), "scopes": o.scopes, "budget_usd": o.budget, "acting_for": af, "grant": grant, "grant_jti": gj})
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func (h *harness) policy(m minted, stub *Stub, models ...string) *http.Response 
 	if len(models) == 0 {
 		models = []string{"anthropic/claude-sonnet-5-5", "anthropic/claude-haiku-5-5"}
 	}
-	p := Policy{TenantID: m.tenant, JobID: m.jobID, Role: m.role, ReleaseBundleID: ids.New("rb"), Models: models,
+	p := Policy{TenantID: m.tenant, JobID: m.jobID, Role: m.role, ReleaseBundleID: ids.ULID("rb"), Models: models,
 		BudgetUSD: m.budget, MaxConcurrency: 4, ExpiresAt: time.Now().Add(6 * time.Hour).UTC().Format(time.RFC3339), Stub: stub}
 	return h.do("PUT", "/internal/v1/runs/"+m.runID+"/policy", h.svcToken, p, nil)
 }

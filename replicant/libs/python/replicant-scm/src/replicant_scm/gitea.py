@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -119,25 +120,31 @@ def normalize(headers: Mapping[str, str], payload: Mapping[str, Any], *, host: s
 
 
 class GiteaError(Exception):
-    def __init__(self, status: int, message: str) -> None:
+    def __init__(self, status: int, message: str, body: Any = None) -> None:
         super().__init__(f"gitea {status}: {message}")
         self.status = status
+        self.body = body  # the parsed JSON error body, when there is one
 
 
 class GiteaClient:
     """Minimal Gitea API v1 client. `token` is a replicant-bot access token (from github-token-broker) or `basic` is a
-    (user, password) pair (the broker's own bootstrap credential). Never logs credentials."""
+    (user, password) pair (the broker's own bootstrap credential). `http` shares an existing AsyncClient (its pool and
+    timeouts; not closed by `aclose`) instead of creating one. Never logs credentials."""
 
     def __init__(self, base_url: str, *, token: str | None = None, basic: tuple[str, str] | None = None,
-                 timeout: float = 10.0, transport: httpx.AsyncBaseTransport | None = None) -> None:
-        headers = {"Accept": "application/json"}
+                 timeout: float | httpx.Timeout = 10.0, transport: httpx.AsyncBaseTransport | None = None,
+                 http: httpx.AsyncClient | None = None) -> None:
+        self._root = base_url.rstrip("/") + "/api"
+        self._headers = {"Accept": "application/json"}
         if token:
-            headers["Authorization"] = f"token {token}"
-        self._c = httpx.AsyncClient(base_url=base_url.rstrip("/") + "/api/v1", headers=headers, timeout=timeout,
-                                    auth=httpx.BasicAuth(*basic) if basic else None, transport=transport)
+            self._headers["Authorization"] = f"token {token}"
+        self._auth = httpx.BasicAuth(*basic) if basic else None
+        self._own = http is None
+        self._c = http if http is not None else httpx.AsyncClient(timeout=timeout, transport=transport)
 
     async def aclose(self) -> None:
-        await self._c.aclose()
+        if self._own:
+            await self._c.aclose()
 
     async def __aenter__(self) -> "GiteaClient":
         return self
@@ -145,10 +152,20 @@ class GiteaClient:
     async def __aexit__(self, *exc: object) -> None:
         await self.aclose()
 
+    async def request(self, method: str, path: str, **kw: Any) -> httpx.Response:
+        """The raw response of `method /api/v1<path>` (no status handling)."""
+        if self._auth is not None:
+            kw.setdefault("auth", self._auth)
+        return await self._c.request(method, self._root + "/v1" + path, headers=self._headers, **kw)
+
     async def _req(self, method: str, path: str, **kw: Any) -> Any:
-        r = await self._c.request(method, path, **kw)
+        r = await self.request(method, path, **kw)
         if r.status_code >= 400:
-            raise GiteaError(r.status_code, r.text[:300])
+            try:
+                body = r.json()
+            except ValueError:
+                body = None
+            raise GiteaError(r.status_code, r.text[:300], body)
         if r.status_code == 204 or not r.content:
             return None
         return r.json()
@@ -177,6 +194,40 @@ class GiteaClient:
     async def edit_issue_comment(self, owner: str, name: str, comment_id: int, body: str) -> dict[str, Any]:
         return await self._req("PATCH", f"/repos/{owner}/{name}/issues/comments/{comment_id}", json={"body": body})
 
+    async def list_issue_comments(self, owner: str, name: str, number: int, limit: int = 50) -> list[dict[str, Any]]:
+        return await self._req("GET", f"/repos/{owner}/{name}/issues/{number}/comments", params={"limit": limit}) or []
+
+    # branches, commits and pull requests (the Publisher)
+    async def get_branch(self, owner: str, name: str, branch: str) -> dict[str, Any] | None:
+        """None when the branch does not exist."""
+        try:
+            return await self._req("GET", f"/repos/{owner}/{name}/branches/{quote(branch, safe='')}")
+        except GiteaError as e:
+            if e.status == 404:
+                return None
+            raise
+
+    async def get_commit(self, owner: str, name: str, sha: str) -> dict[str, Any] | None:
+        """None when the commit is unknown (404) or the SHA is malformed (422)."""
+        try:
+            return await self._req("GET", f"/repos/{owner}/{name}/git/commits/{sha}")
+        except GiteaError as e:
+            if e.status in (404, 422):
+                return None
+            raise
+
+    async def list_pulls(self, owner: str, name: str, *, state: str = "all", page: int = 1,
+                         limit: int = 50) -> list[dict[str, Any]]:
+        return await self._req("GET", f"/repos/{owner}/{name}/pulls",
+                               params={"state": state, "limit": limit, "page": page}) or []
+
+    async def create_pull(self, owner: str, name: str, *, head: str, base: str, title: str, body: str) -> dict[str, Any]:
+        return await self._req("POST", f"/repos/{owner}/{name}/pulls",
+                               json={"head": head, "base": base, "title": title, "body": body})
+
+    async def edit_pull(self, owner: str, name: str, number: int, **fields: Any) -> dict[str, Any]:
+        return await self._req("PATCH", f"/repos/{owner}/{name}/pulls/{number}", json=fields)
+
     # pull request reviews (line comments of a submitted review are not in the webhook payload)
     async def list_pull_reviews(self, owner: str, name: str, number: int) -> list[dict[str, Any]]:
         return await self._req("GET", f"/repos/{owner}/{name}/pulls/{number}/reviews", params={"limit": 50}) or []
@@ -186,14 +237,14 @@ class GiteaClient:
 
     # repository permission of a user, readable with a read:repository + read:organization token (no repo admin)
     async def is_collaborator(self, owner: str, name: str, login: str) -> bool:
-        r = await self._c.get(f"/repos/{owner}/{name}/collaborators/{login}")
+        r = await self.request("GET", f"/repos/{owner}/{name}/collaborators/{login}")
         return r.status_code == 204
 
     async def repo_teams(self, owner: str, name: str) -> list[dict[str, Any]]:
         return await self._req("GET", f"/repos/{owner}/{name}/teams") or []
 
     async def is_team_member(self, team_id: int, login: str) -> bool:
-        r = await self._c.get(f"/teams/{team_id}/members/{login}")
+        r = await self.request("GET", f"/teams/{team_id}/members/{login}")
         return r.status_code in (200, 204)
 
     # tokens (broker backend; requires basic auth as the token's owner)
@@ -218,5 +269,5 @@ class GiteaClient:
 
     async def healthy(self) -> bool:
         """`GET /api/healthz` (unauthenticated even with REQUIRE_SIGNIN_VIEW=true, unlike /api/v1/version)."""
-        r = await self._c.get(str(self._c.base_url).rstrip("/").removesuffix("/v1") + "/healthz")
+        r = await self._c.get(self._root + "/healthz", headers=self._headers, auth=self._auth or httpx.USE_CLIENT_DEFAULT)
         return r.status_code == 200

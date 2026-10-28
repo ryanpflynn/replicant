@@ -11,6 +11,7 @@ from replicant_ids.ids import (
     artifact_index_id,
     child_workflow_id,
     decision_id,
+    dev_principal,
     gate_id,
     idempotency_key,
     logical_activity_id,
@@ -40,7 +41,7 @@ CONTRACT_VERSION = "2.0.0"
 __all__ = [
     "ALPHABET", "CONTRACT_VERSION", "DEPLOYMENT_NAMES", "MESSAGE_NAMES", "PATTERNS", "SEARCH_ATTRIBUTES",
     "TASK_QUEUES", "UlidGenerator", "WORKFLOW_TYPES", "agentrun_name", "artifact_index_id", "b32_130",
-    "child_workflow_id", "decision_id", "derived", "gate_id", "idempotency_key", "is_valid", "jcs",
+    "child_workflow_id", "decision_id", "derived", "dev_principal", "gate_id", "idempotency_key", "is_valid", "jcs",
     "job_span_id", "job_trace_id", "logical_activity_id", "namespace", "new_id", "notification_id",
     "release_bundle_id", "run_body", "run_id", "run_span_id", "system_workflow_id", "takeover_id", "ulid",
     "ulid_timestamp_ms", "validate", "worker_deployment_version",

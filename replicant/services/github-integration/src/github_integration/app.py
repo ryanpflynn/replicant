@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
-import hmac
 import json
 import logging
 import re
@@ -26,6 +25,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from replicant_scm import canonical_host, verify_gitea_signature
+from replicant_telemetry.common import bearer_ok, bearer_token, token_ok
 from github_integration.clients import Broker, ControlPlane, S3, Temporal
 from github_integration.config import Settings, read_secret
 from github_integration.consumer import Consumer, register_repo
@@ -114,10 +114,7 @@ def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None =
     async def register_installation(request: Request) -> JSONResponse:
         seed = read_secret(s.dev_seed_token_file) if s.is_local else None
         cpa = read_secret(s.notify_caller_token_file)   # CONFIG: control-plane-api's service token (live trigger sync)
-        h = request.headers.get("authorization", "")
-        tok = h[7:].strip() if h[:7].lower() == "bearer " else ""
-        by_seed = bool(seed and tok and hmac.compare_digest(seed, tok))
-        if not tok or not (by_seed or (cpa and hmac.compare_digest(cpa, tok))):
+        if not bearer_ok(request, (seed, cpa)):
             return _problem(401, "unauthenticated")
         try:
             body = await request.json()
@@ -160,10 +157,9 @@ def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None =
         the repo, and a new current settings version. M1 auth: the dev seed token forwarded by control-plane-api."""
         seed = read_secret(s.dev_seed_token_file) if s.is_local else None
         cpa = read_secret(s.notify_caller_token_file)   # CONFIG: control-plane-api's service token (live trigger sync)
-        h = request.headers.get("authorization", "")
-        tok = h[7:].strip() if h[:7].lower() == "bearer " else ""
-        by_seed = bool(seed and tok and hmac.compare_digest(seed, tok))
-        if not tok or not (by_seed or (cpa and hmac.compare_digest(cpa, tok))):
+        tok = bearer_token(request)
+        by_seed = token_ok(tok, seed)
+        if not (by_seed or token_ok(tok, cpa)):
             return _problem(401, "unauthenticated")
         try:
             body = await request.json()
@@ -223,9 +219,7 @@ def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None =
         """control-plane-api's notify dispatcher -> issue comment as replicant-bot (`github_comment` channel).
         Auth: bearer = the notify delivery token (local static caller token; prod: projected SA token)."""
         want = read_secret(s.notify_caller_token_file)
-        h = request.headers.get("authorization", "")
-        tok = h[7:].strip() if h[:7].lower() == "bearer " else ""
-        if not want or not tok or not hmac.compare_digest(want, tok):
+        if not bearer_ok(request, want):
             return _problem(401, "unauthenticated")
         try:
             b = await request.json()

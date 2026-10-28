@@ -3,38 +3,9 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-import json
-import logging
-import os
-import sys
 import urllib.request
 
-
-def _log_ctx(record: logging.LogRecord) -> dict:
-    """job_id / run_id / trace_id / span_id for the line (replicant-telemetry, M2); {} when not installed."""
-    try:
-        from replicant_telemetry import log_context
-    except ImportError:
-        return {}
-    try:
-        return log_context(record)
-    except Exception:  # noqa: BLE001 - logging must never fail
-        return {}
-
-
-class JsonFormatter(logging.Formatter):
-    def format(self, record: logging.LogRecord) -> str:
-        msg = record.getMessage()
-        base = {"level": record.levelname.lower(), "logger": record.name, "service": "github-integration", **_log_ctx(record)}
-        if msg.startswith("{"):
-            try:
-                return json.dumps({**base, **json.loads(msg)})
-            except ValueError:
-                pass
-        out = {**base, "msg": msg}
-        if record.exc_info:
-            out["exc"] = self.formatException(record.exc_info)[-4000:]
-        return json.dumps(out)
+from replicant_telemetry.jsonlog import JsonFormatter, json_logging
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -42,10 +13,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("cmd", nargs="?", default="serve", choices=["serve", "healthcheck"])
     ap.add_argument("--role", choices=["all", "ingress", "consumer"], default=None)
     a = ap.parse_args(argv)
-    from replicant_telemetry.redact import RedactingFormatter
-    h = logging.StreamHandler(sys.stdout)
-    h.setFormatter(RedactingFormatter(JsonFormatter()))
-    logging.basicConfig(level=os.environ.get("REPLICANT_LOG_LEVEL", "INFO"), handlers=[h], force=True)
+    json_logging(JsonFormatter("github-integration", context="head", merge_json=True))
     from github_integration.config import Settings
     s = Settings.from_env()
     if a.role:

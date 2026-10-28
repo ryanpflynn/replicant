@@ -15,6 +15,7 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
+from replicant_scm.gitea import GiteaClient, GiteaError
 from temporalio.exceptions import ApplicationError
 
 from publisher_worker.config import read_secret, settings
@@ -54,10 +55,6 @@ class Repo:
     @property
     def web(self) -> str:
         return settings().gitea_base_url or f"http://{self.host}"
-
-    @property
-    def api(self) -> str:
-        return f"{self.web}/api/v1/repos/{self.owner}/{self.name}"
 
     @property
     def git_url(self) -> str:
@@ -104,66 +101,72 @@ async def token(repo: Repo, *, purpose: str, job_id: str | None, activity_id: st
     return d["token"]
 
 
+_BODY = object()
+
+
 class Gitea:
+    """The Publisher's view of one repository on `replicant_scm.GiteaClient` (sharing this module's HTTP client), with
+    Gitea failures mapped to the Temporal error types of the publisher activities."""
+
     def __init__(self, repo: Repo, tok: str) -> None:
-        self.repo, self._tok = repo, tok
+        self.repo = repo
+        self.client = GiteaClient(repo.web, token=tok, http=http())
 
-    def _h(self) -> dict[str, str]:
-        return {"Authorization": f"token {self._tok}", "Accept": "application/json"}
-
-    async def req(self, method: str, path: str, *, ok: tuple[int, ...] = (200, 201), **kw: Any) -> httpx.Response:
-        url = self.repo.api + path
+    async def _call(self, what: str, fn: Any, *a: Any, other_4xx: Any = _BODY, raise_for: tuple[int, ...] = (),
+                    **kw: Any) -> Any:
+        """401/403 -> PermissionDenied (non-retryable), 429/5xx and transport errors -> ScmUnavailable; any other 4xx
+        returns `other_4xx` (default: the error document, as the Publisher has always read it) unless in `raise_for`."""
         try:
-            r = await http().request(method, url, headers=self._h(), **kw)
+            return await fn(self.repo.owner, self.repo.name, *a, **kw)
         except httpx.HTTPError as e:
-            raise ApplicationError(f"gitea {method} {path}: {type(e).__name__}", type="ScmUnavailable") from None
-        if r.status_code in ok:
-            return r
-        if r.status_code in (401, 403):
-            raise ApplicationError(f"gitea {method} {path}: HTTP {r.status_code}", type="PermissionDenied", non_retryable=True)
-        if r.status_code >= 500 or r.status_code == 429:
-            raise ApplicationError(f"gitea {method} {path}: HTTP {r.status_code}", type="ScmUnavailable")
-        return r
+            raise ApplicationError(f"gitea {what}: {type(e).__name__}", type="ScmUnavailable") from None
+        except GiteaError as e:
+            if e.status in (401, 403):
+                raise ApplicationError(f"gitea {what}: HTTP {e.status}", type="PermissionDenied",
+                                       non_retryable=True) from None
+            if e.status >= 500 or e.status == 429:
+                raise ApplicationError(f"gitea {what}: HTTP {e.status}", type="ScmUnavailable") from None
+            if e.status in raise_for:
+                raise
+            return e.body if other_4xx is _BODY else other_4xx
 
     async def repo_info(self) -> dict[str, Any]:
-        return (await self.req("GET", "")).json()
+        return await self._call("GET ", self.client.get_repo)
 
     async def branch(self, name: str) -> dict[str, Any] | None:
-        r = await self.req("GET", f"/branches/{quote(name, safe='')}", ok=(200, 404))
-        return r.json() if r.status_code == 200 else None
+        return await self._call(f"GET /branches/{quote(name, safe='')}", self.client.get_branch, name, other_4xx=None)
 
     async def commit(self, sha: str) -> dict[str, Any] | None:
-        r = await self.req("GET", f"/git/commits/{sha}", ok=(200, 404, 422))
-        return r.json() if r.status_code == 200 else None
+        return await self._call(f"GET /git/commits/{sha}", self.client.get_commit, sha, other_4xx=None)
 
     async def pulls_for_head(self, head: str) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         for page in range(1, 11):
-            r = await self.req("GET", "/pulls", params={"state": "all", "limit": 50, "page": page})
-            items = r.json() or []
+            items = await self._call("GET /pulls", self.client.list_pulls, state="all", page=page, limit=50) or []
             out += [p for p in items if (p.get("head") or {}).get("ref") == head]
             if len(items) < 50:
                 break
         return out
 
     async def create_pull(self, *, head: str, base: str, title: str, body: str) -> dict[str, Any]:
-        r = await self.req("POST", "/pulls", json={"head": head, "base": base, "title": title, "body": body},
-                           ok=(200, 201, 409, 422))
-        if r.status_code in (409, 422):  # "already exists": re-read and return (§10.1 step 8)
+        try:
+            return await self._call("POST /pulls", self.client.create_pull, head=head, base=base, title=title,
+                                    body=body, raise_for=(409, 422))
+        except GiteaError as e:  # "already exists": re-read and return (§10.1 step 8)
             ex = [p for p in await self.pulls_for_head(head) if p.get("state") == "open"]
             if ex:
                 return ex[0]
-            raise ApplicationError(f"gitea refused the PR: HTTP {r.status_code}", type="InvalidInput", non_retryable=True)
-        return r.json()
+            raise ApplicationError(f"gitea refused the PR: HTTP {e.status}", type="InvalidInput",
+                                   non_retryable=True) from None
 
     async def edit_pull(self, number: int, **fields: Any) -> dict[str, Any]:
-        return (await self.req("PATCH", f"/pulls/{number}", json=fields)).json()
+        return await self._call(f"PATCH /pulls/{number}", self.client.edit_pull, number, **fields)
 
     async def comments(self, number: int) -> list[dict[str, Any]]:
-        return (await self.req("GET", f"/issues/{number}/comments", params={"limit": 50})).json() or []
+        return await self._call(f"GET /issues/{number}/comments", self.client.list_issue_comments, number) or []
 
     async def comment(self, number: int, body: str) -> dict[str, Any]:
-        return (await self.req("POST", f"/issues/{number}/comments", json={"body": body})).json()
+        return await self._call(f"POST /issues/{number}/comments", self.client.create_issue_comment, number, body)
 
 
 # ------------------------------------------------------------------------------------------------ git

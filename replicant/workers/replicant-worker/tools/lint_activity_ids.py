@@ -28,8 +28,9 @@ for _m in pkgutil.iter_modules(_nodes.__path__):  # node modules may register th
 
 EFFECT_RE = re.compile(r"^[a-z][a-z0-9_]{0,30}$")
 # Wrapper functions that forward a catalogued name (they themselves enforce side_effect => explicit ID)
-DYNAMIC_OK = {("context.py", "act"), ("replicant_job.py", "_aux_act"), ("replicant_job.py", "_notify"), ("replicant_job.py", "call"),
-              ("replicant_job.py", "start_side_effect")}
+# (workflows/job/activities.py holds ReplicantJobBase's activity wrappers)
+DYNAMIC_OK = {("context.py", "act"), ("activities.py", "_aux_act"), ("activities.py", "_notify"), ("activities.py", "call"),
+              ("activities.py", "start_side_effect")}
 
 
 def check_file(path: pathlib.Path) -> list[str]:

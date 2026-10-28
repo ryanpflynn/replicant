@@ -4,7 +4,6 @@ the caller, i.e. gates they can decide (the `/v1/approvals?view=mine` query) plu
 they are the requester or a reviewer (approved the publish gate). Drives the UI's "Waiting on you" view and badge."""
 from __future__ import annotations
 
-import datetime as dt
 import json
 from typing import Any
 
@@ -21,10 +20,6 @@ from control_plane_api.routes_ui_prefs import parse_if_match
 
 router = APIRouter()
 NO_ROW = 1        # the version GET reports while nothing is stored (schema minimum 1)
-
-
-def _iso(v: Any) -> Any:
-    return v.astimezone(dt.UTC).isoformat().replace("+00:00", "Z") if isinstance(v, dt.datetime) else v
 
 
 def _user(principal: Principal) -> None:

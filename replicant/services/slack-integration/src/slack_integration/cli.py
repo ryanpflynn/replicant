@@ -2,36 +2,17 @@
 from __future__ import annotations
 
 import argparse
-import json
 import logging
-import os
-import sys
 import urllib.request
 
-
-class JsonFormatter(logging.Formatter):
-    def format(self, record: logging.LogRecord) -> str:
-        msg = record.getMessage()
-        base = {"level": record.levelname.lower(), "logger": record.name, "service": "slack-integration"}
-        if msg.startswith("{"):
-            try:
-                return json.dumps({**base, **json.loads(msg)})
-            except ValueError:
-                pass
-        out = {**base, "msg": msg}
-        if record.exc_info:
-            out["exc"] = self.formatException(record.exc_info)[-4000:]
-        return json.dumps(out)
+from replicant_telemetry.jsonlog import JsonFormatter, json_logging
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="slack-integration")
     ap.add_argument("cmd", nargs="?", default="serve", choices=["serve", "healthcheck"])
     a = ap.parse_args(argv)
-    from replicant_telemetry.redact import RedactingFormatter
-    h = logging.StreamHandler(sys.stdout)
-    h.setFormatter(RedactingFormatter(JsonFormatter()))
-    logging.basicConfig(level=os.environ.get("REPLICANT_LOG_LEVEL", "INFO"), handlers=[h], force=True)
+    json_logging(JsonFormatter("slack-integration", merge_json=True))
     # slack_sdk logs request bodies at DEBUG; keep it at WARNING whatever the root level is.
     logging.getLogger("slack_sdk").setLevel(logging.WARNING)
     from slack_integration.config import Settings

@@ -1,8 +1,9 @@
 # replicant-gateway-shim
 
 WS-03 AI gateway shim (spec `03-agents-and-tools/gateway.md`, `gateway-interface.openapi.yaml`,
-`11-local-dev/gateway-stub.md`). Go 1.26, own module (`replicant.example.com/go/cmd/replicant-gateway-shim`), deps:
-`gopkg.in/yaml.v3`, `github.com/klauspost/compress` (zstd).
+`11-local-dev/gateway-stub.md`). Go 1.26, own module (`example.com/replicant/cmd/replicant-gateway-shim`), deps:
+`gopkg.in/yaml.v3`, `github.com/klauspost/compress` (zstd), and the shared `go/internal/runner` `jose`
+(ES256/JWKS) and `ids` packages (built with `go/internal/runner` in the image's build context).
 
 ```
 replicant-gateway-shim --config=/etc/gateway-shim/gateway-shim.yaml --upstream-backend=script|passthrough|enterprise [--state=local]

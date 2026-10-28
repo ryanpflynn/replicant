@@ -84,3 +84,10 @@ def test_release_bundle_id_content_addressed():
 def test_system_workflow_id():
     assert f.system_workflow_id("projection-reconciler") == "sys:projection-reconciler"
     assert f.system_workflow_id("projection-rebuild", "01m5") == "sys:projection-rebuild:01m5"
+
+
+def test_dev_principal():
+    # the local stack's seeded identity.users rows (replicant seed) and the principals the dev auth and
+    # github-integration attribute to these logins
+    assert f.dev_principal("alice") == "usr_gz14a1cx2p2w6aqq5ejag3aq5j" == f.derived("usr", "replicant-dev-user", "alice")
+    assert f.dev_principal("grace") == "usr_9d6n2hnc1qn2a3zkmddqp8c3jg"

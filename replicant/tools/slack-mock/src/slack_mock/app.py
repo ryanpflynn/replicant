@@ -28,6 +28,7 @@ from typing import Any
 import yaml
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from replicant_telemetry.common import bearer_token, token_ok
 
 from slack_mock.render import render_page
 
@@ -380,12 +381,11 @@ def create_app(workspace: Workspace, *, bot_token: str | None, signing_secret: s
             args = await _args(request)
         except _BadRequest as e:
             return _err(str(e))
-        h = request.headers.get("authorization", "")
-        tok = h[7:].strip() if h[:7].lower() == "bearer " else str(args.pop("token", "") or "")
+        tok = bearer_token(request) or str(args.pop("token", "") or "")
         args.pop("token", None)
         if not tok:
             return _err("not_authed")
-        if not bot_token or not hmac.compare_digest(tok.encode(), bot_token.encode()):
+        if not token_ok(tok, bot_token):
             return _err("invalid_auth")
         fault = store.take_fault(method)
         if fault is not None:

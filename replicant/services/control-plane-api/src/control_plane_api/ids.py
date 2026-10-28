@@ -4,12 +4,7 @@ from __future__ import annotations
 import hashlib
 
 from replicant_ids import b32_130, derived, jcs, release_bundle_id, ulid  # noqa: F401
-
-
-def dev_user_principal(login: str) -> str:
-    """Static M1 dev principal (no identity-service): derived("usr", "replicant-dev-user", login). The same rule is used
-    by github-integration (INTERFACES-LOG CONTROL-02)."""
-    return derived("usr", "replicant-dev-user", login)
+from replicant_ids import dev_principal as dev_user_principal  # static M1 dev principal (INTERFACES-LOG CONTROL-02)
 
 
 def sha256_digest(data: bytes) -> str:

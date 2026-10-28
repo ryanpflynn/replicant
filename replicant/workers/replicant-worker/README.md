@@ -6,13 +6,15 @@ types and the v0 activities. Ported from `spec/01-orchestration/reference` (`rep
 
 | Path | What |
 |---|---|
-| `replicant_worker/workflows/` | `replicant_job.py` (ReplicantJob), `maintenance.py`, `context.py` (NodeContext), `state.py` |
+| `replicant_worker/workflows/` | `replicant_job.py` (ReplicantJob: input, construction, main loop, every `@workflow.*` registration), `maintenance.py`, `context.py` (NodeContext), `state.py` |
+| `replicant_worker/workflows/job/` | the rest of ReplicantJobBase as mixins: `prologue` (harness, router), `nodes`, `waits`, `can`, `terminal`, `activities` (calls, holds, kill switches, deadlines, notices), `projection`, `updates`, `signals`, `queries`; `common` (constants, helpers) |
 | `replicant_worker/graphs/` | FGL `dsl.py`, `graphspec.py`, `engines/` (base, interpreter) |
 | `replicant_worker/nodes/` | core node types, WS-05 `qa_routing.py`, `license_scan.py` (worked example) |
 | `replicant_worker/activities/` | `options.py` (the CATALOG), v0 implementations (`core`, `staging`, `runner`, `qa`, `gates`, `notify`), `catalog_impl.py` |
 | `replicant_worker/local_bundle/` | the v0 definition/policy set (agents, go-service environment, router/repair/polling/gate policies, graphs) |
-| `replicant_worker/testing/` | the reference stubs (`FakeWorld`) and `FakeActivities` |
 | `replicant_worker/resources/spec/` | vendored, unmodified spec files the code and tests read |
+| `tests/support/` | test doubles: the reference stubs (`FakeWorld`) and `FakeActivities` (not shipped in the image) |
+| `tests/replay/histories/` | gzipped workflow histories from the local stack (e2e01, e2e05-07); `tests/test_replay.py` replays them |
 
 v0 settings (plan.md §1.2-1.3): bugfix on InterpreterEngine (the only engine, ORCH-D1) with the shipped `bugfix.yaml`; deterministic router rules only;
 gate rules local (plan gate off, publish gate on); 0 repair cycles; `memory.*` return a pinned empty snapshot; no

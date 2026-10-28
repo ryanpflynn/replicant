@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"replicant.example.com/go/cmd/replicant-gateway-shim/internal/ids"
-	"replicant.example.com/go/cmd/replicant-gateway-shim/internal/jose"
+	"example.com/replicant/internal/runner/ids"
+	"example.com/replicant/internal/runner/jose"
 )
 
 // devtool is a local-test helper, never used by the running service:
@@ -49,11 +49,7 @@ func loadOrCreateKey(path string) (*ecdsa.PrivateKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	pemb, err := jose.MarshalPrivateKeyPEM(k)
-	if err != nil {
-		return nil, err
-	}
-	return k, os.WriteFile(path, pemb, 0o600)
+	return k, os.WriteFile(path, (&jose.Signer{Key: k}).PEM(), 0o600)
 }
 
 type runInfo struct {
@@ -100,15 +96,15 @@ func devMint(args []string) int {
 		b, _ := json.MarshalIndent(v, "", "  ")
 		return os.WriteFile(filepath.Join(*dir, name), b, mode)
 	}
-	_ = writeJSON("runner-jwks.json", jose.JWKSet{Keys: []jose.JWK{jose.PublicJWK(&rk.PublicKey, "runner-dev-1")}}, 0o644)
-	_ = writeJSON("grant-jwks.json", jose.JWKSet{Keys: []jose.JWK{jose.PublicJWK(&gk.PublicKey, "rg-dev-1")}}, 0o644)
+	_ = writeJSON("runner-jwks.json", jose.JWKS{Keys: []jose.JWK{jose.PublicJWK(&rk.PublicKey, "runner-dev-1")}}, 0o644)
+	_ = writeJSON("grant-jwks.json", jose.JWKS{Keys: []jose.JWK{jose.PublicJWK(&gk.PublicKey, "rg-dev-1")}}, 0o644)
 
 	now := time.Now()
-	ri := runInfo{TenantID: *tenant, JobID: ids.New("job"), RunID: ids.New("run"), Role: *role, ReleaseBundleID: ids.New("rb"),
+	ri := runInfo{TenantID: *tenant, JobID: ids.ULID("job"), RunID: ids.ULID("run"), Role: *role, ReleaseBundleID: ids.ULID("rb"),
 		BudgetUSD: *budget, Models: strings.Split(*models, ","), Issuer: *issuer, GrantIssuer: *grantIss}
-	grantJti := ids.New("rgr")
-	actingFor := ids.New("usr")
-	grant, err := jose.SignES256(gk, jose.Header{Alg: "ES256", Kid: "rg-dev-1", Typ: "replicant-run-grant+jwt"}, map[string]any{
+	grantJti := ids.ULID("rgr")
+	actingFor := ids.ULID("usr")
+	grant, err := (&jose.Signer{Key: gk, Kid: "rg-dev-1"}).Sign("replicant-run-grant+jwt", map[string]any{
 		"iss": ri.GrantIssuer, "typ": "replicant-run-grant+jwt", "jti": grantJti, "iat": now.Unix(), "exp": now.Add(*ttl + time.Hour).Unix(),
 		"tenant_id": ri.TenantID, "job_id": ri.JobID, "run_id": ri.RunID, "role": ri.Role, "repo_ids": []string{"repo-ledger-api"},
 		"audiences": []string{"ai-gateway", "runner-sandbox"}, "scopes": []string{"gateway:invoke", "inbox:read"},
@@ -118,9 +114,9 @@ func devMint(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	tok, err := jose.SignES256(rk, jose.Header{Alg: "ES256", Kid: "runner-dev-1", Typ: "JWT"}, map[string]any{
+	tok, err := (&jose.Signer{Key: rk, Kid: "runner-dev-1"}).Sign("JWT", map[string]any{
 		"iss": ri.Issuer, "sub": "run:" + ri.RunID, "aud": "ai-gateway", "exp": now.Add(*ttl).Unix(), "iat": now.Unix(),
-		"jti": ids.New("rtk"), "tenant_id": ri.TenantID, "job_id": ri.JobID, "run_id": ri.RunID, "role": ri.Role,
+		"jti": ids.ULID("rtk"), "tenant_id": ri.TenantID, "job_id": ri.JobID, "run_id": ri.RunID, "role": ri.Role,
 		"release_bundle_id": ri.ReleaseBundleID, "repo_ids": []string{"repo-ledger-api"}, "scopes": []string{"gateway:invoke"},
 		"budget_usd": ri.BudgetUSD, "acting_for": actingFor, "grant": grant, "grant_jti": grantJti,
 	})

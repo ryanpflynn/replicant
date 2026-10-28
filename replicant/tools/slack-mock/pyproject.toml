@@ -7,10 +7,14 @@ dependencies = [
   "fastapi==0.162.0",
   "uvicorn==0.54.0",
   "pyyaml==6.0.3",
+  "replicant-telemetry",
 ]
 
 [project.scripts]
 slack-mock = "slack_mock.cli:main"
+
+[tool.uv.sources]
+replicant-telemetry = { workspace = true }
 
 [dependency-groups]
 dev = ["pytest>=8", "httpx==0.28.1"]

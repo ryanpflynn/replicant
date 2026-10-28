@@ -20,7 +20,8 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from memory_service import gateway, store
+from memory_service import analytics, curation, gateway
+from memory_service import candidates as candidate_ops, snapshots as snapshot_ops
 from memory_service.auth import Auth, HttpError
 from memory_service.config import Settings
 from memory_service.db import Database
@@ -88,14 +89,14 @@ def create_app(settings: Settings | None = None, *, db: Database | None = None, 
         auth.caller(request)
         b = await body(request)
         need(b, "tenant_id", "job_id")
-        return await store.create_snapshot(db, s3, b)
+        return await snapshot_ops.create_snapshot(db, s3, b)
 
     @app.post("/internal/v1/snapshots/{snapshot_id}:select")
     async def snapshot_select(snapshot_id: str, request: Request) -> dict[str, Any]:
         auth.caller(request)
         b = await body(request)
         need(b, "tenant_id")
-        return {"memory_snapshot_id": snapshot_id, "revoked": await store.select_revoked(db, b["tenant_id"], snapshot_id),
+        return {"memory_snapshot_id": snapshot_id, "revoked": await snapshot_ops.select_revoked(db, b["tenant_id"], snapshot_id),
                 "mode": "revocation_filter"}
 
     @app.post("/internal/v1/injections")
@@ -103,33 +104,33 @@ def create_app(settings: Settings | None = None, *, db: Database | None = None, 
         auth.caller(request)
         b = await body(request)
         need(b, "tenant_id", "job_id", "run_id", "snapshot_id", "role")
-        return await store.inject(db, b)
+        return await snapshot_ops.inject(db, b)
 
     @app.post("/internal/v1/candidates")
     async def candidates(request: Request) -> dict[str, Any]:
         auth.caller(request)
         b = await body(request)
         need(b, "tenant_id", "job_id")
-        return await store.write_candidates(db, settings, b, judge=judge)
+        return await candidate_ops.write_candidates(db, settings, b, judge=judge)
 
     @app.post("/internal/v1/findings")
     async def findings(request: Request) -> dict[str, Any]:
         auth.caller(request)
         b = await body(request)
         need(b, "tenant_id", "job_id")
-        return await store.findings(db, settings, b, judge=judge)
+        return await candidate_ops.findings(db, settings, b, judge=judge)
 
     @app.post("/internal/v1/outcomes")
     async def outcomes(request: Request) -> dict[str, Any]:
         auth.caller(request)
         b = await body(request)
         need(b, "tenant_id", "job_id")
-        return await store.record_outcome(db, b)
+        return await candidate_ops.record_outcome(db, b)
 
     @app.get("/internal/v1/jobs/{job_id}/memory")
     async def job_memory(job_id: str, request: Request, tenant_id: str) -> dict[str, Any]:
         auth.caller(request)
-        return await store.job_memory(db, tenant_id, job_id)
+        return await snapshot_ops.job_memory(db, tenant_id, job_id)
 
     # ------------------------------------------------------------------------------------------ admin
     @app.get("/internal/v1/admin/candidates")
@@ -137,22 +138,22 @@ def create_app(settings: Settings | None = None, *, db: Database | None = None, 
         auth.admin(request)
         q = dict(request.query_params)
         q["state"] = "candidate"
-        return {"items": await store.list_entries(db, q)}
+        return {"items": await curation.list_entries(db, q)}
 
     @app.get("/internal/v1/admin/entries")
     async def admin_entries(request: Request) -> dict[str, Any]:
         auth.admin(request)
-        return {"items": await store.list_entries(db, dict(request.query_params))}
+        return {"items": await curation.list_entries(db, dict(request.query_params))}
 
     @app.post("/internal/v1/admin/entries")
     async def admin_create(request: Request) -> JSONResponse:
         a = auth.admin(request)
-        return JSONResponse(await store.create_entry(db, a, await body(request), idem(request)), status_code=201)
+        return JSONResponse(await curation.create_entry(db, a, await body(request), idem(request)), status_code=201)
 
     @app.get("/internal/v1/admin/entries/{entry_ref}")
     async def admin_entry(entry_ref: str, request: Request) -> dict[str, Any]:
         auth.admin(request)
-        return await store.get_entry(db, entry_ref)
+        return await curation.get_entry(db, entry_ref)
 
     @app.post("/internal/v1/admin/entries/{entry_ref}")
     async def admin_entry_action(entry_ref: str, request: Request) -> dict[str, Any]:
@@ -162,30 +163,30 @@ def create_app(settings: Settings | None = None, *, db: Database | None = None, 
             raise HttpError(404, "unknown_action", "POST /entries/{id}:<verb>")
         b = await body(request)
         if verb == "edit":
-            return await store.edit_entry(db, a, eid, b, request.headers.get("if-match"), idem(request))
-        return await store.entry_action(db, a, eid, verb, b, request.headers.get("if-match"), idem(request))
+            return await curation.edit_entry(db, a, eid, b, request.headers.get("if-match"), idem(request))
+        return await curation.entry_action(db, a, eid, verb, b, request.headers.get("if-match"), idem(request))
 
     @app.post("/internal/v1/admin/quarantines")
     async def admin_quarantine(request: Request) -> dict[str, Any]:
         a = auth.admin(request)
         b = await body(request)
-        return await store.bulk_quarantine(db, a, b, idem(request) if not b.get("dry_run") else "dry-run-x")
+        return await curation.bulk_quarantine(db, a, b, idem(request) if not b.get("dry_run") else "dry-run-x")
 
     @app.post("/internal/v1/admin/purges")
     async def admin_purge(request: Request) -> dict[str, Any]:
         a = auth.admin(request)
         b = await body(request)
-        return await store.purge(db, s3, a, b, idem(request) if not b.get("dry_run") else "dry-run-x")
+        return await curation.purge(db, s3, a, b, idem(request) if not b.get("dry_run") else "dry-run-x")
 
     @app.post("/internal/v1/admin/exports")
     async def admin_export(request: Request) -> dict[str, Any]:
         a = auth.admin(request)
-        return await store.export(db, s3, a, await body(request), idem(request))
+        return await curation.export(db, s3, a, await body(request), idem(request))
 
     @app.get("/internal/v1/admin/conflicts")
     async def admin_conflicts(request: Request) -> dict[str, Any]:
         auth.admin(request)
-        return {"items": await store.list_conflicts(db, dict(request.query_params))}
+        return {"items": await curation.list_conflicts(db, dict(request.query_params))}
 
     @app.post("/internal/v1/admin/conflicts/{conflict_ref}")
     async def admin_conflict_resolve(conflict_ref: str, request: Request) -> dict[str, Any]:
@@ -193,11 +194,11 @@ def create_app(settings: Settings | None = None, *, db: Database | None = None, 
         cid, _, verb = conflict_ref.partition(":")
         if verb != "resolve":
             raise HttpError(404, "unknown_action", verb)
-        return await store.resolve_conflict(db, a, cid, await body(request), idem(request))
+        return await curation.resolve_conflict(db, a, cid, await body(request), idem(request))
 
     @app.get("/internal/v1/admin/analytics/{report}")
     async def admin_analytics(report: str, request: Request) -> dict[str, Any]:
         auth.admin(request)
-        return await store.analytics(db, report, dict(request.query_params))
+        return await analytics.analytics(db, report, dict(request.query_params))
 
     return app

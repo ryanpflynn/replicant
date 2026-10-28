@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"example.com/replicant/internal/runner/ids"
 	"gopkg.in/yaml.v3"
-	"replicant.example.com/go/cmd/replicant-gateway-shim/internal/ids"
 )
 
 // Script is replicant.gateway-script/v1 (gateway.md §8.2).
@@ -457,14 +457,14 @@ func (b *ScriptBackend) render(w http.ResponseWriter, d *DataRequest, req *anthr
 		if in == nil {
 			in = map[string]any{}
 		}
-		blocks = append(blocks, contentBlock{Type: "tool_use", ID: "toolu_" + ids.Derived(seed+"|"+strconv.Itoa(i)), Name: tu.Name, Input: in})
+		blocks = append(blocks, contentBlock{Type: "tool_use", ID: "toolu_" + ids.ULIDFromSeed(seed+"|"+strconv.Itoa(i)), Name: tu.Name, Input: in})
 	}
 	if so, err := structuredOutput(resp, script); err != nil {
 		return b.miss(w, d, err.Error(), nil)
 	} else if so != nil {
 		so = substitute(so, vars)
 		if req.hasTool(structuredOutputTool) {
-			blocks = append(blocks, contentBlock{Type: "tool_use", ID: "toolu_" + ids.Derived(seed+"|so"), Name: structuredOutputTool, Input: so})
+			blocks = append(blocks, contentBlock{Type: "tool_use", ID: "toolu_" + ids.ULIDFromSeed(seed+"|so"), Name: structuredOutputTool, Input: so})
 		} else {
 			j, _ := json.Marshal(so)
 			blocks = append(blocks, contentBlock{Type: "text", Text: string(j)})
@@ -488,7 +488,7 @@ func (b *ScriptBackend) render(w http.ResponseWriter, d *DataRequest, req *anthr
 		u = *resp.Usage
 	}
 	served := b.cfg.UpstreamModel(d.Model)
-	msgID := "msg_" + ids.Derived(seed+"|msg")
+	msgID := "msg_" + ids.ULIDFromSeed(seed+"|msg")
 	if d.Stream {
 		writeSSE(w, msgID, served, blocks, stop, u)
 	} else {
@@ -501,11 +501,11 @@ func (b *ScriptBackend) render(w http.ResponseWriter, d *DataRequest, req *anthr
 		j, _ := json.Marshal(body)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Replicant-Served-Model", served)
-		w.Header().Set("request-id", "req_script_"+ids.Derived(seed))
+		w.Header().Set("request-id", "req_script_"+ids.ULIDFromSeed(seed))
 		w.WriteHeader(200)
 		_, _ = w.Write(j)
 	}
-	return Result{Status: 200, Usage: u, UsageParsed: true, ServedModel: served, UpstreamRequestID: "req_script_" + ids.Derived(seed)}
+	return Result{Status: 200, Usage: u, UsageParsed: true, ServedModel: served, UpstreamRequestID: "req_script_" + ids.ULIDFromSeed(seed)}
 }
 
 func structuredOutput(resp *Respond, script *Script) (any, error) {

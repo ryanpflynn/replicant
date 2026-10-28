@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hmac
 import json
 import logging
 import time
@@ -26,6 +25,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import ValidationError
+from replicant_telemetry.common import bearer_ok
 
 from slack_integration import signing
 from slack_integration.blocks import (DeliverRequest, build_blocks, fallback_text, home_view, metadata,
@@ -137,9 +137,7 @@ def create_app(settings: Settings | None = None, *, repo: Repo | None = None, sl
         expected = read_secret(s.notify_caller_token_file)
         if not expected:
             return _json(503, {"state": "error", "reason": "caller_token_not_configured"})
-        h = request.headers.get("authorization", "")
-        tok = h[7:].strip() if h[:7].lower() == "bearer " else ""
-        if not tok or not hmac.compare_digest(tok.encode(), expected.encode()):
+        if not bearer_ok(request, expected):
             return _json(401, {"state": "error", "reason": "unauthenticated"})
         return None
 
@@ -164,9 +162,7 @@ def create_app(settings: Settings | None = None, *, repo: Repo | None = None, sl
         if not expected:
             log.error(json.dumps({"msg": "notify caller token not configured"}))
             return _json(503, {"state": "error", "reason": "caller_token_not_configured"})
-        h = request.headers.get("authorization", "")
-        tok = h[7:].strip() if h[:7].lower() == "bearer " else ""
-        if not tok or not hmac.compare_digest(tok.encode(), expected.encode()):
+        if not bearer_ok(request, expected):
             return _json(401, {"state": "error", "reason": "unauthenticated"})
         raw = await request.body()
         if len(raw) > MAX_DELIVER_BODY:

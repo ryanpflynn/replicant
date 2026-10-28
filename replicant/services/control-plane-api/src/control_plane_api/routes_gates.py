@@ -19,6 +19,7 @@ from control_plane_api.authz import Principal
 from control_plane_api.db import OPERATOR_SCOPE
 from control_plane_api.ids import derived
 from control_plane_api.problems import ProblemError
+from replicant_telemetry.common import iso
 
 router = APIRouter()
 
@@ -41,10 +42,6 @@ REJECTION_HTTP = {
 }
 
 
-def _iso(v: Any) -> Any:
-    return v.isoformat().replace("+00:00", "Z") if isinstance(v, dt.datetime) else v
-
-
 def now_iso() -> str:
     return dt.datetime.now(dt.UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
@@ -64,10 +61,10 @@ def _gate_view(g: Any) -> dict[str, Any]:
     for gv in g.snap_gates or []:
         if gv.get("gate_id") == g.gate_id:
             return gv
-    gv: dict[str, Any] = {"gate_id": g.gate_id, "kind": g.kind, "state": g.state, "opened_at": _iso(g.opened_at),
+    gv: dict[str, Any] = {"gate_id": g.gate_id, "kind": g.kind, "state": g.state, "opened_at": iso(g.opened_at),
                           "presented_digest": g.presented_digest, "packet_uri": g.packet_key, "channels": list(g.channels)}
     if g.expires_at:
-        gv["expires_at"] = _iso(g.expires_at)
+        gv["expires_at"] = iso(g.expires_at)
     return gv
 
 
@@ -351,12 +348,12 @@ async def list_inbox(request: Request, principal: Principal = require("authentic
             continue
         it: dict[str, Any] = {"gate_id": g.gate_id, "job_id": g.job_id, "tenant_id": g.tenant_id, "kind": g.kind,
                               "title": g.title or "", "repo": g.repo or "", "requester": g.requester,
-                              "risk_level": g.risk_level or "low", "opened_at": _iso(g.opened_at),
+                              "risk_level": g.risk_level or "low", "opened_at": iso(g.opened_at),
                               "channels": list(g.channels or []), "why": "eligible_group", "state": g.state,
                               "escalation_level": g.escalation_level, "batchable": g.batchable,
                               "approvals_recorded": g.approvals_recorded, "approvals_required": g.min_approvers}
         if g.expires_at:
-            it["expires_at"] = _iso(g.expires_at)
+            it["expires_at"] = iso(g.expires_at)
         if g.winning_decision:
             it["decision"] = g.winning_decision
         if g.suggested_approver:

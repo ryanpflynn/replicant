@@ -4,7 +4,6 @@
 `WorkerVersionRow` and `KillSwitch`. M1 simplifications are listed in replicant/docs/v0/DEVIATIONS.md (WEB-*)."""
 from __future__ import annotations
 
-import datetime as dt
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -14,16 +13,13 @@ from control_plane_api import routes_ui_prefs
 from control_plane_api.auth import require
 from control_plane_api.authz import PLATFORM_ONLY, ROLE_PERMISSIONS, Principal
 from control_plane_api.db import OPERATOR_SCOPE
+from replicant_telemetry.common import iso
 
 router = APIRouter()
 
 TENANT_ROLES = ("viewer", "engineer", "approver", "tenant_admin")
 ADMIN_GROUP = "replicant-admins"          # D-25: memory:admin = membership in replicant-admins at request time
 MODES = ("intake", "starts", "runs", "publishing")
-
-
-def _iso(v: Any) -> Any:
-    return v.isoformat().replace("+00:00", "Z") if isinstance(v, dt.datetime) else v
 
 
 def capabilities(p: Principal) -> list[str]:
@@ -121,7 +117,7 @@ async def list_bundles(request: Request, principal: Principal = require("release
             role = "rollback_target"
         it: dict[str, Any] = {"release_bundle_id": r.release_bundle_id, "display_version": r.display_version,
                               "promotion_state": r.promotion_state, "worker_build_id": r.worker_build_id,
-                              "assignment": {"role": role}, "created_at": _iso(r.created_at)}
+                              "assignment": {"role": role}, "created_at": iso(r.created_at)}
         if r.base_release_bundle_id:
             it["base_release_bundle_id"] = r.base_release_bundle_id
             it["tenant_layer_of"] = r.tenant_id
@@ -162,11 +158,11 @@ async def list_workers(request: Request, principal: Principal = require("release
         p = pinned.get(r.build_id)
         it: dict[str, Any] = {"deployment_name": r.deployment_name, "build_id": r.build_id, "routing_status": status,
                               "pinned_workflows": int(p.n or 0) if p else 0, "bundles": bundles.get(r.build_id, []),
-                              "image_digest": r.image_digest, "registered_at": _iso(r.registered_at)}
+                              "image_digest": r.image_digest, "registered_at": iso(r.registered_at)}
         if r.ready_at:
-            it["ready_at"] = _iso(r.ready_at)
+            it["ready_at"] = iso(r.ready_at)
         if p and p.oldest:
-            it["oldest_pinned_started_at"] = _iso(p.oldest)
+            it["oldest_pinned_started_at"] = iso(p.oldest)
         items.append(it)
     return {"items": items}
 
@@ -184,8 +180,8 @@ def fold_kill_switches(rows: list[Any]) -> list[dict[str, Any]]:
             ks[r.mode] = (r.intake_state or "paused") if r.mode == "intake" else "paused"
         ks["notice_ids"][r.mode] = r.notice_id
         latest = ks.get("set_at")
-        if latest is None or (r.issued_at and _iso(r.issued_at) > latest):
-            ks.update(set_at=_iso(r.issued_at), set_by=r.issued_by, reason_code=r.reason_code)
+        if latest is None or (r.issued_at and iso(r.issued_at) > latest):
+            ks.update(set_at=iso(r.issued_at), set_by=r.issued_by, reason_code=r.reason_code)
             if r.note:
                 ks["note"] = r.note
             if r.signal_batch_job_id:

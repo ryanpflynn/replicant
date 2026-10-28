@@ -2,7 +2,6 @@
 (WS-06 releases.openapi.yaml), and the internal gateway-quota lookup (architecture.md §2.10)."""
 from __future__ import annotations
 
-import datetime as dt
 import json
 import re
 from typing import Any
@@ -15,15 +14,12 @@ from control_plane_api.auth import require
 from control_plane_api.authz import Principal
 from control_plane_api.db import OPERATOR_SCOPE
 from control_plane_api.problems import ProblemError
+from replicant_telemetry.common import iso
 
 router = APIRouter()
 
 TENANT_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 ENVS = ("local", "dev", "staging", "prod")
-
-
-def _iso(v: Any) -> Any:
-    return v.isoformat().replace("+00:00", "Z") if isinstance(v, dt.datetime) else v
 
 
 def _num(v: Any) -> float | int:
@@ -158,8 +154,8 @@ async def migration_status(request: Request, principal: Principal = require("adm
         if await db.has_relation("ops.migration_runs"):
             for r in (await conn.execute(text("SELECT to_revision, started_at, finished_at, outcome FROM "
                                               "ops.migration_runs ORDER BY run_seq DESC LIMIT 20"))).all():
-                out["last_runs"].append({"revision": r.to_revision or "", "started_at": _iso(r.started_at),
-                                         **({"finished_at": _iso(r.finished_at)} if r.finished_at else {}),
+                out["last_runs"].append({"revision": r.to_revision or "", "started_at": iso(r.started_at),
+                                         **({"finished_at": iso(r.finished_at)} if r.finished_at else {}),
                                          "outcome": r.outcome})
     out["head_known_to_api"] = out["current_revision"]
     return out
@@ -237,7 +233,7 @@ async def gateway_quota(tenant_id: str, request: Request,
             "monthly_budget_usd": q["monthly_budget_usd"], "daily_budget_usd": q["daily_budget_usd"],
             "platform_daily_usd_max": caps.get("platform_daily_usd_max", 0),
             "platform_monthly_usd_max": caps.get("platform_monthly_usd_max", 0),
-            "version": r.version, "as_of": _iso(r.updated_at)}
+            "version": r.version, "as_of": iso(r.updated_at)}
 
 
 # ------------------------------------------------------------------------------------------------ tenant repos

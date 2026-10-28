@@ -10,13 +10,13 @@ Prod OIDC/BFF sessions and device-grant JWTs are not implemented in M1 (no Dex/O
 """
 from __future__ import annotations
 
-import hmac
 import logging
 from collections.abc import Callable
 from typing import Any
 
 import yaml
 from fastapi import Depends, Request
+from replicant_telemetry.common import bearer_token, token_match
 
 from control_plane_api.authz import AuthorizeRequest, Evaluator, Principal, PrincipalLookup
 from control_plane_api.config import Settings
@@ -80,13 +80,7 @@ class AuthContext:
         return self.rbac.effective(principal)
 
     def _bearer_internal(self, request: Request) -> Principal | None:
-        tok = bearer(request)
-        if not tok:
-            return None
-        for known, p in self._internal.items():
-            if hmac.compare_digest(known, tok):
-                return p
-        return None
+        return token_match(bearer(request), self._internal)
 
     def authenticate(self, request: Request) -> Principal | None:
         for a in self.authenticators:
@@ -97,10 +91,7 @@ class AuthContext:
 
 
 def bearer(request: Request) -> str | None:
-    h = request.headers.get("authorization", "")
-    if h[:7].lower() == "bearer ":
-        return h[7:].strip() or None
-    return None
+    return bearer_token(request) or None
 
 
 def auth_ctx(request: Request) -> AuthContext:

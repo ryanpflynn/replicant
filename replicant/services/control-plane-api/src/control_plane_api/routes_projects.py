@@ -32,6 +32,7 @@ from control_plane_api.config import read_secret
 from control_plane_api.db import OPERATOR_SCOPE
 from control_plane_api.problems import ProblemError
 from control_plane_api.rbac import project_permissions
+from replicant_telemetry.common import iso
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -39,10 +40,6 @@ router = APIRouter()
 PROJECT_ID_RE = re.compile(r"^prj_[a-z0-9][a-z0-9-]{1,40}$")
 GROUP_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,62}$")
 EDIT_PERMS = ("tenant:ops:edit", "tenant:policy:edit", "identity:admin")
-
-
-def _iso(v: Any) -> Any:
-    return v.isoformat().replace("+00:00", "Z") if hasattr(v, "isoformat") else v
 
 
 async def _project(request: Request, principal: Principal, project_id: str, perm: str = "job:read") -> Any:
@@ -220,7 +217,7 @@ async def _bindings(request: Request, row: Any) -> dict[str, Any]:
     groups = sorted({b["group"] for b in proj + inherited})
     return {"project_id": row.project_id, "version": v.version if v else 0, "bindings": proj, "inherited": inherited,
             "members": {g: members.get(g, []) for g in groups}, "roles": list(P.PROJECT_ROLES),
-            "updated_at": _iso(v.created_at) if v else None, "updated_by": v.created_by if v else None}
+            "updated_at": iso(v.created_at) if v else None, "updated_by": v.created_by if v else None}
 
 
 @router.get("/v1/projects/{project_id}/access")

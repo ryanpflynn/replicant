@@ -18,8 +18,8 @@ import (
 	"syscall"
 	"time"
 
-	"replicant.example.com/go/cmd/replicant-gateway-shim/internal/shim"
-	"replicant.example.com/go/cmd/replicant-gateway-shim/internal/usage"
+	"example.com/replicant/cmd/replicant-gateway-shim/internal/shim"
+	"example.com/replicant/cmd/replicant-gateway-shim/internal/usage"
 )
 
 func main() {

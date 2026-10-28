@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "publisher-worker: the Publisher (github-app.md §10) on task queue replicant-publisher; Gitea in M1"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+  "replicant-scm",
   "replicant-telemetry",
   "replicant-temporal",
   "temporalio==1.34.0",
@@ -16,6 +17,7 @@ dependencies = [
 publisher-worker = "publisher_worker.cli:main"
 
 [tool.uv.sources]
+replicant-scm = { workspace = true }
 replicant-telemetry = { workspace = true }
 replicant-temporal = { workspace = true }
 

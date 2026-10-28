@@ -48,3 +48,32 @@ func TestUUID5(t *testing.T) {
 		t.Fatalf("uuid5 vector mismatch: %s", UUID5(NamespaceURL, "http://python.org/"))
 	}
 }
+
+// Golden vectors captured from the gateway shim's former ids.Derived(seed), which ULIDFromSeed replaces.
+func TestULIDFromSeedGolden(t *testing.T) {
+	for seed, want := range map[string]string{
+		"":                                     "73p324567w3ga9nyzms2cpze94",
+		"a":                                    "6ajy0h5jgvqq5fnghhped27q2d",
+		"seed|0":                               "4y75j0wzv04skykfraz7py5fby",
+		"seed|msg":                             "092beqxrgvn8nxbvd20w601hmn",
+		"req|so":                               "2ee692wy93b7j0ke73afxgw8pb",
+		"x|msg":                                "0x3ga4bfhrg9jbfr96py6pp19h",
+		"abcdefghijklmnopqrstuvwxyz0123456789": "013z19jkhst98h85a0z1x6j29b",
+	} {
+		if got := ULIDFromSeed(seed); got != want {
+			t.Errorf("ULIDFromSeed(%q) = %s, want %s", seed, got, want)
+		}
+	}
+}
+
+// The ID shape the gateway shim relies on (gwu_, run_, ...): prefix_ + 26 lower Crockford chars, unique.
+func TestULIDShape(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 1000; i++ {
+		id := ULID("gwu")
+		if len(id) != 30 || id[:4] != "gwu_" || strings.ContainsAny(id[4:], "ilou") || !regexpMatch(id) || seen[id] {
+			t.Fatal(id)
+		}
+		seen[id] = true
+	}
+}

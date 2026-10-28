@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime as dt
-import hmac
 import json
 import logging
 import os
@@ -30,6 +29,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from replicant_scm.gitea import GiteaClient, GiteaError
+from replicant_telemetry.common import bearer_token, read_secret, token_match
 
 log = logging.getLogger("github_token_broker")
 
@@ -45,16 +45,6 @@ DEFAULT_READ_SCOPES = {"contents": ["read:repository"], "issues": ["read:issue"]
 def env(name: str, default: str | None = None) -> str | None:
     v = os.environ.get(name)
     return v if v not in (None, "") else default
-
-
-def read_secret(path: str | None) -> str | None:
-    if not path:
-        return None
-    try:
-        with open(path, encoding="utf-8") as f:
-            return f.read().strip()
-    except FileNotFoundError:
-        return None
 
 
 def parse_token_map(text_: str) -> dict[str, str]:
@@ -208,14 +198,7 @@ class Broker:
                 self.callers = parse_token_map(text_)
 
     def authenticate(self, request: Request) -> str | None:
-        h = request.headers.get("authorization", "")
-        tok = h[7:].strip() if h[:7].lower() == "bearer " else ""
-        if not tok:
-            return None
-        for known, caller in self.callers.items():
-            if hmac.compare_digest(known, tok):
-                return caller
-        return None
+        return token_match(bearer_token(request), self.callers)
 
     def _client(self) -> GiteaClient:
         pw = read_secret(self.s.bot_password_file)

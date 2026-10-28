@@ -6,22 +6,14 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from replicant_telemetry.common import read_secret  # noqa: F401  (re-exported for callers)
+
 DEFAULT_SLACK_API_URL = "https://slack.com/api/"
 
 
 def env(name: str, default: str | None = None) -> str | None:
     v = os.environ.get(name)
     return v if v not in (None, "") else default
-
-
-def read_secret(path: str | None) -> str | None:
-    if not path:
-        return None
-    try:
-        with open(path, encoding="utf-8") as f:
-            return f.read().strip() or None
-    except (FileNotFoundError, PermissionError, IsADirectoryError):
-        return None
 
 
 @dataclass(frozen=True)

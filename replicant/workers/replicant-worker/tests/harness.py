@@ -19,7 +19,7 @@ from temporalio.worker import Replayer, Worker, WorkerDeploymentConfig  # noqa: 
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner, SandboxRestrictions  # noqa: E402
 
 from replicant_worker import ids  # noqa: E402
-from replicant_worker.testing.stubs import FakeWorld  # noqa: E402
+from support.stubs import FakeWorld  # noqa: E402
 from replicant_worker.workflows.maintenance import MaintenanceBatch, MaintenanceShard  # noqa: E402
 from replicant_worker.workflows.replicant_job import ReplicantJob, ReplicantJobInput  # noqa: E402
 

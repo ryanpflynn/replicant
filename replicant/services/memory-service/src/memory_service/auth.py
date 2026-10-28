@@ -16,6 +16,7 @@ from typing import Any
 
 import yaml
 from fastapi import Request
+from replicant_telemetry.common import bearer_token, token_match
 
 from memory_service.config import Settings
 
@@ -59,11 +60,10 @@ class Auth:
         self.tokens = tokens if tokens is not None else load_tokens(settings.caller_tokens_file)
 
     def caller(self, request: Request) -> Caller:
-        h = request.headers.get("authorization", "")
-        tok = h[7:].strip() if h[:7].lower() == "bearer " else ""
-        for known, svc in self.tokens.items():
-            if tok and hmac.compare_digest(known, tok):
-                return Caller(svc, tok)
+        tok = bearer_token(request)
+        svc = token_match(tok, self.tokens)
+        if svc is not None:
+            return Caller(svc, tok)
         raise HttpError(401, "unauthenticated", "bearer token required")
 
     def admin(self, request: Request) -> AdminPrincipal:

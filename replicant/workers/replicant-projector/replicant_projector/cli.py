@@ -13,14 +13,8 @@ Q = "replicant-projections"
 
 
 def setup_logging() -> None:
-    class Json(logging.Formatter):
-        def format(self, r: logging.LogRecord) -> str:
-            return json.dumps({"ts": self.formatTime(r), "level": r.levelname.lower(), "logger": r.name,
-                               "msg": r.getMessage(), **({"job_id": r.job_id} if getattr(r, "job_id", None) else {})})
-    from replicant_telemetry.redact import RedactingFormatter
-    h = logging.StreamHandler(sys.stdout)
-    h.setFormatter(RedactingFormatter(Json()))
-    logging.basicConfig(level=os.environ.get("REPLICANT_LOG_LEVEL", "INFO"), handlers=[h], force=True)
+    from replicant_telemetry.jsonlog import JsonFormatter, json_logging
+    json_logging(JsonFormatter(ts=True, record_keys=("job_id",), exc_limit=None))
 
 
 async def run() -> None:

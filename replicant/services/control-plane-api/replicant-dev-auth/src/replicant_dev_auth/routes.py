@@ -6,14 +6,11 @@ from typing import Any
 
 from fastapi import APIRouter, Body, Request
 from sqlalchemy import text
+from replicant_telemetry.common import iso
 
 router = APIRouter()
 STEP_RE = re.compile(r"^[0-9]{2}-[a-z][a-z0-9-]{1,40}$")
 BUILD_RE = re.compile(r"^b[0-9]{8}-[0-9a-f]{12}$")
-
-
-def _iso(v: Any) -> Any:
-    return v.isoformat().replace("+00:00", "Z") if hasattr(v, "isoformat") else v
 
 
 def _require_seed():  # noqa: ANN202
@@ -26,7 +23,7 @@ async def get_seed_status(request: Request, principal: Any = _require_seed()) ->
     async with request.app.state.db.tx(role="svc_cpa_intake") as conn:
         rows = (await conn.execute(text("SELECT step, state, detail, updated_at FROM intake.dev_seed_status "
                                         "ORDER BY step"))).all()
-    steps = [{"step": r.step, "state": r.state, "updated_at": _iso(r.updated_at),
+    steps = [{"step": r.step, "state": r.state, "updated_at": iso(r.updated_at),
               **({"detail": r.detail} if r.detail else {})} for r in rows]
     return {"seeded": bool(steps) and all(s["state"] == "done" for s in steps), "steps": steps}
 
