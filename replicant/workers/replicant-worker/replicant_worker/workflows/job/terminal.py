@@ -142,6 +142,10 @@ class TerminalMixin:
                    # MEM: outcome metrics key (memory.job_outcomes)
                    "repo": self.s.targets[0]["repo"] if self.s.targets else None, "workflow_type": self.s.workflow_type,
                    "release_bundle_id": self.s.release_bundle_id}
+            if self.s.pr and self.s.targets and workflow.patched("memory-outcome-pr-v1"):
+                # MEM-D12: the PR and repo, so the activity can check that the repair survived to the merged head
+                mem["pr"] = {"number": self.s.pr.get("number"), "head_sha": self.s.pr.get("head_sha")}
+                mem["repo_ref"] = self.primary_repo()
             try:  # best effort: memory bookkeeping never changes the job's outcome (WS-04 XD-04-01)
                 await self._aux_act("memory.record_outcome", mem, node_key="finalize", effect="record_outcome",
                                     ordinal=1, block=False)

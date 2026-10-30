@@ -8,7 +8,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from replicant_worker.registry import NodeResult, NodeType, node_type
+from temporalio import workflow
+from temporalio.exceptions import ActivityError
+
+from replicant_worker.registry import NodeFailed, NodeResult, NodeType, node_type
 from replicant_worker.workflows.context import NodeContext
 
 
@@ -19,7 +22,7 @@ class PrFeedbackWait(NodeType):
     protected = True
     bounded = True  # bounded by the repair budget (repair_limits) and the PR wait expiry
     interrupts = True
-    effects = ("expire_session", "round_1")
+    effects = ("expire_session", "round_1", "human_edits")
     description = "Waits in pr_review for PR events (Signal pr.event), debounced; authorizes repair triggers (D-15)."
 
     async def run(self, ctx: NodeContext, config: dict[str, Any]) -> NodeResult:
@@ -27,6 +30,9 @@ class PrFeedbackWait(NodeType):
         ev = ctx.interrupt({"wait": "pr_feedback"})
         kind = ev["event"]
         if kind in ("merged", "closed", "expired"):
+            if kind == "merged" and not s.evaluation and (s.pr or {}).get("head_sha") and \
+                    workflow.patched("memory-human-edit-v1"):
+                await _ingest_human_edits(ctx, ev)
             if not s.evaluation:
                 grace = ctx.host.session_state_grace_days()  # the bundle's retention policy (0-7, default 7)
                 await ctx.act("artifacts.expire_session_state", {"job_id": s.job_id, "tenant_id": s.tenant_id,
@@ -53,6 +59,25 @@ class PrFeedbackWait(NodeType):
         s.exports["__feedback__"] = {"batch": [{"delivery_id": b["delivery_id"], "payload_uri": b["payload_uri"],
                                                 "event": b["event"]} for b in authorized][:100]}
         return NodeResult(outcome="feedback", exports={"items": len(authorized)})
+
+
+async def _ingest_human_edits(ctx: NodeContext, ev: dict[str, Any]) -> None:
+    """MEM-PR-D20: commits humans pushed on top of Replicant's last push before the merge -> memory candidates.
+    Best effort: a failure here never changes the job's outcome."""
+    s = ctx.s
+    t = s.targets[0] if s.targets else {}
+    try:
+        r = await ctx.act("memory.ingest_human_edits", {
+            "job_id": s.job_id, "tenant_id": s.tenant_id, "repo": t.get("repo"), "repo_ref": ctx.host.primary_repo(),
+            "pr": {"number": s.pr.get("number"), "head_sha": s.pr.get("head_sha")},
+            "merged_head_sha": ev.get("head_sha"), "payload_uri": ev.get("payload_uri")},
+            effect="human_edits", block=False)
+    except (NodeFailed, ActivityError) as e:  # memory never fails the job
+        workflow.logger.warning("memory.ingest_human_edits failed", extra={"error": str(e)[:200]})
+        return
+    if r.get("human_commits"):
+        ctx.host.emit("memory.candidates_written", f"{r.get('written', 0)} memory candidates from "
+                      f"{r['human_commits']} human commit(s)", node_key=ctx.node_key)
 
 
 @node_type
@@ -114,6 +139,9 @@ class MemoryWriter(NodeType):
         ex = await ctx.act("memory.extract_candidates", {
             "job_id": s.job_id, "tenant_id": s.tenant_id, "cycle": s.cycle,
             "candidates_uri": s.refs.get("memory_candidates_uri"), "triage_uri": s.refs.get("feedback_triage_uri"),
+            # MEM-D20: the repo at the scanned commit, for the deterministic scan verification
+            **({"repo": s.targets[0].get("repo"), "repo_ref": ctx.host.primary_repo(),
+                "base_sha": ctx.host.primary_repo().get("base_sha")} if s.targets else {}),
             # MEM-01: false when this cycle's repair was not pushed (failed repair, no_action, rejected push gate)
             **({"addressed": bool(s.exports["__feedback__"].get("pushed"))}
                if isinstance(s.exports.get("__feedback__"), dict) and s.refs.get("feedback_triage_uri") else {}),

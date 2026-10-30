@@ -37,3 +37,17 @@ def test_triage_items_mem01():
                                                                        5: "not_generalizable"}
     out, non = memory._triage_items(doc, False)  # top-level addressed: false (push not published)
     assert out == [] and len(non) == 5
+
+
+def test_fix_retained_helpers():
+    """MEM-D12: a repair's added lines must survive to the merged head (>= 80 % per file, file still present)."""
+    from replicant_worker.activities.memory import _added_by_file, lines_retained
+    patch = ("diff --git a/svc/fee.py b/svc/fee.py\n--- a/svc/fee.py\n+++ b/svc/fee.py\n@@ -1,2 +1,3 @@\n"
+             "+from decimal import Decimal\n+    return Decimal(amount) * rate\n+\n x = 1\n"
+             "diff --git a/old.py b/old.py\n--- a/old.py\n+++ /dev/null\n@@ -1 +0,0 @@\n-gone\n")
+    added = _added_by_file(patch)
+    assert added == {"svc/fee.py": ["from decimal import Decimal", "return Decimal(amount) * rate"]}
+    kept = "from decimal import Decimal\ndef f(amount, rate):\n    return Decimal(amount) * rate\n"
+    assert lines_retained(added, {"svc/fee.py": kept})
+    assert not lines_retained(added, {"svc/fee.py": "def f(amount, rate):\n    return float(amount) * rate\n"})
+    assert not lines_retained(added, {"svc/fee.py": None})

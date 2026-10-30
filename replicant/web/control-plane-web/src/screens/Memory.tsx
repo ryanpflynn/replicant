@@ -23,12 +23,23 @@ export interface Entry {
   scope_level: string; repo?: string | null; subject_key?: string | null; current_version: number; confidence: number;
   evidence_count: number; injection_count: number; created_at: string; title?: string | null; statement?: string | null;
   rationale?: string | null; path_globs?: string[]; source_kind?: string | null; open_conflicts: number;
+  // MEM-D11..D14: independent evidence, PR-outcome hold, source trust, lifecycle, repo-scan verification
+  independent_evidence_count?: number; distinct_author_count?: number; activation_hold?: boolean; hold_reason?: string | null;
+  pr_outcome?: string | null; source_trust?: "human" | "machine"; human_sources?: number; machine_sources?: number;
+  review_due_at?: string | null; review_due?: boolean; stale?: boolean; open_flags?: number; last_injected_at?: string | null;
+  documented_in?: string[] | null; verification?: { cited_files?: string[]; matched?: number; sampled?: number; missing?: string[]; pattern?: string; expect?: string; commit_sha?: string } | null;
+  label?: string | null;
 }
 interface Detail extends Entry {
   versions: Array<{ version: number; statement?: string | null; scope_level: string; path_globs: string[]; change_kind: string; created_at: string; created_by: string; purged_at?: string | null }>;
-  provenance: Array<{ provenance_id: number; source_kind: string; source_url?: string | null; source_excerpt?: string | null; author_principal_id?: string | null; author_repo_permission?: string | null; job_id?: string | null; pr_number?: number | null; observed_at: string; extraction_model?: string | null; withdrawn_reason?: string | null }>;
+  provenance: Array<{ provenance_id: number; source_kind: string; source_trust?: string; repeat?: boolean; source_url?: string | null; source_excerpt?: string | null; author_principal_id?: string | null; author_repo_permission?: string | null; job_id?: string | null; pr_number?: number | null; observed_at: string; extraction_model?: string | null; withdrawn_reason?: string | null }>;
   transitions: Array<{ from_state?: string | null; to_state: string; at: string; actor_principal_id: string; reason_code: string; reason_text?: string | null }>;
   jobs: Array<{ job_id: string; run_id: string; role: string; node_key: string; created_at: string }>;
+  similar?: Array<{ entry_id: string; state: string; memory_type: string; statement?: string | null; similarity: number }>;
+  conflicts?: Array<{ conflict_id: string; entry_a: string; entry_b: string; state: string }>;
+  effectiveness?: { jobs_injected: number; jobs_recurred: number; signal: "no_data" | "recurred" | "no_recurrence" };
+  flags?: Array<{ flag_id: number; reason_code: string; reason_text?: string | null; status: string; created_at: string; source: string }>;
+  preview?: string;
 }
 interface Conflict { conflict_id: string; tenant_id: string; entry_a: string; entry_b: string; statement_a: string; statement_b: string; state_a: string; state_b: string; kind: string; detected_at: string }
 
@@ -46,7 +57,33 @@ const scopeLabel = (e: { scope_level: string; repo?: string | null; path_globs?:
 
 const SOURCE_WORDS: Record<string, string> = { gate_comment: "approver comment", pr_review_comment: "PR review comment",
   pr_review_body: "PR review", pr_issue_comment: "PR comment", review_finding: "reviewer finding (recurring)",
-  qa_failure: "QA failure (recurring)", import: "repo scan", curator: "admin", agent_proposal: "agent proposal" };
+  qa_failure: "QA failure (recurring)", import: "repo scan", curator: "admin", agent_proposal: "agent proposal",
+  human_edit: "human edit before merge" };
+
+const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
+// "N independent sources (M authors)": repeats of the same author and wording count once (MEM-D11)
+export const sourcesLabel = (e: Entry) => {
+  const ind = e.independent_evidence_count ?? e.evidence_count;
+  const a = e.distinct_author_count ?? 0;
+  return `${plural(ind, "independent source")} (${a ? plural(a, "author") : "no linked author"})`;
+};
+const MERGE: Record<string, [string, string]> = { awaiting_merge: ["held: awaiting merge", "attention"], merged_with_fix: ["merged with fix", "success"],
+  merged_unverified: ["merged (fix not verified)", "neutral"], closed_unmerged: ["PR closed unmerged", "danger"], fix_reverted: ["fix reverted before merge", "danger"] };
+function Badges({ e }: { e: Entry }) {
+  const m = e.pr_outcome ? MERGE[e.pr_outcome] : null;
+  return (
+    <span className="membadges">
+      {m ? <span className={`pill small ${m[1]}`} title="PR outcome of the job this came from">{m[0]}</span> : null}
+      {e.source_trust === "machine" ? <span className="pill small attention" title="Only agent-generated sources (reviewer agent, QA); needs a human-sourced corroboration before approval">machine-sourced</span> : null}
+      {e.label ? <span className="pill small info">{e.label}</span> : null}
+      {e.documented_in?.length ? <span className="pill small attention" title={e.documented_in.join(", ")}>already covered: {e.documented_in[0]}{e.documented_in.length > 1 ? ` +${e.documented_in.length - 1}` : ""}</span> : null}
+      {e.open_conflicts ? <span className="pill small attention">conflict</span> : null}
+      {e.review_due ? <span className="pill small attention">review due</span> : null}
+      {e.open_flags ? <span className="pill small attention">{plural(e.open_flags, "flag")}</span> : null}
+      {e.stale ? <span className="pill small neutral" title="Not injected into any run for 90 days">stale</span> : null}
+    </span>
+  );
+}
 
 export function Memory() {
   const me = useMe().data;
@@ -87,7 +124,7 @@ export function Memory() {
 }
 
 function EntryList({ state, onOpen, sel }: { state?: string; onOpen: (id: string) => void; sel: string | null }) {
-  const [f, setF] = useState({ state: state ?? "", memory_type: "", repo: "", q: "" });
+  const [f, setF] = useState({ state: state ?? "", memory_type: "", repo: "", q: "", review: "" });
   const qs = new URLSearchParams(Object.entries({ ...f, state: state ?? f.state }).filter(([, v]) => v) as [string, string][]);
   const q = useQuery({ queryKey: ["memory", state ?? "entries", qs.toString()], queryFn: () =>
     get<{ items: Entry[] }>(`${API}/${state ? "candidates" : "entries"}?${qs}`) });
@@ -101,19 +138,21 @@ function EntryList({ state, onOpen, sel }: { state?: string; onOpen: (id: string
         <select className="field" aria-label="Type" value={f.memory_type} onChange={(e) => setF({ ...f, memory_type: e.target.value })}>
           <option value="">any type</option>{["rule", "negative", "procedure", "preference"].map((s) => <option key={s}>{s}</option>)}</select>
         <input className="field" aria-label="Repo" placeholder="repo host/owner/name" value={f.repo} onChange={(e) => setF({ ...f, repo: e.target.value })} />
+        {!state ? <select className="field" aria-label="Review" value={f.review} onChange={(e) => setF({ ...f, review: e.target.value })}>
+          <option value="">any review status</option><option value="due_or_flagged">due for review / flagged</option></select> : null}
         <input className="field" aria-label="Search" placeholder="search text" value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} />
       </div>
       {q.isLoading ? <SkeletonRows cols={[30, 10, 20, 10]} rows={5} /> : q.error ? <ErrorBanner error={q.error} what="memory entries" retry={() => void q.refetch()} /> :
         !q.data?.items.length ? <Empty title={state ? "No candidates" : "No entries"}>{state ? "Feedback from gates, PR reviews, recurring reviewer and QA findings and repo scans lands here." : "Nothing matches the filter."}</Empty> :
         <table className="t" aria-label={state ? "Candidates" : "Entries"}>
-          <thead><tr><th>Statement</th><th>Type</th><th>Scope</th><th>Source</th><th className="right">Evidence</th><th>State</th></tr></thead>
+          <thead><tr><th>Statement</th><th>Type</th><th>Scope</th><th>Source</th><th>Evidence</th><th>State</th></tr></thead>
           <tbody>{q.data.items.map((e) => (
             <tr key={e.entry_id} className={"click" + (sel === e.entry_id ? " sel" : "")} onClick={() => onOpen(e.entry_id)}>
               <td><div>{e.title ? <b>{e.title}</b> : null}</div><div className="small">{e.statement ?? <i className="t3">purged</i>}</div>
-                {e.open_conflicts ? <span className="pill warn small">conflict</span> : null}</td>
+                <Badges e={e} /></td>
               <td>{e.memory_type}</td><td className="mono small">{scopeLabel(e)}</td>
-              <td className="small">{SOURCE_WORDS[e.source_kind ?? ""] ?? e.source_kind ?? "—"}</td>
-              <td className="right num">{e.evidence_count}</td><td>{e.state}</td>
+              <td className="small">{SOURCE_WORDS[e.source_kind ?? ""] ?? e.source_kind ?? "—"}<div className="t3">{e.source_trust === "machine" ? "machine" : "human"}</div></td>
+              <td className="small" aria-label="Independent sources">{sourcesLabel(e)}{e.evidence_count > (e.independent_evidence_count ?? e.evidence_count) ? <div className="t3">{plural(e.evidence_count, "mention")}</div> : null}</td><td>{e.state}</td>
             </tr>))}</tbody>
         </table>}
     </div>
@@ -138,6 +177,15 @@ function EntryDetail({ id, onClose }: { id: string; onClose: () => void }) {
   };
   if (q.isLoading) return <div className="section"><SkeletonRows cols={[60]} rows={6} /></div>;
   if (q.error || !e) return <div className="section"><ErrorBanner error={q.error} what="the entry" /></div>;
+  const held = !!e.activation_hold && e.hold_reason === "awaiting_merge";
+  const machineOnly = e.source_trust === "machine";
+  const approveBlock = held ? "Held until the job's PR merges with the fix in it. You can still reject it."
+    : machineOnly ? "Machine-sourced: needs at least one human-sourced source (a reviewer or approver saying the same) before approval." : null;
+  const eff = e.effectiveness;
+  const effText = !eff || eff.signal === "no_data" ? "no data yet (never injected)"
+    : eff.signal === "recurred" ? `similar feedback still came back in ${eff.jobs_recurred} of ${plural(eff.jobs_injected, "job")} that had it`
+      : `no similar feedback in ${plural(eff.jobs_injected, "job")} that had it`;
+  const conflictIds = new Set((e.conflicts ?? []).filter((k) => k.state === "open").flatMap((k) => [k.entry_a, k.entry_b]));
   const verbs: Array<[string, string, string]> = ({
     candidate: [["approve", "Approve", "primary"], ["reject", "Reject", ""]],
     active: [["disable", "Disable", ""], ["deprecate", "Deprecate", ""], ["quarantine", "Quarantine", ""]],
@@ -154,21 +202,39 @@ function EntryDetail({ id, onClose }: { id: string; onClose: () => void }) {
         <dt>Scope</dt><dd className="mono small">{e.scope_level} · {scopeLabel(e)}</dd>
         <dt>Subject</dt><dd className="mono small">{e.subject_key ?? "—"}</dd>
         <dt>Origin</dt><dd>{e.origin} <span className="t3 small">tenant {e.tenant_id}</span></dd>
-        <dt>Evidence</dt><dd className="num">{e.evidence_count} · confidence {e.confidence.toFixed(2)} · injected {e.injection_count}×</dd>
+        <dt>Evidence</dt><dd aria-label="Evidence">{sourcesLabel(e)} · confidence {e.confidence.toFixed(2)}{e.evidence_count > (e.independent_evidence_count ?? e.evidence_count) ? <span className="t3 small"> · {plural(e.evidence_count, "mention")} in all, repeats do not count</span> : null}</dd>
+        <dt>Trust</dt><dd aria-label="Trust">{machineOnly ? <span className="pill small attention">machine-sourced</span> : "human"} <span className="t3 small">{e.human_sources ?? 0} human · {e.machine_sources ?? 0} machine source rows</span></dd>
+        <dt>Merge status</dt><dd aria-label="Merge status">{e.pr_outcome ? MERGE[e.pr_outcome]?.[0] ?? e.pr_outcome : <span className="t3">not PR-derived</span>}</dd>
+        <dt>Covered by</dt><dd aria-label="Covered by">{e.documented_in?.length ? <>already in repo instructions or linter: <span className="mono small">{e.documented_in.join(", ")}</span></> : <span className="t3">not found in repo instructions or linter config</span>}
+          {e.verification ? <div className="t3 small">verification: pattern matched {e.verification.matched ?? 0} of {e.verification.sampled ?? 0} sampled files{e.verification.pattern ? <> (<span className="mono">{e.verification.pattern}</span>)</> : null}{e.verification.cited_files?.length ? <> · cites {e.verification.cited_files.join(", ")}</> : null}{e.verification.missing?.length ? <> · missing {e.verification.missing.join(", ")}</> : null}{e.verification.commit_sha ? <> · at <span className="mono">{e.verification.commit_sha.slice(0, 10)}</span></> : null}</div> : null}
+          {e.label ? <div className="t3 small">{e.label}</div> : null}</dd>
+        <dt>Usage</dt><dd aria-label="Usage">used {e.injection_count}× · last used {e.last_injected_at ? dateTime(e.last_injected_at) : "never"}{e.stale ? <> · <span className="pill small neutral">stale</span></> : null}<div className="t3 small">effectiveness: {effText}</div></dd>
+        {e.state === "active" ? <><dt>Review</dt><dd aria-label="Review">{e.review_due_at ? <>due {dateTime(e.review_due_at)}</> : "—"}{e.review_due ? <> · <span className="pill small attention">due now</span></> : null}</dd></> : null}
       </dl>
+      <Badges e={e} />
       {err ? <ErrorBanner error={err} what="the change" /> : null}
       {e.open_conflicts ? <p className="small warn">An open conflict blocks activation; resolve it under Conflicts.</p> : null}
+      {e.state === "candidate" && approveBlock ? <p className="small warn" aria-label="Approval blocked">{approveBlock}</p> : null}
       {verbs.length ? <>
         <input className="field" aria-label="Reason" placeholder="reason (recorded in the audit trail)" value={reason} onChange={(x) => setReason(x.target.value)} style={{ width: "100%", marginTop: 8 }} />
         <div className="row g1" style={{ marginTop: 8, flexWrap: "wrap" }}>
-          {verbs.map(([v, label, cls]) => <button key={v} className={"btn sm " + cls} onClick={() => void act(v)}>{label}</button>)}
-          {e.state === "candidate" || e.state === "active" ? <button className="btn sm" onClick={() => setEdit(true)}>{e.state === "candidate" ? "Edit and approve…" : "Edit…"}</button> : null}
+          {verbs.map(([v, label, cls]) => <button key={v} className={"btn sm " + cls} disabled={v === "approve" && !!approveBlock} title={v === "approve" && approveBlock ? approveBlock : undefined} onClick={() => void act(v)}>{label}</button>)}
+          {e.state === "candidate" || e.state === "active" ? <button className="btn sm" disabled={e.state === "candidate" && !!approveBlock} onClick={() => setEdit(true)}>{e.state === "candidate" ? "Edit and approve…" : "Edit…"}</button> : null}
+          {e.state === "active" && (e.review_due || e.open_flags) ? <button className="btn sm" onClick={() => void act("mark_reviewed")}>Mark reviewed</button> : null}
         </div></> : null}
       {edit ? <EditDialog e={e} onClose={() => setEdit(false)} onSave={(b) => void act("edit", b)} /> : null}
+      {e.flags?.length ? <><h4 className="cfgh">Flags</h4>
+        {e.flags.map((f) => <div key={f.flag_id} className="small"><span className={"pill small " + (f.status === "open" ? "attention" : "neutral")}>{f.status}</span> {f.reason_code.replace(/_/g, " ")} · <span className="t2">{f.reason_text}</span> <span className="t3">{dateTime(f.created_at)}</span></div>)}</> : null}
+      <h4 className="cfgh">As the agent will see it</h4>
+      <pre className="codeblock" aria-label="Agent preview" style={{ whiteSpace: "pre-wrap" }}>{e.preview || "(purged)"}</pre>
+      <h4 className="cfgh">Similar or conflicting entries</h4>
+      {e.similar?.length ? e.similar.map((x) => <div key={x.entry_id} className="small"><Link to={`/admin/memory?tab=entries&entry=${x.entry_id}`} className="mono">{x.entry_id.slice(0, 14)}…</Link> {conflictIds.has(x.entry_id) ? <span className="pill small attention">conflict</span> : null} <span className="t3">{x.state} · {Math.round(x.similarity * 100)}% similar</span> <span className="t2">{x.statement}</span></div>)
+        : conflictIds.size ? null : <p className="small t3">None.</p>}
+      {[...conflictIds].filter((x) => x !== e.entry_id && !e.similar?.some((s2) => s2.entry_id === x)).map((x) => <div key={x} className="small"><Link to={`/admin/memory?tab=entries&entry=${x}`} className="mono">{x.slice(0, 14)}…</Link> <span className="pill small attention">conflict</span></div>)}
       <h4 className="cfgh">Provenance</h4>
       {e.provenance.map((p) => (
         <div key={p.provenance_id} className="small" style={{ marginBottom: 8 }}>
-          <div><b>{SOURCE_WORDS[p.source_kind] ?? p.source_kind}</b>{p.pr_number ? <> · PR #{p.pr_number}</> : null}
+          <div><b>{SOURCE_WORDS[p.source_kind] ?? p.source_kind}</b>{p.source_trust === "machine" ? <span className="pill small attention"> machine</span> : null}{p.repeat ? <span className="pill small neutral" title="Same author and wording as an earlier source: recorded, not counted as independent evidence"> repeat</span> : null}{p.pr_number ? <> · PR #{p.pr_number}</> : null}
             {p.job_id ? <> · <Link to={`/jobs/${p.job_id}`} className="mono">{p.job_id.slice(0, 14)}…</Link></> : null}
             {p.source_url ? <> · <a href={p.source_url} target="_blank" rel="noreferrer noopener">source ↗</a></> : null}</div>
           {p.source_excerpt ? <blockquote className="t2">{p.source_excerpt}</blockquote> : null}

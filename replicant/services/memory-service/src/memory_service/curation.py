@@ -11,9 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from memory_service import core
 from memory_service.auth import AdminPrincipal, HttpError
-from memory_service.candidates import _PROV_INSERT, _insert_version, _prov
+from memory_service.candidates import _PROV_INSERT, _insert_version, _prov, recount
 from memory_service.db import Database, jdump, one, rows
-from memory_service.store import TRANSITIONS, _emit, _jsonable, _now
+from memory_service.store import ITEM_SQL, REVIEW_DUE_DAYS, STALE_DAYS, TRANSITIONS, _emit, _item, _jsonable, _now
 from replicant_ids import ulid
 
 # ================================================================================================ admin: reads
@@ -22,9 +22,30 @@ SELECT e.entry_id, e.tenant_id, e.memory_type, e.origin, e.state, e.state_seq, e
        e.current_version, e.confidence::float AS confidence, e.evidence_count, e.injection_count, e.created_at,
        e.state_changed_at, e.last_injected_at, v.title, v.statement, v.rationale, v.path_globs,
        (SELECT p.source_kind FROM memory.provenance p WHERE p.entry_id = e.entry_id ORDER BY p.provenance_id LIMIT 1) AS source_kind,
-       (SELECT count(*) FROM memory.conflicts k WHERE k.state = 'open' AND (k.entry_a = e.entry_id OR k.entry_b = e.entry_id)) AS open_conflicts
+       (SELECT count(*) FROM memory.conflicts k WHERE k.state = 'open' AND (k.entry_a = e.entry_id OR k.entry_b = e.entry_id)) AS open_conflicts,
+       e.independent_evidence_count, e.distinct_author_count, e.activation_hold, e.hold_reason, e.pr_outcome,
+       e.review_due_at, e.last_confirmed_at,
+       (SELECT count(*) FROM memory.provenance p WHERE p.entry_id = e.entry_id AND p.withdrawn_at IS NULL
+           AND p.source_trust = 'human') AS human_sources,
+       (SELECT count(*) FROM memory.provenance p WHERE p.entry_id = e.entry_id AND p.withdrawn_at IS NULL
+           AND p.source_trust = 'machine') AS machine_sources,
+       (SELECT count(*) FROM memory.entry_flags f WHERE f.entry_id = e.entry_id AND f.status = 'open') AS open_flags,
+       (SELECT p.generalization->'documented_in' FROM memory.provenance p WHERE p.entry_id = e.entry_id
+           AND p.generalization->'documented_in' IS NOT NULL ORDER BY p.provenance_id DESC LIMIT 1) AS documented_in,
+       (SELECT p.generalization->'verification' FROM memory.provenance p WHERE p.entry_id = e.entry_id
+           AND p.generalization->'verification' IS NOT NULL ORDER BY p.provenance_id DESC LIMIT 1) AS verification,
+       (SELECT p.generalization->>'label' FROM memory.provenance p WHERE p.entry_id = e.entry_id
+           AND p.generalization->>'label' IS NOT NULL ORDER BY p.provenance_id DESC LIMIT 1) AS label,
+       (e.state = 'active' AND coalesce(e.last_injected_at, e.state_changed_at) < now() - interval '{stale} days') AS stale,
+       (e.state = 'active' AND e.review_due_at <= now()) AS review_due
   FROM memory.entries e JOIN memory.entry_versions v ON v.entry_id = e.entry_id AND v.version = e.current_version
-"""
+""".replace("{stale}", str(int(STALE_DAYS)))
+
+
+def _trust(r: dict[str, Any]) -> dict[str, Any]:
+    """MEM-D13 label: machine when no live human-sourced provenance row corroborates the entry."""
+    r["source_trust"] = "machine" if not r.get("human_sources") and r.get("machine_sources") else "human"
+    return r
 
 
 async def list_entries(db: Database, q: dict[str, Any]) -> list[dict[str, Any]]:
@@ -41,6 +62,9 @@ async def list_entries(db: Database, q: dict[str, Any]) -> list[dict[str, Any]]:
     if q.get("q"):
         where.append("(v.tsv @@ websearch_to_tsquery('english', :q) OR v.statement ILIKE :ql)")
         params["q"], params["ql"] = q["q"], f"%{q['q']}%"
+    if q.get("review") in ("due", "flagged", "due_or_flagged"):  # MEM-D14 "Due for review / flagged"
+        where.append("((e.state = 'active' AND e.review_due_at <= now()) OR EXISTS (SELECT 1 FROM memory.entry_flags f "
+                     "WHERE f.entry_id = e.entry_id AND f.status = 'open'))")
     if q.get("job_id"):
         where.append("EXISTS (SELECT 1 FROM memory.provenance p WHERE p.entry_id = e.entry_id AND p.job_id = :job)")
         params["job"] = q["job_id"]
@@ -48,7 +72,7 @@ async def list_entries(db: Database, q: dict[str, Any]) -> list[dict[str, Any]]:
     async with db.tx(admin=True) as c:
         res = rows(await c.execute(text(LIST_SQL + " WHERE " + " AND ".join(where)
                                         + " ORDER BY e.created_at DESC LIMIT :lim"), params))
-    return [_jsonable(r) for r in res]
+    return [_jsonable(_trust(r)) for r in res]
 
 
 async def get_entry(db: Database, eid: str) -> dict[str, Any]:
@@ -62,7 +86,9 @@ async def get_entry(db: Database, eid: str) -> dict[str, Any]:
         prov = rows(await c.execute(text("""SELECT provenance_id, supports_version, source_kind, source_url, repo, pr_number,
             comment_id, review_id, source_excerpt, author_principal_id, author_repo_permission, job_id, run_id,
             extraction_prompt_name, extraction_prompt_version, extraction_model, generalization, observed_at, withdrawn_at,
-            withdrawn_reason FROM memory.provenance WHERE entry_id = :e ORDER BY provenance_id"""), {"e": eid}))
+            withdrawn_reason, source_trust, independence_key, cycle,
+            row_number() OVER (PARTITION BY independence_key ORDER BY provenance_id) > 1 AS repeat
+            FROM memory.provenance WHERE entry_id = :e ORDER BY provenance_id"""), {"e": eid}))
         trans = rows(await c.execute(text("""SELECT from_state, to_state, entry_version, at, actor_kind, actor_principal_id,
             reason_code, reason_text FROM memory.state_transitions WHERE entry_id = :e ORDER BY transition_id"""), {"e": eid}))
         jobs = rows(await c.execute(text("""SELECT job_id, run_id, role, node_key, created_at, snapshot_id
@@ -70,8 +96,37 @@ async def get_entry(db: Database, eid: str) -> dict[str, Any]:
             ORDER BY created_at DESC LIMIT 100"""), {"p": eid + "@%"}))
         conflicts = rows(await c.execute(text("""SELECT conflict_id, entry_a, entry_b, kind, state, resolution, detected_at
             FROM memory.conflicts WHERE entry_a = :e OR entry_b = :e ORDER BY detected_at DESC"""), {"e": eid}))
-    return _jsonable({**e, "versions": versions, "provenance": prov, "transitions": trans, "jobs": jobs,
-                      "conflicts": conflicts})
+        similar = rows(await c.execute(text("""SELECT e2.entry_id, e2.state, e2.memory_type, v2.statement,
+            similarity(v2.statement, :st)::float AS similarity FROM memory.entries e2 JOIN memory.entry_versions v2
+            ON v2.entry_id = e2.entry_id AND v2.version = e2.current_version WHERE e2.tenant_id = :t AND e2.entry_id <> :e
+            AND e2.state IN ('candidate', 'active') AND similarity(v2.statement, :st) >= 0.3
+            ORDER BY similarity(v2.statement, :st) DESC LIMIT 5"""), {"st": e["statement"], "t": e["tenant_id"], "e": eid}))
+        eff = one(await c.execute(text(EFFECT_SQL), {"e": eid, "p": eid + "@%", "st": e["statement"]})) or {}
+        flags = rows(await c.execute(text("""SELECT flag_id, kind, source, reason_code, reason_text, status, created_at,
+            due_at, job_id FROM memory.entry_flags WHERE entry_id = :e ORDER BY flag_id DESC LIMIT 50"""), {"e": eid}))
+        cur = one(await c.execute(text(ITEM_SQL.format(extra="") + " WHERE e.entry_id = :e"), {"e": eid}))
+    preview = core.render("msnap_preview", [_item(cur)]) if cur else ""
+    jobs_inj, rec = int(eff.get("jobs_injected") or 0), int(eff.get("jobs_recurred") or 0)
+    effectiveness = {"jobs_injected": jobs_inj, "jobs_recurred": rec,
+                     "signal": "no_data" if not jobs_inj else ("recurred" if rec else "no_recurrence")}
+    return _jsonable({**_trust(e), "versions": versions, "provenance": prov, "transitions": trans, "jobs": jobs,
+                      "conflicts": conflicts, "similar": similar, "effectiveness": effectiveness, "flags": flags,
+                      "preview": preview})
+
+
+# MEM-D14 effectiveness: of the jobs that had the entry injected, how many still received feedback similar to it
+# (trigram >= 0.6 against the statement or one of its source excerpts, or merged as evidence into it).
+EFFECT_SQL = """
+WITH inj AS (SELECT job_id FROM memory.injections WHERE EXISTS (SELECT 1 FROM unnest(injected_refs) r WHERE r LIKE :p)
+              GROUP BY job_id)
+SELECT count(*) AS jobs_injected,
+       count(*) FILTER (WHERE EXISTS (SELECT 1 FROM memory.feedback_items f WHERE f.job_id = inj.job_id
+           AND f.source_key !~ '^(qa|review|outcome|scan|agent):'
+           AND ((f.decision = 'evidence_merged' AND f.entry_id = :e)
+                OR similarity(coalesce(f.detail->>'text', ''), :st) >= 0.6
+                OR EXISTS (SELECT 1 FROM memory.provenance p WHERE p.entry_id = :e AND p.source_excerpt IS NOT NULL
+                             AND similarity(coalesce(f.detail->>'text', ''), p.source_excerpt) >= 0.6)))) AS jobs_recurred
+  FROM inj"""
 
 
 
@@ -118,8 +173,22 @@ async def _transition(c: AsyncConnection, e: dict[str, Any], to: str, admin: Adm
         {"e": e["entry_id"], "t": e["tenant_id"], "f": e["state"], "to": to, "v": e["current_version"],
          "a": admin.principal_id, "act": act, "q": quarantine_id, "rc": reason, "rt": (text_ or None) and text_[:2000]})
     await c.execute(text("""UPDATE memory.entries SET state = :to, state_seq = state_seq + 1,
-        quarantine_id = CASE WHEN :to = 'quarantined' THEN :q ELSE NULL END WHERE entry_id = :e"""),
-        {"to": to, "q": quarantine_id, "e": e["entry_id"]})
+        quarantine_id = CASE WHEN :to = 'quarantined' THEN :q ELSE NULL END,
+        review_due_at = CASE WHEN :to = 'active' THEN now() + make_interval(days => :days) ELSE review_due_at END
+        WHERE entry_id = :e"""), {"to": to, "q": quarantine_id, "e": e["entry_id"], "days": REVIEW_DUE_DAYS})
+
+
+async def _approvable(c: AsyncConnection, e: dict[str, Any]) -> None:
+    """Approval gates: MEM-D12 (held until the PR outcome is known) and MEM-D13 (machine-sourced entries need at least
+    one human-sourced provenance row). Rejecting stays possible."""
+    if e.get("activation_hold") and e.get("hold_reason") == "awaiting_merge":
+        raise HttpError(409, "awaiting_merge", "held until the job's PR merges with the fix (it can still be rejected)")
+    r = one(await c.execute(text("""SELECT count(*) FILTER (WHERE source_trust = 'human') AS human,
+        count(*) FILTER (WHERE source_trust = 'machine') AS machine FROM memory.provenance
+        WHERE entry_id = :e AND withdrawn_at IS NULL"""), {"e": e["entry_id"]})) or {}
+    if r.get("machine") and not r.get("human"):
+        raise HttpError(409, "needs_human_corroboration",
+                        "machine-sourced: approve only after a human-sourced source corroborates it")
 
 
 async def _lock(c: AsyncConnection, eid: str, if_match: str | None) -> dict[str, Any]:
@@ -135,6 +204,8 @@ async def _lock(c: AsyncConnection, eid: str, if_match: str | None) -> dict[str,
 
 async def entry_action(db: Database, admin: AdminPrincipal, eid: str, verb: str, body: dict[str, Any],
                        if_match: str | None, idem: str) -> dict[str, Any]:
+    if verb == "mark_reviewed":
+        return await mark_reviewed(db, admin, eid, body, if_match, idem)
     if verb not in TRANSITIONS:
         raise HttpError(404, "unknown_action", verb)
     sources, to = TRANSITIONS[verb]
@@ -147,6 +218,8 @@ async def entry_action(db: Database, admin: AdminPrincipal, eid: str, verb: str,
                 AND blocks_activation AND (entry_a = :e OR entry_b = :e)"""), {"e": eid})).scalar()
             if blocking:
                 raise HttpError(409, "conflict_open", "resolve the open conflict before activating this entry")
+            if verb == "approve":
+                await _approvable(c, e)
         act, replay = await _action(c, admin, e["tenant_id"], verb, {"entry_id": eid}, idem, body,
                                     "memory.entry_transition")
         if not replay:
@@ -158,6 +231,23 @@ async def entry_action(db: Database, admin: AdminPrincipal, eid: str, verb: str,
                 await c.execute(text("""INSERT INTO memory.quarantine_members (quarantine_id, entry_id, tenant_id, prior_state)
                     VALUES (:q, :e, :t, :p)"""), {"q": qid, "e": eid, "t": e["tenant_id"], "p": e["state"]})
             await _transition(c, e, to, admin, act, f"admin_{verb}", body.get("reason"), qid)
+    return await get_entry(db, eid)
+
+
+async def mark_reviewed(db: Database, admin: AdminPrincipal, eid: str, body: dict[str, Any], if_match: str | None,
+                        idem: str) -> dict[str, Any]:
+    """MEM-D14: an admin re-checked an active entry: push review_due_at out and close its open lifecycle flags."""
+    async with db.tx(admin=True) as c:
+        e = await _lock(c, eid, if_match)
+        if e["state"] != "active":
+            raise HttpError(409, "invalid_transition", "only active entries are reviewed")
+        act, replay = await _action(c, admin, e["tenant_id"], "mark_reviewed", {"entry_id": eid}, idem, body)
+        if not replay:
+            await c.execute(text("""UPDATE memory.entries SET review_due_at = now() + make_interval(days => :d)
+                WHERE entry_id = :e"""), {"d": REVIEW_DUE_DAYS, "e": eid})
+            await c.execute(text("""UPDATE memory.entry_flags SET status = 'actioned', handled_by = :a, handled_at = now(),
+                curator_action_id = :act WHERE entry_id = :e AND status = 'open' AND source = 'lifecycle'"""),
+                {"a": admin.principal_id, "act": act, "e": eid})
     return await get_entry(db, eid)
 
 
@@ -188,6 +278,7 @@ async def edit_entry(db: Database, admin: AdminPrincipal, eid: str, body: dict[s
                 subject_key = :sk, state_seq = state_seq + 1 WHERE entry_id = :e"""),
                 {"v": ver, "lvl": level, "repo": repo, "sk": subject, "e": eid})
             if body.get("approve") and e["state"] == "candidate":
+                await _approvable(c, e)
                 e2 = one(await c.execute(text("SELECT * FROM memory.entries WHERE entry_id = :e"), {"e": eid}))
                 await _transition(c, e2, "active", admin, act, "admin_edit_approve", body.get("reason"))
     return await get_entry(db, eid)
@@ -248,13 +339,15 @@ async def create_entry(db: Database, admin: AdminPrincipal, body: dict[str, Any]
             return await get_entry(db, eid or prev)
         eid = ulid("mem")
         await c.execute(text("""INSERT INTO memory.entries (entry_id, tenant_id, memory_type, origin, state, scope_level,
-            repo, subject_key, created_by, enforced, confidence_alpha) VALUES (:e, :t, :ty, 'curator', :st, :lvl, :repo,
-            :sk, :by, false, 4)"""), {"e": eid, "t": tenant, "ty": stype, "st": state, "lvl": level, "repo": repo,
-                                      "sk": subject, "by": admin.principal_id})
+            repo, subject_key, created_by, enforced, confidence_alpha, review_due_at) VALUES (:e, :t, :ty, 'curator', :st,
+            :lvl, :repo, :sk, :by, false, 4, CASE WHEN :st = 'active' THEN now() + make_interval(days => :d) END)"""),
+            {"e": eid, "t": tenant, "ty": stype, "st": state, "lvl": level, "repo": repo, "sk": subject,
+             "by": admin.principal_id, "d": REVIEW_DUE_DAYS})
         await _insert_version(c, eid, 1, tenant, stype, level, repo, globs, subject, p, stmt,
                               core.content_digest(stype, level, repo, globs, stmt), "create", admin.principal_id)
         await c.execute(text(_PROV_INSERT), {**_prov({"kind": "curator", "text": stmt}, "curator", act, {}, "", p),
                                              "author": None, "e": eid, "t": tenant, "v": 1})
+        await recount(c, eid)
         await c.execute(text("""INSERT INTO memory.state_transitions (entry_id, tenant_id, from_state, to_state,
             entry_version, actor_kind, actor_principal_id, curator_action_id, reason_code)
             VALUES (:e, :t, NULL, :st, 1, 'admin', :a, :act, 'admin_create')"""),

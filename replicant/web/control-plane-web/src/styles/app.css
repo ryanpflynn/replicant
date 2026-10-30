@@ -297,6 +297,8 @@ table.t td:last-child, table.t th:last-child { padding-right: var(--sp-5); }
 /* ---------------- Memory ---------------- */
 .mem { display: grid; grid-template-columns: minmax(0, 1fr) 460px; min-height: 100%; }
 .mem > .side { border-left: 1px solid var(--c-line); }
+.membadges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.membadges:empty { display: none; }
 .memtext { font-size: var(--fs-body-lg); line-height: var(--lh-body-lg); padding: var(--sp-3) var(--sp-4); border: 1px solid var(--c-line); border-radius: var(--r-sm); background: var(--c-bg-raised); }
 .conflict { border: 1px solid var(--c-line); border-radius: var(--r-sm); }
 .conflict .cv { display: grid; grid-template-columns: 1fr 1fr; }

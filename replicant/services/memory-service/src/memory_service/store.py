@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -21,14 +22,22 @@ SVC = "svc_memory-service"
 LIVE = ("candidate", "active")
 EXTRACTOR_DEFAULT = "memory-extraction@1"
 ORIGIN_BY_KIND = {"pr_review_comment": "pr_feedback", "pr_review_body": "pr_feedback", "pr_issue_comment": "pr_feedback",
-                  "replicant_command": "pr_feedback", "gate_comment": "pr_feedback", "review_finding": "negative_mining",
+                  "replicant_command": "pr_feedback", "gate_comment": "pr_feedback", "review_finding": "negative_mining", "human_edit": "pr_feedback",
                   "qa_failure": "negative_mining", "agent_proposal": "agent_proposal", "import": "import",
                   "curator": "curator", "repair_rejection": "pr_feedback", "job_outcome": "negative_mining"}
 HUMAN_KINDS = ("pr_review_comment", "pr_review_body", "pr_issue_comment", "replicant_command")
+# MEM-D13: agent-generated sources. Lower prior, labelled machine-sourced, approval needs a human-sourced row.
+MACHINE_KINDS = ("review_finding", "qa_failure")
+# MEM-D12: candidates from these sources (or from any repair cycle) wait for the PR outcome (hold awaiting_merge).
+PR_DERIVED_KINDS = ("pr_review_comment", "pr_review_body", "pr_issue_comment", "replicant_command", "repair_rejection",
+                    "human_edit")
+REVIEW_DUE_DAYS = int(os.environ.get("REPLICANT_MEMORY_REVIEW_DUE_DAYS", "90"))   # MEM-D14 review_due_at on approval
+STALE_DAYS = int(os.environ.get("REPLICANT_MEMORY_STALE_DAYS", "90"))             # unused this long -> "stale" badge
+CHURN_FLAG_PRS = int(os.environ.get("REPLICANT_MEMORY_CHURN_FLAG_PRS", "3"))      # merged PRs on an entry's paths
 SOURCE_PREFIX = {"pr_review_comment": "gh-review-comment", "pr_review_body": "gh-review", "pr_issue_comment":
                  "gh-issue-comment", "replicant_command": "gh-issue-comment", "gate_comment": "gate",
                  "review_finding": "review", "qa_failure": "qa", "agent_proposal": "agent", "import": "scan",
-                 "job_outcome": "outcome", "repair_rejection": "agent", "curator": "agent"}
+                 "job_outcome": "outcome", "repair_rejection": "agent", "curator": "agent", "human_edit": "edit"}
 TRANSITIONS = {"approve": (("candidate",), "active"), "reject": (("candidate",), "rejected"),
                "disable": (("active",), "disabled"), "deprecate": (("active", "disabled"), "deprecated"),
                "restore": (("disabled", "deprecated", "quarantined"), "active"),

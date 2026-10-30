@@ -319,6 +319,8 @@ class Consumer:
                    "event": event, "repo": ev.repo.ref, "pr_number": ev.pull_request.number,
                    "head_ref": ev.pull_request.head_ref, "head_sha": ev.pull_request.head_sha,
                    "actor": {"id": ev.sender.id, "login": ev.sender.login}}
+        if ev.pull_request.merged:  # MEM-PR-D20: who pushed the PR's human commits, linked and with what access
+            payload["commit_authors"] = await self._commit_authors(repo, ev.pull_request.number)
         if self.s.s3_endpoint:
             try:
                 await self.s3.put(bucket, key, json.dumps(payload, sort_keys=True).encode())
@@ -343,6 +345,41 @@ class Consumer:
             raise Retry(f"signal failed: {type(e).__name__}") from None
         return "pr_event_signalled"
 
+
+    async def _commit_authors(self, repo: dict[str, Any], number: int) -> list[dict[str, Any]]:
+        """Distinct non-bot commit authors of a merged PR (<= 10): {id, login, linked, principal_id?,
+        repo_permission?}. The worker turns their commits into human_edit memory feedback only for linked writers
+        (MEM-PR-D20). Best effort: [] when Gitea is unavailable."""
+        owner, _, name = str(repo["full_name"]).partition("/")
+        try:
+            tok = await self.broker.token(repo["installation_id"], repo["repo_id"], "memory.commit_authors",
+                                          permissions={"metadata": "read"})
+            async with GiteaClient(self.s.gitea_base_url, token=tok, transport=self._gitea_transport) as g:
+                r = await g.request("GET", f"/repos/{owner}/{name}/pulls/{int(number)}/commits", params={"limit": 50})
+                commits = r.json() if r.status_code == 200 else []
+        except Exception as e:  # noqa: BLE001
+            log.warning(json.dumps({"event": "pr_merged.commit_authors_unavailable", "error": type(e).__name__}))
+            return []
+        seen: dict[int, dict[str, Any]] = {}
+        for c in commits if isinstance(commits, list) else []:
+            au = c.get("author") or {}
+            msg = (c.get("commit") or {}).get("message") or ""
+            if not au.get("id") or au.get("login") == "replicant-bot" or "Replicant-Activity:" in msg:
+                continue
+            if int(au["id"]) not in seen and len(seen) < 10:
+                seen[int(au["id"])] = {"id": int(au["id"]), "login": str(au.get("login") or "")[:64]}
+        out = []
+        for uid, a in seen.items():
+            pid = await self.linked_principal(uid)
+            a["linked"] = pid is not None
+            if pid:
+                a["principal_id"] = pid
+                try:
+                    a["repo_permission"] = await self.repo_permission(repo, a["login"])
+                except Exception:  # noqa: BLE001
+                    a["repo_permission"] = "read"
+            out.append(a)
+        return out
 
     # ------------------------------------------------------------------------------- PR review feedback (D-15)
     @staticmethod

@@ -17,6 +17,7 @@ const H = (u: string) => ({ "X-Replicant-Dev-User": u, "Idempotency-Key": `pw-${
 
 test.describe.configure({ mode: "serial" });
 let created = "";
+let candidate = "";
 
 test("erin (tenant admin) gets the 403 page", async ({ page }) => {
   await as(page, "erin", "light", null);
@@ -38,18 +39,55 @@ for (const theme of ["light", "dark"] as const) {
         statement: "Playwright check: prefer small, reviewable changes with a test for every fix." } });
       expect(r.status(), await r.text()).toBe(201);
       created = (await r.json()).entry_id;
+      const c = await page.request.post("/v1/admin/memory/entries", { headers: H("carol"), data: {
+        tenant_id: "local-dev", memory_type: "rule", scope_level: "tenant", title: "Playwright candidate", as_candidate: true,
+        statement: "Playwright candidate: name every table-driven test case with a short lowercase phrase." } });
+      expect(c.status(), await c.text()).toBe(201);
+      candidate = (await c.json()).entry_id;
     }
     await page.goto("/admin/memory?tab=candidates");
     await expect(page.getByRole("navigation", { name: "Memory sections" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Memory" }).first()).toBeVisible();
+    // MEM-D11: the queue shows independent sources and authors, not a raw mention count
+    await expect(page.getByRole("table", { name: "Candidates" })).toContainText("independent source");
     await shot(page, `candidates-carol-1440-${theme}`);
+    await page.getByRole("table", { name: "Candidates" }).getByText("Playwright candidate").first().click();
+    const cd = page.getByLabel("Entry detail");
+    await expect(cd.getByLabel("Evidence", { exact: true })).toContainText("independent source");
+    await expect(cd.getByLabel("Trust", { exact: true })).toBeVisible();
+    await expect(cd.getByLabel("Merge status", { exact: true })).toBeVisible();
+    await expect(cd.getByLabel("Covered by", { exact: true })).toBeVisible();
+    await expect(cd.getByLabel("Agent preview")).toContainText('<replicant-memory format="replicant.memory-block/v1"');
+    await expect(cd.getByText("Similar or conflicting entries")).toBeVisible();
+    await shot(page, `candidate-detail-carol-1440-${theme}`);
+    // a PR-derived candidate left by e2e07 is held until its PR merges: approve is disabled, reject is not
+    const held = page.getByRole("table", { name: "Candidates" }).getByRole("row").filter({ hasText: "held: awaiting merge" });
+    if (await held.count()) {
+      await held.first().click();
+      await expect(cd.getByLabel("Approval blocked", { exact: true })).toContainText("Held until");
+      await expect(cd.getByRole("button", { name: "Approve", exact: true })).toBeDisabled();
+      await expect(cd.getByRole("button", { name: "Reject", exact: true })).toBeEnabled();
+      await shot(page, `candidate-held-carol-1440-${theme}`);
+    }
+    const machine = page.getByRole("table", { name: "Candidates" }).getByRole("row").filter({ hasText: "machine-sourced" });
+    if (await machine.count()) {
+      await machine.first().click();
+      await expect(cd.getByLabel("Approval blocked", { exact: true })).toContainText("Machine-sourced");
+      await shot(page, `candidate-machine-carol-1440-${theme}`);
+    }
     await page.goto("/admin/memory?tab=entries");
     await expect(page.getByRole("table", { name: "Entries" })).toContainText("Playwright entry");
     await page.getByRole("table", { name: "Entries" }).getByText("Playwright entry").click();
     const detail = page.getByLabel("Entry detail");
     await expect(detail).toContainText("Provenance");
     await expect(detail.getByRole("button", { name: "Disable" })).toBeVisible();
+    await expect(detail.getByLabel("Usage", { exact: true })).toContainText("used");
+    await expect(detail.getByLabel("Review", { exact: true })).toContainText("due");
     await shot(page, `entry-detail-carol-1440-${theme}`);
+    // MEM-D14: the "Due for review / flagged" filter
+    await page.goto("/admin/memory?tab=entries");
+    await page.getByLabel("Review", { exact: true }).selectOption("due_or_flagged");
+    await shot(page, `entries-review-filter-carol-1440-${theme}`);
     await page.goto("/admin/memory?tab=quarantine");
     await page.getByLabel("Entry IDs").fill(created);
     await page.getByLabel("Purge").getByRole("button", { name: "Dry run" }).click();
@@ -86,8 +124,9 @@ test("Memory used panels on a job that received memory", async ({ page }) => {
 });
 
 test.afterAll(async ({ request }) => {
-  if (created) {
+  const ids = [created, candidate].filter(Boolean);
+  if (ids.length) {
     await request.post("/v1/admin/memory/purges", { headers: H("carol"),
-      data: { entry_ids: [created], reason_code: "curator", reason_text: "playwright cleanup" } });
+      data: { entry_ids: ids, reason_code: "curator", reason_text: "playwright cleanup" } });
   }
 });

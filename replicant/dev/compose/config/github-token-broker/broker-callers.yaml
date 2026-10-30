@@ -14,6 +14,11 @@ callers:
   repo-mirror:
     max_permissions: {contents: read, metadata: read}
     repos_per_request: 5
+  replicant-worker:
+    # read-only PR/repo inspection (activities/pr_inspect.py): repo-scan verification, human edits before merge,
+    # fix retention at merge (DEVIATIONS MEM-D20, MEM-PR-D20)
+    max_permissions: {contents: read, metadata: read}
+    repos_per_request: 1
 providers:
   gitea:
     # Gitea scopes are not per-repository (parity.md P-12). The broker maps:

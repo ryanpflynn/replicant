@@ -257,3 +257,69 @@ def reset_repo() -> str:
         subprocess.run(["git", "-C", d, "push", "-q", "--force", "origin", f"{root}:refs/heads/main"], env=env,
                        check=True, capture_output=True)
     return root
+
+
+# ---------------------------------------------------------------------------------------------- memory admin (carol)
+MEMORY_ADMIN = os.environ.get("E2E_MEMORY_ADMIN", "carol")
+
+
+def memory_admin(method: str, path: str, body: dict | None = None, if_match: int | None = None,
+                 expect: int | tuple[int, ...] = 200) -> dict:
+    """/v1/admin/memory/<path> as the memory admin, with an Idempotency-Key (and If-Match for state changes)."""
+    import uuid
+    h = {"Idempotency-Key": f"{TAG}-{uuid.uuid4().hex}"}
+    if if_match is not None:
+        h["If-Match"] = str(if_match)
+    with api(MEMORY_ADMIN) as c:
+        r = c.request(method, f"/v1/admin/memory/{path}", json=body, headers=h)
+    want = expect if isinstance(expect, tuple) else (expect,)
+    assert r.status_code in want, (method, path, r.status_code, r.text[:400])
+    return r.json() if r.content else {}
+
+
+def memory_candidates(job_id: str) -> list[dict]:
+    return memory_admin("GET", f"candidates?tenant_id=payments&job_id={job_id}&limit=200")["items"]
+
+
+def memory_entry(entry_id: str) -> dict:
+    return memory_admin("GET", f"entries/{entry_id}")
+
+
+def cleanup_memory(job_ids: list[str], reason: str) -> list[str]:
+    """Purge the memory entries (candidates and approved ones) that came only from these test jobs, so E2E runs leave
+    no test data in the admin queue. An entry that also has evidence from other jobs is left alone (logged)."""
+    jobs = {j for j in job_ids if j}
+    found: dict[str, dict] = {}
+    for j in sorted(jobs):
+        try:
+            for it in memory_admin("GET", f"entries?tenant_id=payments&job_id={j}&limit=500")["items"]:
+                if it.get("state") != "purged":
+                    found[it["entry_id"]] = it
+        except AssertionError as ex:
+            log(f"memory cleanup: cannot list entries of {j}: {ex}")
+    purge, kept = [], []
+    for eid in found:
+        prov_jobs = {p.get("job_id") for p in memory_entry(eid).get("provenance") or []}
+        (purge if prov_jobs and prov_jobs <= jobs else kept).append(eid)
+    if purge:
+        memory_admin("POST", "purges", {"entry_ids": purge, "reason_code": "curator",
+                                        "reason_text": f"{reason}: test artifact (E2E fixture) cleanup"})
+    log(f"memory cleanup: purged {len(purge)} test entries" + (f", kept {kept} (evidence from other jobs)" if kept else ""))
+    return purge
+
+
+def ensure_claude_md(tag: str) -> None:
+    """The sample repo ships CLAUDE.md, but reset_repo() goes back to the initial commit, which has none on older
+    stacks: make sure main has it (an ordinary commit by the admin)."""
+    text = (ROOT / "dev" / "sample-repos" / REPO / "CLAUDE.md").read_text()
+    with gitea() as g:
+        r = g.get(f"/repos/{ORG}/{REPO}/contents/CLAUDE.md", params={"ref": "main"})
+        body = {"content": base64.b64encode(text.encode()).decode(), "message": f"Add CLAUDE.md ({tag})",
+                "branch": "main"}
+        if r.status_code == 200:
+            if base64.b64decode(r.json()["content"]).decode() == text:
+                return
+            ok(g.put(f"/repos/{ORG}/{REPO}/contents/CLAUDE.md", json={**body, "sha": r.json()["sha"]}), "update CLAUDE.md")
+        else:
+            ok(g.post(f"/repos/{ORG}/{REPO}/contents/CLAUDE.md", json=body), "create CLAUDE.md")
+    log("main has CLAUDE.md")

@@ -35,24 +35,34 @@ turns:
              "proposals": [
               {"memory_type": "rule", "proposed_scope": {"level": "repo"}, "subject_key": "money.representation",
                "title": "Money is integer minor units",
-               "statement": "Represent money as int64 minor units and never use float32/float64 for amounts.",
-               "rationale": "Stated in CLAUDE.md; ledger.Charge and ledger.Entry use AmountMinor int64.",
-               "source": {"text": "CLAUDE.md: Money is integer minor units (int64); never use floating point for amounts.", "files": ["CLAUDE.md", "internal/ledger/ledger.go"]}},
-              {"memory_type": "rule", "proposed_scope": {"level": "path", "path_globs": ["internal/ledger/**"]}, "subject_key": "money.rounding",
-               "title": "Round half-even with the ledger helpers",
-               "statement": "Round money half-even only through the internal/ledger helpers such as Prorate; do not hand-roll rounding.",
-               "rationale": "CLAUDE.md and internal/ledger/prorate.go.",
-               "source": {"text": "CLAUDE.md: Rounding is half-even, through the helpers in internal/ledger (Prorate).", "files": ["internal/ledger/prorate.go"]}},
+               "statement": "Represent money as int64 minor units and never use floating point for amounts.",
+               "rationale": "ledger.Charge and ledger.Entry use AmountMinor int64.",
+               "source": {"text": "CLAUDE.md: Money is integer minor units (int64); never use floating point for amounts."},
+               "evidence": {"files": ["internal/ledger/ledger.go"], "pattern": "AmountMinor\\s+int64", "applies_to": ["internal/**/*.go"]}},
               {"memory_type": "procedure", "proposed_scope": {"level": "repo"}, "subject_key": "testing.layout",
                "title": "Table-driven tests next to the code",
-               "statement": "Write table-driven Go tests with one t.Run per case, in a _test.go file next to the code under test.",
-               "rationale": "CLAUDE.md; internal/ledger/ledger_test.go follows it.",
-               "source": {"text": "CLAUDE.md: Tests are table-driven (t.Run per case) and live next to the code.", "files": ["internal/ledger/ledger_test.go"]}}
+               "statement": "Tests are table-driven with one t.Run per case and live next to the code.",
+               "rationale": "internal/ledger/ledger_test.go follows it.",
+               "source": {"text": "CLAUDE.md: Tests are table-driven (t.Run per case) and live next to the code."},
+               "evidence": {"files": ["internal/ledger/ledger_test.go"], "pattern": "t\\.Run\\(", "applies_to": ["**/*_test.go"]}},
+              {"memory_type": "rule", "proposed_scope": {"level": "path", "path_globs": ["internal/ledger/**"]}, "subject_key": "money.fx_conversion",
+               "title": "Convert currencies through the FX helpers",
+               "statement": "Convert between currencies only through the conversion functions in internal/ledger/fx.go.",
+               "rationale": "A citation the repository does not contain (verification drops it).",
+               "source": {"text": "internal/ledger/fx.go"},
+               "evidence": {"files": ["internal/ledger/fx.go"], "pattern": "func Convert", "applies_to": ["internal/ledger/*.go"]}},
+              {"memory_type": "rule", "proposed_scope": {"level": "repo"}, "subject_key": "go.doc_comments",
+               "title": "Start each Go file with a doc comment",
+               "statement": "Give every non-test Go file a leading // doc comment on its package or first declaration, starting with the declared name.",
+               "rationale": "ledger.go, prorate.go and main.go all open with a // comment naming what follows.",
+               "source": {"text": "// Package ledger posts ...; // Prorate returns ...; // Command ledger-api serves ..."},
+               "evidence": {"files": ["internal/ledger/ledger.go", "internal/ledger/prorate.go", "cmd/ledger-api/main.go"],
+                            "pattern": "^// [A-Z][A-Za-z0-9-]* ", "expect": "present", "applies_to": ["**/*.go"]}}
              ]}
             JSON
             echo "wrote $OUT/plan.md and $OUT/memory_candidates.json"
       usage: {input_tokens: 8000, output_tokens: 600}
   - respond:
-      text: "Three conventions proposed for the memory admin queue."
+      text: "Four conventions proposed for the memory admin queue."
       structured_output_from: scan.agent_report.json
       usage: {input_tokens: 8500, output_tokens: 300}

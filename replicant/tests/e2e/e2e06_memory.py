@@ -11,10 +11,16 @@ Steps (tenant payments, repo acme-payments/ledger-api):
      memory_snapshot_id never changes.
   2. bob's request_changes comment on A's publish gate becomes a candidate (provenance gate_comment, job A); a
      PR-specific reject comment does not. carol approves the candidate; job B's runs receive it.
-  4. frank (project admin) starts a repo scan of ledger-api: the scan job ends no_change_needed and its convention
-     candidates land in the queue (origin import, provenance pointing to the scan job).
+  4. frank (project admin) starts a repo scan of ledger-api: the scan job ends no_change_needed. Of the scripted
+     scanner's four proposals, the two CLAUDE.md restates are dropped as documented (documented_in CLAUDE.md), the
+     one citing a missing file is dropped as unverified, and only the verified inferred convention (pattern seen in
+     >= 70% of sampled files) lands in the queue (origin import, provenance pointing to the scan job) (MEM-D20).
   5. Quarantine dry run by approver; purge of the step-1 rule: blast radius lists job A, the entry is a tombstone,
      job A's memory view shows it removed, and the export no longer contains it. Analytics answer.
+  6. Cleanup: carol purges every entry this run's jobs created, so the admin queue keeps no test data.
+  7. Evidence trust (MEM-D20..D13), synthetic PR-comment sources through the worker's memory client: one reviewer
+     repeating one comment in three jobs is one independent source; the PR-derived candidate is held (approve 409)
+     until its job's PR merges with the fix; a closed-unmerged PR auto-rejects its candidate.
 """
 from __future__ import annotations
 
@@ -30,6 +36,8 @@ e.TAG = "e2e06"
 REPO = "git.replicant.localhost/acme-payments/ledger-api"
 JOB_TIMEOUT_S = 1800
 MARK = uuid.uuid4().hex[:8]
+RULE_PREFIX = "In ledger-api, keep money in int64 minor units and add a table-driven test case for every fix"
+AUTHORED: list[str] = []  # admin-authored entries of this run (no job provenance: purged by ID at the end)
 log = e.log
 
 
@@ -95,7 +103,9 @@ def gate_open(kind: str, not_id: str | None = None):  # noqa: ANN201
 def start_job() -> str:
     log(f"repo reset to the planted bug {reset_repo()[:12]}")
     n, t0 = e.open_issue(MARK)
-    return e.wait_ack(n, t0)
+    j = e.wait_ack(n, t0)
+    JOBS.append(j)
+    return j
 
 
 def job_memory(job_id: str, user: str = "dave") -> dict:
@@ -118,18 +128,24 @@ def main() -> None:
         log(f"{u}: 403 not_memory_admin, audited as {r.json()['audit_id']}")
     mem("carol", "GET", "candidates")
     log("carol (replicant-admins): 200")
-    # leftovers of earlier runs (gate-comment and repo-scan entries) would absorb this run's candidates as evidence
+    # leftovers of aborted earlier runs (the fixtures' gate-comment and repo-scan statements) would absorb this run's
+    # candidates as evidence; real entries of the same source kinds are left alone
+    fixture = fixture_statements()
     old = sorted({i for k in ("gate_comment", "import") for i in mem("carol", "POST", "quarantines", {
-        "selector": {"tenant_id": "payments", "source_kind": k}, "dry_run": True})["entries"]})
+        "selector": {"tenant_id": "payments", "source_kind": k}, "dry_run": True})["entries"]
+        if (entry(i).get("statement") or "") in fixture})
+    old += [x["entry_id"] for x in mem("carol", "GET", "entries?tenant_id=payments&limit=500")["items"]
+            if x["state"] != "purged" and (x.get("statement") or "").startswith(RULE_PREFIX)]  # step-1 rules of aborted runs
     if old:
         mem("carol", "POST", "purges", {"entry_ids": old, "reason_code": "curator", "reason_text": "e2e06 cleanup"})
         log(f"purged {len(old)} entries left by earlier runs")
 
     # ---- 1. admin-authored rule reaches the agent; disable drops it at the next node, snapshot unchanged
-    stmt = f"In ledger-api, keep money in int64 minor units and add a table-driven test case for every fix ({MARK})."
+    stmt = f"{RULE_PREFIX} ({MARK})."
     rule = mem("carol", "POST", "entries", {"tenant_id": "payments", "memory_type": "rule", "scope_level": "repo",
                                             "repo": REPO, "title": "Minor units and table tests", "statement": stmt},
                expect=201)
+    AUTHORED.append(rule["entry_id"])
     ref = f"{rule['entry_id']}@1"
     log(f"carol authored {ref} (active)")
     reader = e.api("grace")
@@ -191,18 +207,34 @@ def main() -> None:
     log(f"job B: PR #{pr['number']} closed unmerged")
 
     # ---- 4. repo scan
+    e.ensure_claude_md("e2e06")  # reset_repo() went back to the initial commit, which has no CLAUDE.md
     with e.api("frank") as c:
         r = c.post("/v1/projects/prj_ledger/repos/1:scan", json={})
     assert r.status_code in (200, 201, 202), r.text[:300]
     job_c = r.json()["job_id"]
+    JOBS.append(job_c)
     log(f"frank started repo scan {job_c}")
     job = e.wait_for(lambda: (lambda j: j if e.snapshot(j).get("status") in e.TERMINAL else None)(e.get_job(reader, job_c)),
                      "scan job terminal", timeout=JOB_TIMEOUT_S, every=5)
     sc = e.snapshot(job)
     assert sc["status"] == "succeeded" and (sc.get("terminal") or {}).get("outcome") == "no_change_needed", sc.get("terminal")
     scans = e.wait_for(lambda: [x for x in candidates(job_id=job_c)], "scan candidates", timeout=120)
-    assert len(scans) >= 2 and all(x["origin"] == "import" and x["source_kind"] == "import" for x in scans), scans
-    log(f"scan {job_c}: {len(scans)} convention candidates (origin import), e.g. {scans[0]['statement'][:70]}")
+    time.sleep(5)
+    scans = candidates(job_id=job_c)
+    assert len(scans) == 1 and all(x["origin"] == "import" and x["source_kind"] == "import" for x in scans), scans
+    assert "doc comment" in scans[0]["statement"], scans[0]["statement"]
+    assert "Inferred convention (seen in" in json.dumps(entry(scans[0]["entry_id"])), "label missing"
+    env = scan_envelope(job_c)
+    for p in env["proposals"]:
+        v = p["verification"]
+        assert not v["missing"] and v["sampled"] >= 3 and v["matched"] / v["sampled"] >= 0.7, v
+    dropped = {n["reason"].split(":")[0].split(" in ")[0]: n for n in env["non_candidates"]}
+    documented = [n for n in env["non_candidates"] if n.get("documented_in") == ["CLAUDE.md"]]
+    missing = [n for n in env["non_candidates"] if "internal/ledger/fx.go" in (n.get("verification") or {}).get("missing", [])]
+    assert len(documented) == 2 and len(missing) == 1, env["non_candidates"]
+    log(f"scan {job_c}: 1 verified candidate ({env['proposals'][0]['verification']['matched']} of "
+        f"{env['proposals'][0]['verification']['sampled']} files) - {scans[0]['statement'][:70]}; dropped "
+        f"{len(documented)} documented in CLAUDE.md and 1 citing a missing file ({sorted(dropped)})")
     quoted = any('source="repo_instructions"' in r["first_message"] for r in run_inputs(job_c))
     log(f"repo CLAUDE.md quoted in the scan's first message: {quoted} (entrypoint quoting, PR-loop owner)")
 
@@ -227,12 +259,122 @@ def main() -> None:
     summ = mem("carol", "GET", "analytics/summary")
     log(f"analytics: {summ['outcomes']['jobs']} job outcomes recorded, injections {summ['injections']}")
     log(f"evidence: A {job_a}  B {job_b}  scan {job_c}  rule {rule['entry_id']}  gate candidate {cand['entry_id']}")
+    trust_and_holds()
     log("E2E-06 memory: PASS")
 
 
+def worker_mem(path: str, body: dict) -> dict:
+    """POST to memory-service through the worker's own client (its caller token; nothing printed is secret)."""
+    code = f"""
+import asyncio, json
+from replicant_worker.activities.memory import mem
+print(json.dumps(asyncio.run(mem({path!r}, json.loads({json.dumps(body)!r})))))
+"""
+    cid = subprocess.run(["podman", "ps", "-q", "--filter", "label=com.docker.compose.service=replicant-worker"],
+                         capture_output=True, text=True).stdout.split()[0]
+    r = subprocess.run(["podman", "exec", cid, "python", "-c", code], capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr[-500:]
+    return json.loads(r.stdout.strip().splitlines()[-1])
+
+
+def _job_id() -> str:
+    import random
+    return "job_" + "".join(random.choices("0123456789abcdefghjkmnpqrstvwxyz", k=26))
+
+
+def trust_and_holds() -> None:
+    """7. MEM-D20..D13 on the live memory-service (synthetic PR-comment sources posted with the worker's client):
+    the same reviewer repeating the same comment in several jobs stays ONE independent source; a PR-derived candidate
+    is held and cannot be approved; a closed-unmerged PR auto-rejects its candidate; a merged one releases it."""
+    author = "usr_" + "e2e06" + "0" * 21
+    stmt = f"Use integer minor units for every money amount in ledger code ({MARK})."
+
+    def comment(job: str, n: int, text: str = "Please use integer minor units, never floats, for money.") -> dict:
+        return {"memory_type": "rule", "proposed_scope": {"level": "repo", "repo": REPO}, "statement": stmt,
+                "source": {"kind": "pr_review_comment", "source_key": f"gh-review-comment:{job}:{n}", "text": text,
+                           "author_principal_id": author, "author_repo_permission": "write", "pr_number": 900 + n,
+                           "comment_id": n, "cycle": 1, "job_id": job,
+                           "url": f"http://gitea:3300/acme-payments/ledger-api/pulls/{900 + n}"}}
+    jobs = [_job_id() for _ in range(4)]
+    JOBS.extend(jobs)
+    eid = None
+    for i, j in enumerate(jobs[:3]):  # the identical comment in three jobs
+        r = worker_mem("/internal/v1/candidates", {"tenant_id": "payments", "job_id": j, "proposals": [comment(j, i + 1)]})
+        eid = eid or r["entries"][0]["entry_id"]
+    d = entry(eid)
+    assert d["evidence_count"] == 3 and d["independent_evidence_count"] == 1 and d["distinct_author_count"] == 1, d
+    assert d["confidence"] == 0.5, d["confidence"]
+    q = next(x for x in candidates() if x["entry_id"] == eid)
+    assert q["independent_evidence_count"] == 1, q
+    log(f"repeat: 3 identical comments by one author -> {eid}: evidence 3, 1 independent source (1 author), "
+        f"confidence {d['confidence']}")
+    assert d["activation_hold"] and d["pr_outcome"] == "awaiting_merge", d
+    mem("carol", "POST", f"entries/{eid}:approve", {"reason": "e2e06"}, if_match=d["state_seq"], expect=409)
+    out = worker_mem("/internal/v1/outcomes", {"tenant_id": "payments", "job_id": jobs[0], "repo": REPO,
+                                              "terminal_status": "succeeded", "outcome": "pr_merged", "fix_retained": True})
+    assert out["holds"] and out["holds"][0]["result"] == "released", out
+    d = entry(eid)
+    assert not d["activation_hold"] and d["pr_outcome"] == "merged_with_fix", d
+    log(f"hold: {eid} was held awaiting_merge (approve 409) and released when {jobs[0]} merged with the fix")
+    j = jobs[3]
+    r = worker_mem("/internal/v1/candidates", {"tenant_id": "payments", "job_id": j, "proposals": [{
+        **comment(j, 9, "Return 404 for ledgers the caller cannot see."),
+        "statement": f"Return 404, not 403, for ledgers the caller cannot see ({MARK})."}]})
+    closed = r["entries"][0]["entry_id"]
+    worker_mem("/internal/v1/outcomes", {"tenant_id": "payments", "job_id": j, "repo": REPO,
+                                        "terminal_status": "rejected", "outcome": "pr_closed_unmerged"})
+    d = entry(closed)
+    assert d["state"] == "rejected" and d["pr_outcome"] == "closed_unmerged", d
+    assert d["transitions"][-1]["reason_code"] == "pr_closed_unmerged", d["transitions"]
+    log(f"closed: {closed} auto-rejected when {j}'s PR closed unmerged (system_outcome, pr_closed_unmerged)")
+
+
+def fixture_statements() -> set[str]:
+    """Statements the scripted gateway produces (memory_extraction.yaml, scan.yaml): only these are test leftovers."""
+    import re
+    d = e.ROOT / "tests" / "fixtures" / "gateway-scripts" / "walkthrough-ledger-api"
+    out: set[str] = set()
+    for f in ("memory_extraction.yaml", "scan.yaml"):
+        out |= {s.encode().decode("unicode_escape") for s in re.findall(r'"statement": "((?:[^"\\]|\\.)*)"', (d / f).read_text())}
+    return out
+
+
+def scan_envelope(job_id: str) -> dict:
+    """The scan job's extracted memory-candidates envelope (verified proposals and dropped non-candidates)."""
+    code = f"""
+import json
+from replicant_worker.activities import s3
+from replicant_worker.activities.config import settings
+c = s3.client(); b = settings().bucket('artifacts')
+pre = 'tenants/payments/jobs/{job_id}/steps/'
+keys = [o['Key'] for p in c.get_paginator('list_objects_v2').paginate(Bucket=b, Prefix=pre) for o in p.get('Contents', [])
+        if o['Key'].endswith('/memory_candidates/extracted.json')]
+print(json.dumps(json.loads(c.get_object(Bucket=b, Key=keys[0])['Body'].read())))
+"""
+    cid = subprocess.run(["podman", "ps", "-q", "--filter", "label=com.docker.compose.service=replicant-worker"],
+                         capture_output=True, text=True).stdout.split()[0]
+    r = subprocess.run(["podman", "exec", cid, "python", "-c", code], capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr[-500:]
+    return json.loads(r.stdout.strip().splitlines()[-1])
+
+
+JOBS: list[str] = []
+
+
 def test_e2e06_memory() -> None:
-    main()
+    run()
+
+
+def run() -> None:
+    try:
+        main()
+    finally:  # (6) never leave test candidates or entries in the admin queue, pass or fail
+        e.cleanup_memory(JOBS, "e2e06")
+        left = [i for i in AUTHORED if entry(i).get("state") != "purged"]
+        if left:
+            mem("carol", "POST", "purges", {"entry_ids": left, "reason_code": "curator",
+                                            "reason_text": "e2e06: test artifact (E2E fixture) cleanup"})
 
 
 if __name__ == "__main__":
-    main()
+    run()

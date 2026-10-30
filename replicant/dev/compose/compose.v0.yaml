@@ -163,7 +163,10 @@ services:
       REPLICANT_CONTROL_PLANE_TOKEN_FILE: /run/secrets/replicant_worker_cp_token
       REPLICANT_GATEWAY_SCRIPT_SET: ${REPLICANT_GATEWAY_SCRIPT_SET:-walkthrough-ledger-api}
       REPLICANT_METRICS_BIND: "off"
-    secrets: [replicant_worker_cp_token]
+      # MEM-D20: read-only Gitea access through the broker (activities/pr_inspect.py)
+      REPLICANT_TOKEN_BROKER_TOKEN_FILE: /run/secrets/broker_worker_token
+      REPLICANT_GITEA_BASE_URL: http://gitea:3300
+    secrets: [replicant_worker_cp_token, broker_worker_token]
 
   # CONTROL-05: run-grants polls the exec revocation feed of runner-local.
   # NOTIFY (DEVIATIONS NOTIFY-*): notification fan-out, dispatcher and reminder scheduler. Links in comments and DMs
@@ -284,6 +287,7 @@ secrets:
   github_integration_cp_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/github_integration_cp_token"}
   broker_caller_tokens: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/broker_caller_tokens"}
   broker_publisher_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/broker_publisher_token"}
+  broker_worker_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/broker_worker_token"}
   broker_github_integration_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/broker_github_integration_token"}
   anthropic_api_key: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/anthropic_api_key"}
   replicant_worker_cp_token: {file: "${REPLICANT_DEV_HOME:-./.replicant-dev}/secrets/replicant_worker_cp_token"}

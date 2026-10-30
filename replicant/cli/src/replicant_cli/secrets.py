@@ -31,6 +31,8 @@ SIMPLE_TOKENS = (
     # v0 (CONTROL-02)
     "github_integration_cp_token", "broker_publisher_token", "broker_github_integration_token",
     "replicant_worker_cp_token", "notify_delivery_token", "slack_integration_cp_token",
+    # v0 MEM: replicant-worker -> github-token-broker (read-only PR inspection, MEM-D20)
+    "broker_worker_token",
     # v0 MEM: control-plane-api -> memory-service (admin proxy; also the HMAC key of the signed caller principal)
     "memory_cpa_token",
     # not mounted by compose; inputs of rendered files
@@ -116,7 +118,8 @@ def ensure(p: Paths) -> list[str]:
         "memory_internal_callers": {s("memory_cpa_token"): "svc_control-plane-api",
                                     s("replicant_worker_cp_token"): "svc_replicant-worker"},
         "broker_caller_tokens": {s("broker_mirror_token"): "repo-mirror", s("broker_publisher_token"): "publisher-worker",
-                                 s("broker_github_integration_token"): "github-integration"},
+                                 s("broker_github_integration_token"): "github-integration",
+                                 s("broker_worker_token"): "replicant-worker"},
     }
     for name, m in maps.items():
         want = _yaml_map(m)

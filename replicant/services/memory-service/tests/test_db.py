@@ -247,6 +247,9 @@ async def test_recurrence_quarantine_purge_export(env):  # noqa: ANN001
 
     # approve the negative entry, inject it, then purge: gone from new snapshots, injections view and export
     cur = (await c.get(f"/internal/v1/admin/entries/{neg}", headers=admin())).json()
+    r = await c.post(f"/internal/v1/admin/entries/{neg}:approve", headers=admin(if_match=cur["state_seq"]), json={})
+    assert r.status_code == 409 and r.json()["code"] == "needs_human_corroboration"  # MEM-D13
+    await corroborate(c, tenant, cur)
     assert (await c.post(f"/internal/v1/admin/entries/{neg}:approve", headers=admin(if_match=cur["state_seq"]),
                          json={})).json()["state"] == "active"
     j3 = ulid("job")
@@ -273,3 +276,180 @@ async def test_recurrence_quarantine_purge_export(env):  # noqa: ANN001
     assert out["recorded"]
     for rep in ("summary", "entries", "feedback"):
         assert (await c.get(f"/internal/v1/admin/analytics/{rep}", headers=admin())).status_code == 200
+
+
+async def corroborate(c, tenant, cur):  # noqa: ANN001, ANN201
+    """A human gate comment with the same statement merges into a machine-sourced entry."""
+    j = ulid("job")
+    p = {"memory_type": cur["memory_type"], "proposed_scope": {"level": cur["scope_level"], "repo": REPO},
+         "statement": cur["statement"], "source": {"kind": "gate_comment", "source_key": f"gate:{j}:h", "repo": REPO,
+                                                   "text": "agreed, keep this", "author_principal_id": CAROL}}
+    r = (await c.post("/internal/v1/candidates", headers=W, json={"tenant_id": tenant, "job_id": j,
+                                                                   "proposals": [p]})).json()
+    assert r["merged"] == 1, r
+
+
+def pr_comment(stmt: str, job: str, author: str = AUTHOR, text: str | None = None, n: int = 1) -> dict:
+    return {"memory_type": "rule", "proposed_scope": {"level": "repo", "repo": REPO}, "statement": stmt,
+            "source": {"kind": "pr_review_comment", "source_key": f"gh-review-comment:{job}:{n}",
+                       "text": text or stmt, "author_principal_id": author, "author_repo_permission": "write",
+                       "pr_number": 7, "comment_id": n, "cycle": 1, "job_id": job,
+                       "url": f"http://127.0.0.1:3300/acme-payments/ledger-api/pulls/7#c{n}"}}
+
+
+async def write(c, tenant, job, *props):  # noqa: ANN001, ANN002, ANN201
+    r = await c.post("/internal/v1/candidates", headers=W, json={"tenant_id": tenant, "job_id": job,
+                                                                  "proposals": list(props)})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+async def entry(c, eid):  # noqa: ANN001, ANN201
+    return (await c.get(f"/internal/v1/admin/entries/{eid}", headers=admin())).json()
+
+
+async def test_repeats_collapse_to_one_independent_source(env):  # noqa: ANN001
+    """MEM-D11: the same author posting the same comment in six jobs is one independent source."""
+    c, tenant, _, _ = env
+    stmt = "Use decimal.Decimal for every proration amount; floats drift on refunds."
+    first = None
+    for _ in range(6):
+        j = ulid("job")
+        r = await write(c, tenant, j, pr_comment(stmt, j, text="Use  Decimal for proration,\nfloats drift."))
+        first = first or r["entries"][0]["entry_id"]
+    e = await entry(c, first)
+    assert e["evidence_count"] == 6 and e["independent_evidence_count"] == 1 and e["distinct_author_count"] == 1
+    assert e["confidence"] == 0.5 and sum(1 for p in e["provenance"] if p["repeat"]) == 5
+    jy, jz = ulid("job"), ulid("job")
+    # the same text in different case / whitespace is still the same occurrence
+    await write(c, tenant, jy, pr_comment(stmt, jy, text="use decimal for proration, floats   DRIFT."))
+    assert (await entry(c, first))["independent_evidence_count"] == 1
+    # another author is independent evidence and moves the posterior
+    await write(c, tenant, jz, pr_comment(stmt, jz, author=ERIN, text="Decimal please, not float"))
+    e = await entry(c, first)
+    assert e["independent_evidence_count"] == 2 and e["distinct_author_count"] == 2 and e["evidence_count"] == 8
+    assert abs(e["confidence"] - 2 / 3) < 0.001 and e["source_trust"] == "human"
+    q = (await c.get("/internal/v1/admin/candidates", headers=admin(), params={"tenant_id": tenant})).json()["items"]
+    assert q[0]["independent_evidence_count"] == 2 and q[0]["hold_reason"] == "awaiting_merge"
+
+
+async def test_pr_candidates_held_until_merge(env):  # noqa: ANN001
+    """MEM-D12: held awaiting_merge; released when merged with the fix, auto-rejected when closed or reverted."""
+    c, tenant, _, _ = env
+    jm, jc, jr, jx = (ulid("job") for _ in range(4))
+    em = (await write(c, tenant, jm, pr_comment("Validate webhook signatures before parsing the JSON body.", jm)))
+    ec = (await write(c, tenant, jc, pr_comment("Close every database cursor in a finally block or a with.", jc)))
+    er = (await write(c, tenant, jr, pr_comment("Never log the full card number; mask all but the last four.", jr)))
+    ex = (await write(c, tenant, jx, pr_comment("Prefer table-driven tests for the currency conversion helpers.", jx)))
+    em, ec, er, ex = (x["entries"][0]["entry_id"] for x in (em, ec, er, ex))
+    e = await entry(c, em)
+    assert e["activation_hold"] and e["hold_reason"] == "awaiting_merge" and e["pr_outcome"] == "awaiting_merge"
+    r = await c.post(f"/internal/v1/admin/entries/{em}:approve", headers=admin(if_match=e["state_seq"]), json={})
+    assert r.status_code == 409 and r.json()["code"] == "awaiting_merge"
+    # an admin can still reject a held candidate
+    x = await entry(c, ex)
+    r = await c.post(f"/internal/v1/admin/entries/{ex}:reject", headers=admin(if_match=x["state_seq"]), json={})
+    assert r.json()["state"] == "rejected"
+
+    async def outcome(job, out, **kw):  # noqa: ANN001, ANN003, ANN202
+        r = await c.post("/internal/v1/outcomes", headers=W, json={"tenant_id": tenant, "job_id": job, "repo": REPO,
+                                                                    "terminal_status": "succeeded", "outcome": out, **kw})
+        assert r.status_code == 200, r.text
+        return r.json()
+    o = await outcome(jm, "pr_merged", fix_retained=True)
+    assert o["holds"] == [{"entry_id": em, "result": "released", "pr_outcome": "merged_with_fix"}]
+    e = await entry(c, em)
+    assert not e["activation_hold"] and e["pr_outcome"] == "merged_with_fix"
+    r = await c.post(f"/internal/v1/admin/entries/{em}:approve", headers=admin(if_match=e["state_seq"]), json={})
+    assert r.json()["state"] == "active" and r.json()["review_due_at"]
+    o = await outcome(jc, "pr_closed_unmerged", terminal_status="rejected")
+    e = await entry(c, ec)
+    assert e["state"] == "rejected" and e["pr_outcome"] == "closed_unmerged"
+    assert e["transitions"][-1]["actor_kind"] == "system_outcome" and e["transitions"][-1]["reason_code"] == "pr_closed_unmerged"
+    await outcome(jr, "pr_merged", fix_retained=False)
+    e = await entry(c, er)
+    assert e["state"] == "rejected" and e["pr_outcome"] == "fix_reverted"
+    # extracted after the job already ended: the recorded outcome applies at once
+    late = (await write(c, tenant, jm, pr_comment("Return 404 rather than 403 for resources the caller cannot see.",
+                                                  jm, n=2)))["entries"][0]["entry_id"]
+    assert (await entry(c, late))["pr_outcome"] == "merged_unverified"
+
+
+async def test_machine_sources_need_human_corroboration(env):  # noqa: ANN001
+    """MEM-D13: reviewer-agent / QA recurrence is machine-sourced (lower prior, approval gated); flaky QA is noise."""
+    c, tenant, _, _ = env
+    f = "CreateInvoice does not validate that the currency code is ISO 4217 before persisting"
+    for j, k in ((ulid("job"), "a"), (ulid("job"), "b")):
+        r = (await c.post("/internal/v1/findings", headers=W, json={"tenant_id": tenant, "job_id": j, "repo": REPO,
+              "items": [{"kind": "review_finding", "key": k, "text": f}]})).json()
+    eid = r["result"]["entries"][0]["entry_id"]
+    e = await entry(c, eid)
+    assert e["source_trust"] == "machine" and abs(e["confidence"] - 1 / 3) < 0.001 and not e["activation_hold"]
+    assert e["provenance"][0]["source_trust"] == "machine"
+    r = await c.post(f"/internal/v1/admin/entries/{eid}:approve", headers=admin(if_match=e["state_seq"]), json={})
+    assert r.status_code == 409 and r.json()["code"] == "needs_human_corroboration"
+    await corroborate(c, tenant, e)
+    e = await entry(c, eid)
+    assert e["source_trust"] == "human" and e["human_sources"] == 1 and e["machine_sources"] == 1
+    r = await c.post(f"/internal/v1/admin/entries/{eid}:approve", headers=admin(if_match=e["state_seq"]), json={})
+    assert r.json()["state"] == "active"
+    q = "test_checkout_total flaked: connection reset by peer while starting the payments stub"
+    for j in (ulid("job"), ulid("job")):
+        r = (await c.post("/internal/v1/findings", headers=W, json={"tenant_id": tenant, "job_id": j, "repo": REPO,
+              "items": [{"kind": "qa_failure", "key": "q", "text": q, "status": "flaky", "cause": "flaky_new"},
+                        {"kind": "qa_failure", "key": "e", "text": q + " (env)", "cause": "environment"}]})).json()
+        assert r["recorded"] == 0 and r["skipped_noise"] == 2 and r["recurring"] == 0
+
+
+async def test_lifecycle_review_dates_flags_and_fields(env):  # noqa: ANN001
+    """MEM-D14: review_due_at on approval, churn / lint-config flags, review filter, mark_reviewed, effectiveness,
+    preview and repo-scan fields."""
+    c, tenant, _, _ = env
+    r = await c.post("/internal/v1/admin/entries", headers=admin(), json={
+        "tenant_id": tenant, "memory_type": "rule", "scope_level": "path", "repo": REPO, "path_globs": ["internal/**"],
+        "statement": "Keep HTTP handlers in internal/api thin; business logic belongs in internal/service."})
+    e = r.json()
+    assert e["review_due_at"] and not e["review_due"] and not e["stale"]
+    assert e["evidence_count"] == 1 and e["independent_evidence_count"] == 1 and e["source_trust"] == "human"
+    assert e["preview"].startswith('<replicant-memory format="replicant.memory-block/v1"')
+    assert f"[{e['entry_id']}@1]" in e["preview"] and e["effectiveness"]["signal"] == "no_data"
+    r2 = (await c.post("/internal/v1/admin/entries", headers=admin(), json={
+        "tenant_id": tenant, "memory_type": "rule", "scope_level": "repo", "repo": REPO,
+        "statement": "Use two-space indentation in YAML files under deploy and config."})).json()
+    for i in range(3):
+        o = (await c.post("/internal/v1/outcomes", headers=W, json={
+            "tenant_id": tenant, "job_id": ulid("job"), "repo": REPO, "terminal_status": "succeeded",
+            "outcome": "pr_merged", "changed_paths": [f"internal/api/h{i}.go", "README.md"]})).json()
+        assert o["flags"] == ([] if i < 2 else [{"entry_id": e["entry_id"], "reason": "paths_churned"}]), o
+    o = (await c.post("/internal/v1/outcomes", headers=W, json={
+        "tenant_id": tenant, "job_id": ulid("job"), "repo": REPO, "terminal_status": "succeeded", "outcome": "pr_merged",
+        "changed_paths": ["deploy/.yamllint.yaml"]})).json()
+    assert sorted(f["entry_id"] for f in o["flags"]) == sorted([e["entry_id"], r2["entry_id"]])
+    assert {f["reason"] for f in o["flags"]} == {"lint_config_changed"}
+    flagged = (await c.get("/internal/v1/admin/entries", headers=admin(),
+                           params={"tenant_id": tenant, "review": "due_or_flagged"})).json()["items"]
+    assert {x["entry_id"] for x in flagged} == {e["entry_id"], r2["entry_id"]} and all(x["open_flags"] >= 1 for x in flagged)
+    cur = await entry(c, e["entry_id"])
+    assert {f["reason_code"] for f in cur["flags"]} == {"paths_churned", "lint_config_changed"}
+    r = await c.post(f"/internal/v1/admin/entries/{e['entry_id']}:mark_reviewed", headers=admin(if_match=cur["state_seq"]),
+                     json={})
+    assert r.status_code == 200 and r.json()["open_flags"] == 0, r.text
+    # effectiveness: the entry was injected into a job that then got similar feedback
+    j = ulid("job")
+    s = await snap(c, tenant, j)
+    await inject(c, tenant, j, s["memory_snapshot_id"])
+    await write(c, tenant, j, proposal("Keep HTTP handlers in internal/api thin; business logic belongs in internal/service.",
+                                       f"gate:{j}:z"))
+    eff = (await entry(c, e["entry_id"]))["effectiveness"]
+    assert eff["jobs_injected"] == 1 and eff["jobs_recurred"] == 1 and eff["signal"] == "recurred", eff
+    # repo-scan verification fields are stored and returned
+    p = proposal("Run make lint before pushing; CI rejects unformatted Go code anywhere.", f"gate:{j}:v",
+                 documented_in=["CONTRIBUTING.md"], verification={"cited_files": ["Makefile"], "matched": 3, "sampled": 4,
+                                                                  "missing": [], "pattern": "make lint",
+                                                                  "expect": "present", "commit_sha": "abc123"},
+                 label="Inferred convention (seen in 3 of 4 files)")
+    eid = (await write(c, tenant, j, p))["entries"][0]["entry_id"]
+    d = await entry(c, eid)
+    assert d["documented_in"] == ["CONTRIBUTING.md"] and d["verification"]["matched"] == 3
+    assert d["verification"]["pattern"] == "make lint" and d["verification"]["commit_sha"] == "abc123"
+    assert d["label"] == "Inferred convention (seen in 3 of 4 files)"

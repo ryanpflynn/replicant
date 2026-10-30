@@ -809,3 +809,117 @@ User request: "a view of the graph in the UI … a detailed view of what the age
   attributes but emitted no projection event, so a job waiting on its PR showed `running` in `GET /v1/jobs/{id}` and the
   lists. Entering `waiting_external` now emits timeline event `job.waiting` ("Waiting for review on PR #N"), patched
   `status-waiting-external-v1`; leaving the wait is carried by the next node or terminal event. E2E-07 asserts it.
+- **MEM-D11 (2026-10-30) Only independent evidence counts.** write-path.md §6 keys independence on
+  (author, repo, PR) and adds α += 0.25 for a non-independent occurrence. v0 keys it on what was said:
+  `independence_key = sha256("v2|" ‖ author ‖ "|" ‖ normalized excerpt)` (lowercased, whitespace collapsed), and
+  `sha256("v2|machine|" ‖ kind ‖ "|" ‖ job)` for reviewer/QA recurrence. Rows without an author keep the source-key
+  digest. The same author posting the same comment in six test runs is now one independent source. Every repeat is
+  still kept as a provenance row (marked `repeat` in the admin view), but it does not move α. One-row-per-source
+  uniqueness moved to the new `provenance.source_key_digest`. `evidence_count`, `independent_evidence_count` and
+  `distinct_author_count` are recounted from the live rows on every merge. Migration `202610300010_memory_trust`
+  backfilled keys, counters and α: each entry lost the α increments its collapsed repeats had added, so
+  `mem_01m5zkj1eg9ednm671v567warn` drops from 6 evidence at 0.86 to 1 independent source at 0.50. The queue and
+  entry detail show "N independent sources (M authors)", plus the mention count when it is higher.
+- **MEM-D12 (2026-10-30) PR-derived candidates wait for the PR outcome.** A new candidate is held, with
+  `activation_hold` and the new `hold_reason` `awaiting_merge`, when its source is a PR comment, review, command,
+  `repair_rejection` or `human_edit`, or when it comes from a repair cycle (cycle ≥ 1, not a gate comment and not a
+  machine source). Approving a held candidate, including through "edit and approve", answers 409 `awaiting_merge`.
+  Rejecting it is still allowed.
+  `memory.record_outcome` (finalize) now sends `outcome`, `changed_paths` (from the latest diff bundle) and
+  `fix_retained`. To compute `fix_retained`, `pr_inspect` lists Replicant's repair commits (`fix: address review
+  feedback…`) between the PR base and Replicant's last push. It then checks that, for every file those commits
+  changed, the file still exists at the merged head and still contains at least 80 % of the commits' substantive
+  added lines.
+  memory-service then applies the outcome:
+  - Merged with the fix still in the merged head: the hold is released and `pr_outcome` is `merged_with_fix`.
+  - Merged, but the check could not run: released as `merged_unverified`.
+  - Merged, but the fix is gone from the merged head: rejected as `fix_reverted`.
+  - Closed unmerged: rejected as `closed_unmerged`.
+  Rejections are written with the new actor kind `system_outcome`. CHECK `st_outcome_rejects` allows only
+  `svc_memory-service`, and only `→ rejected`. Candidates made only of `human_edit` rows count as retained, because
+  their source is the merged head itself. A candidate extracted after the job ended takes the recorded outcome at
+  once.
+  Workflow change: `_finish` passes `pr` and `repo_ref` to `memory.record_outcome`, patched `memory-outcome-pr-v1`.
+  Holds on open candidates are backfilled only where the job has no recorded outcome yet.
+- **MEM-D13 (2026-10-30) Agent-generated sources are machine-trust.** `provenance.source_trust` is `machine` for
+  `review_finding` and `qa_failure` and `human` for everything else. A candidate whose only source is machine starts
+  at Beta(1, 2), confidence 0.33 instead of 0.5, and is labelled "machine-sourced". It cannot be approved (409
+  `needs_human_corroboration`) until at least one human-sourced provenance row merges into it.
+  QA failures whose classifier status is `flaky`, or whose cause is `flaky_new`, `flaky_known` or `environment`, are
+  not recorded for recurrence. The same applies to every failure of a QA run with reason `environment_failure`.
+- **MEM-D14 (2026-10-30) Lifecycle after approval.**
+  - Approval, restore and admin-created active entries set `review_due_at` to now + 90 days
+    (`REPLICANT_MEMORY_REVIEW_DUE_DAYS`). Existing active entries were backfilled from `state_changed_at`.
+  - On a merged outcome, memory-service raises an `entry_flags` row (kind `agent_flag`, new source `lifecycle`) in two
+    cases:
+    - `paths_churned`: at least 3 merged Replicant PRs since approval (`REPLICANT_MEMORY_CHURN_FLAG_PRS`) changed
+      files under the entry's `path_globs`. This uses the new `job_outcomes.changed_paths`.
+    - `lint_config_changed`: the PR changed a lint or format config, such as `.editorconfig`, eslint, prettier, biome,
+      ruff, flake8, golangci or rubocop. This applies to rule, preference and negative entries on that repo.
+  - There is at most one open flag per entry and reason.
+  - The new admin verb `:mark_reviewed` (curator action `mark_reviewed`) pushes `review_due_at` out and closes the
+    entry's open lifecycle flags.
+  - Entry detail shows times used, last used, and an effectiveness signal: of the jobs that had the entry injected,
+    how many still got feedback similar to it (trigram ≥ 0.6 against the statement or a source excerpt, or merged into
+    it as evidence).
+  - Entries not injected for 90 days (`REPLICANT_MEMORY_STALE_DAYS`) get a "stale" badge. Nothing is deprecated
+    automatically.
+  - The Entries tab has a "due for review / flagged" filter (`?review=due_or_flagged`).
+- **MEM-D15 (2026-10-30) Approval screen.** Each queue row and the entry detail show:
+  - independent sources and authors;
+  - merge status (held, merged with fix, merged but not verified, closed, fix reverted);
+  - trust (human or machine-sourced);
+  - "already covered" (`documented_in`) and the repo-scan `verification` (cited files, matched/sampled, missing,
+    pattern). Both come from the scan verification (MEM-D20); memory-service stores them in
+    `provenance.generalization`.
+  - similar entries (trigram ≥ 0.3) and conflicting entries;
+  - "As the agent will see it": `core.render` of the current version, the same renderer that produces
+    `memory-injection.json`'s `rendered` block.
+
+  Approve is disabled, with the reason shown, while the candidate is held or machine-only.
+- **MEM-D20 (2026-10-30) The repo scan is checked deterministically before anything is proposed.** The scanner agent
+  now looks for *unwritten* conventions. For each proposal it must give `evidence: {files, pattern, expect
+  present|absent, applies_to}`.
+  - `memory.extract_candidates` checks scan jobs (`scan_verify.py`, no LLM) against the repo at the scanned commit
+    (`base_sha`). The memory node now passes `repo`, `repo_ref` and `base_sha`.
+  - **Documented:** the statement is dropped when it is already stated in CLAUDE.md, AGENTS.md or
+    .github/copilot-instructions.md. A line or bullet counts when it covers ≥ 60% of the statement's keywords (at
+    least 3 shared) or has trigram similarity ≥ 0.45 to the statement.
+  - **Linter-enforced** (write-path G6): the statement is also dropped when a linter or formatter config enforces it
+    (golangci, ruff/pyproject, eslint, prettier, editorconfig, flake8/pylint, rubocop, rustfmt, biome, pre-commit,
+    and CI files). It counts when it names a configured tool or a configured rule ID, or when it is a formatting topic
+    and a formatter config exists; gofmt counts via `go.mod`.
+  - **Unverified:** the statement is dropped when there are no cited files, a cited file is missing, the pattern is
+    missing or unsafe (over 200 characters, nested quantifiers or backreferences), fewer than 3 files are sampled, or
+    the pattern holds in fewer than 70% of up to 10 deterministically sampled `applies_to` files.
+  - Dropped proposals become non-candidates. Their reason, `documented_in: [paths]` and `verification` go to the
+    feedback ledger.
+  - Kept proposals carry `verification: {cited_files, missing, pattern, expect, matched, sampled, commit_sha}`,
+    `documented_in: []` and `label` "Inferred convention (seen in X of Y files)". The label is also prefixed to
+    `rationale`.
+  - Repo access is new and read-only. replicant-worker became github-token-broker caller `replicant-worker`
+    (`contents:read`, `metadata:read`; secret `broker_worker_token`) and reads the Gitea API through
+    `activities/pr_inspect.py`, which the PR-outcome checks share.
+  - It does not use repo-mirror, which takes run tokens only. If the repo is unreachable (non-retryable), nothing is
+    proposed.
+- **MEM-D21 (2026-10-30) E2E runs clean up their memory data.** E2E-06 and E2E-07 record the jobs they start. At the
+  end, pass or fail, carol purges the entries whose provenance comes only from those jobs (`replicant_e2e.cleanup_memory`,
+  `/v1/admin/memory/purges`). E2E-06's pre-run cleanup now purges only entries whose statement is one of the scripted
+  gateway's fixture statements, never real `gate_comment` or `import` entries. There is no separate test tenant:
+  the scenarios are bound to tenant `payments` and repo `acme-payments/ledger-api` throughout the seed.
+- **MEM-PR-D20 (2026-10-30) Human edits before merge are a memory source.** When a Replicant PR merges, the node
+  `pr_feedback_wait` (patch `memory-human-edit-v1`, not for evaluation jobs) runs `memory.ingest_human_edits`. That
+  step is best effort and never fails the job.
+  - It compares Replicant's last pushed head (`s.pr.head_sha`) with the merged PR head from the signal, and walks the
+    commits between them through `pr_inspect`.
+  - It drops bot commits: login replicant-bot, the bot e-mail, or the `Replicant-Activity:` trailer.
+  - It groups the remaining human commits by author. github-integration now adds `commit_authors` to the merged
+    `pr.event` payload: each non-bot author's Gitea id, login, linked principal and repo permission, computed as for
+    PR comments.
+  - Only linked authors with write, maintain or admin access become a feedback item. Others become non-candidates
+    ("unlinked author" or "author lacks write access").
+  - The item has `source.kind: human_edit`, `source_key: edit:<job>:<n>`, the author fields and `commit_shas`.
+  - Its text is a capped, redacted diff summary: commit messages, then per file the status, +/− counts and up to 4
+    hunks of 30 lines. Limits are 20 files and 10 commits overall, and 4000 characters of text.
+  - The text is quoted as `<untrusted_input>` to the same extraction call (script key `memory_extraction`) with the
+    prompt variant `memory-extraction-human-edit@1` ("what convention does the human's change imply").

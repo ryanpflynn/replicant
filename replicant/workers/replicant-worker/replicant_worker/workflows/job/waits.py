@@ -143,7 +143,8 @@ class WaitsMixin:
                     s.pr_buffer.clear()
                     if s.pr:
                         s.pr["state"] = "merged" if ev["event"] == "pull_request_merged" else "closed"
-                    return {"event": "merged" if ev["event"] == "pull_request_merged" else "closed"}
+                    return {"event": "merged" if ev["event"] == "pull_request_merged" else "closed",
+                            **{k: ev[k] for k in ("payload_uri", "head_sha") if ev.get(k)}}
             now = workflow.now()
             last = datetime.fromisoformat(s.pr_last_activity_at)
             feedback = [e for e in s.pr_buffer if e["event"] in (

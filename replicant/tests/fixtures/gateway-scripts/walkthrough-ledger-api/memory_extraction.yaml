@@ -20,6 +20,11 @@ turns:
     respond:
       text: '{"proposals": [{"source_index": 0, "memory_type": "rule", "scope": "path", "path_globs": ["internal/ledger/**"], "subject_key": "ledger.comments.money_arithmetic", "title": "Explain money arithmetic at the call site", "statement": "In internal/ledger, add a short comment wherever an amount is prorated or rounded, saying which share is computed and how it rounds.", "rationale": "PR review request: the prorated FX fee reversal was not explained.", "generalization_score": 0.9}], "non_candidates": []}'
       usage: {input_tokens: 900, output_tokens: 120}
+  # E2E-07 step 4: carol's commit pushed on top of Replicant's last push before the merge (human_edit, MEM-PR-D20)
+  - match: "e2e07-human-edit"
+    respond:
+      text: '{"proposals": [{"source_index": 0, "memory_type": "procedure", "scope": "path", "path_globs": ["internal/ledger/**"], "subject_key": "ledger.docs.worked_examples", "title": "Document money helpers with a worked example", "statement": "In internal/ledger, give each money helper such as Prorate a doc comment with a worked example of its rounding.", "rationale": "Before merging, a reviewer added a worked example to the Prorate doc comment.", "generalization_score": 0.85}], "non_candidates": []}'
+      usage: {input_tokens: 1100, output_tokens: 130}
   - respond:
       text: '{"proposals": [], "non_candidates": [{"source_index": 0, "reason": "pr_specific"}]}'
       usage: {input_tokens: 800, output_tokens: 30}

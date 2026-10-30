@@ -9,7 +9,13 @@
      scripted), replies `ack`, runs the repair (scripted: adds a comment line on top of the published fix), QA,
      verification, the push gate (approved by bob), pushes a NEW commit on the same PR branch (parent = the old head),
      and replies with the fix summary.
-  4. The PR is merged; the job ends `succeeded`.
+  4. carol (linked, write) pushes a commit of her own on top of Replicant's last push (MEM-PR-D20). The PR is
+     merged; the job ends `succeeded`, and carol's edit becomes a `human_edit` memory candidate (scripted extraction,
+     match `e2e07-human-edit`); replicant-bot's commits are not part of it.
+     The PR-comment candidate is held `awaiting_merge` (approve 409) until the merge; the merged head still has the
+     repair's lines, so the hold is released (merged_with_fix) and carol approves it (MEM-D12).
+  5. Cleanup: carol purges every memory entry this run created (matched by its job ID), so the admin queue keeps no
+     test data.
 
 Needs the v0 stack in gateway mode `script` (REPLICANT_GATEWAY_MODE=script in dev/compose/.env, gateway-shim recreated).
 Run: `uv run --package replicant-e2e python tests/e2e/e2e07_pr_feedback.py`
@@ -50,6 +56,7 @@ from replicant_e2e import (
 
 e.TAG = "e2e07-pr-feedback"
 REVIEWER, UNLINKED = "carol", "zed"
+JOBS: list[str] = []  # every job this run started (memory cleanup)
 CLAUDE_MD = (e.ROOT / "dev" / "sample-repos" / REPO / "CLAUDE.md").read_text()
 
 
@@ -69,19 +76,7 @@ def ensure_gitea_user(login: str, link: bool) -> None:
 
 
 def put_claude_md() -> None:
-    """The sample repo ships CLAUDE.md; reset_repo() goes back to the initial commit of older stacks, so make sure main
-    has it (an ordinary commit by the admin)."""
-    with gitea() as g:
-        r = g.get(f"/repos/{ORG}/{REPO}/contents/CLAUDE.md", params={"ref": "main"})
-        body = {"content": base64.b64encode(CLAUDE_MD.encode()).decode(), "message": "Add CLAUDE.md (e2e07)",
-                "branch": "main"}
-        if r.status_code == 200:
-            if base64.b64decode(r.json()["content"]).decode() == CLAUDE_MD:
-                return
-            ok(g.put(f"/repos/{ORG}/{REPO}/contents/CLAUDE.md", json={**body, "sha": r.json()["sha"]}), "update CLAUDE.md")
-        else:
-            ok(g.post(f"/repos/{ORG}/{REPO}/contents/CLAUDE.md", json=body), "create CLAUDE.md")
-    log("main has CLAUDE.md")
+    e.ensure_claude_md("e2e07")
 
 
 def worker_py(code: str) -> str:
@@ -144,6 +139,7 @@ def run() -> str:
     deadline = time.monotonic() + JOB_TIMEOUT_S
     number, t0 = open_issue(uuid.uuid4().hex[:8])
     job_id = wait_ack(number, t0)
+    JOBS.append(job_id)
     reader = api(READER)
     job = wait_until(reader, job_id, lambda s: open_publish_gate(s) is not None, "publish gate", deadline)
     s = snapshot(job)
@@ -248,24 +244,62 @@ def run() -> str:
         return "ledger.comments.money_arithmetic" if "ledger.comments.money_arithmetic" in r.text else None
     wait_for(candidate, "memory candidate from the PR comment", timeout=180, every=5)
     log("memory candidate ledger.comments.money_arithmetic is waiting for an admin")
+    # MEM-D12: a candidate from a PR review comment is held until the PR merges with the fix; approve is refused
+    held = [x for x in e.memory_candidates(job_id) if x.get("subject_key") == "ledger.comments.money_arithmetic"]
+    assert held and held[0]["hold_reason"] == "awaiting_merge" and held[0]["pr_outcome"] == "awaiting_merge", held
+    e.memory_admin("POST", f"entries/{held[0]['entry_id']}:approve", {"reason": "e2e07"},
+                   if_match=held[0]["state_seq"], expect=409)
+    log(f"{held[0]['entry_id']} is held awaiting_merge: approve answers 409 before the merge")
 
-    # (4) merge -> succeeded
+    # (4) a linked human pushes on top of Replicant's last push, then merge -> succeeded + human_edit candidate
+    with gitea(sudo=REVIEWER) as g:
+        f = ok(g.get(f"/repos/{ORG}/{REPO}/contents/internal/ledger/prorate.go", params={"ref": pr["head"]["ref"]}),
+               "prorate.go").json()
+        src = base64.b64decode(f["content"]).decode()
+        src = src.replace("func Prorate(", "// Example: Prorate(48, 4000, 10000) == 19 (e2e07-human-edit).\nfunc Prorate(", 1)
+        ok(g.put(f"/repos/{ORG}/{REPO}/contents/internal/ledger/prorate.go", json={
+            "content": base64.b64encode(src.encode()).decode(), "sha": f["sha"], "branch": pr["head"]["ref"],
+            "message": "Document Prorate with a worked example (e2e07-human-edit)"}), "human commit")
+    head2 = pr_head(n)
+    assert head2 != head1
+    log(f"{REVIEWER} pushed {head2[:10]} on top of Replicant's {head1[:10]}")
     merge({"number": n})
     job = wait_until(reader, job_id, lambda s: s.get("status") == "succeeded", "job succeeded", deadline)
     s = snapshot(job)
     assert (s.get("pull_request") or {}).get("state") == "merged", s.get("pull_request")
+    human = wait_for(lambda: [x for x in e.memory_candidates(job_id) if x.get("source_kind") == "human_edit"],
+                     "human_edit candidate", timeout=180, every=5)
+    det = e.memory_entry(human[0]["entry_id"])
+    pv = next(p for p in det["provenance"] if p["source_kind"] == "human_edit")
+    assert "e2e07-human-edit" in (pv.get("source_excerpt") or "") or "Prorate" in det["statement"], (pv, det["statement"])
+    assert "replicant-bot" not in (pv.get("source_excerpt") or ""), pv
+    log(f"human_edit candidate {human[0]['entry_id']}: {det['statement'][:80]}")
+    # MEM-D12: merged with the repair still in the merged head -> the hold is released and the candidate approvable
+    rel = wait_for(lambda: (lambda d: d if not d["activation_hold"] else None)(e.memory_entry(held[0]["entry_id"])),
+                   "hold released after the merge", timeout=180, every=5)
+    assert rel["pr_outcome"] == "merged_with_fix", rel["pr_outcome"]
+    ap = e.memory_admin("POST", f"entries/{rel['entry_id']}:approve", {"reason": "e2e07"}, if_match=rel["state_seq"])
+    assert ap["state"] == "active" and ap["review_due_at"], ap
+    log(f"{rel['entry_id']}: released (merged_with_fix) and approved; review due {ap['review_due_at'][:10]}")
     log(f"PASS: {job_id} succeeded (issue #{number}, PR #{n}, review {rv['id']}, commits {head0[:10]} -> {head1[:10]}, "
         f"cycle {s.get('cycle')}, runs {[(r.get('node_key'), r.get('phase')) for r in s.get('runs', [])]})")
     return job_id
 
 
 def test_e2e07_pr_feedback() -> None:
-    run()
+    main()
+
+
+def main() -> None:
+    try:
+        run()
+    finally:  # (5) never leave test candidates in the admin queue, pass or fail
+        e.cleanup_memory(JOBS, "e2e07")
 
 
 if __name__ == "__main__":
     try:
-        run()
+        main()
     except AssertionError as ex:
         log(f"FAIL: {ex}")
         sys.exit(1)

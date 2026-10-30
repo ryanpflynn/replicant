@@ -520,6 +520,14 @@ flowchart LR
 - **Curation (admins only).** The candidate queue, entries, entry detail (provenance, versions, jobs that used it),
   conflicts, quarantine and purge (each with a dry-run blast radius), export and analytics. Mutations are versioned
   and audited; non-admins get 403, and the refusal is audited.
+- **Trust rules (2026-10-30):**
+  - **Independent evidence.** Confidence rises only with independent evidence: a different author, or different wording. Repeats are kept as provenance but add nothing. The queue shows "N independent sources (M authors)".
+  - **Held until merge.** PR-derived and human-edit candidates are held `awaiting_merge`. They are released when the PR merges with the fix still in it, and auto-rejected when the PR closes unmerged or the fix is reverted.
+  - **Machine sources.** Reviewer-agent and QA-recurrence candidates are "machine-sourced": they start at lower confidence and need a human source before approval. Flaky and environment failures are excluded.
+  - **Repo scan.** The scan only proposes **unwritten** conventions. Anything already in CLAUDE.md, AGENTS.md or a linter config is dropped, and citations are checked against the code ("seen in X of Y files").
+  - **Human edits.** Commits that linked humans add to Replicant's PR before merge are a candidate source.
+  - **After approval.** Approved entries get a review date. They are flagged when their paths change heavily or lint configs change, and show uses, last use, whether the feedback stopped recurring, and a stale badge.
+  - **Test hygiene.** E2E tests purge what they create.
 - **Search.** v0 has no embeddings: entries are chosen by scope and ranked with Postgres full-text search and trigram
   similarity. Add vectors when paraphrase dedupe misses in practice, a repo passes about 150 entries, or "similar past
   work" search is built.
