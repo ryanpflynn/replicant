@@ -5,8 +5,9 @@
 # memory_refs, text_key and text_sha256 for both tenants; under the tenant scope with no tenant it reads nothing;
 # it cannot write approvals.
 set -euo pipefail
+ENGINE="${REPLICANT_CONTAINER_CLI:-podman}"
 C=${1:?container}; DB=${2:-replicant}
-q() { podman exec -i "$C" psql -U postgres -d "$DB" -v ON_ERROR_STOP=1 -qAtX "$@"; }
+q() { "$ENGINE" exec -i "$C" psql -U postgres -d "$DB" -v ON_ERROR_STOP=1 -qAtX "$@"; }
 G1=gate_01m5p7x7r0bt69j0h0fbxepw80; G2=gate_01m5p7x7r0bt69j0h0fbxepw81
 q <<SQL
 DELETE FROM approvals.gates WHERE gate_id IN ('$G1','$G2');

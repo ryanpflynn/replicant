@@ -16,7 +16,7 @@ def _fake_repo(tmp: Path) -> Paths:
 
 
 def test_secrets_generated_complete_and_private(tmp_path, monkeypatch):
-    monkeypatch.setattr(secrets, "_podman_socket", lambda: "/run/user/501/podman/podman.sock")
+    monkeypatch.setattr(secrets, "_container_socket", lambda: "/run/user/501/podman/podman.sock")
     p = _fake_repo(tmp_path)
     created = secrets.ensure(p)
     assert created and secrets.ensure(p) == []          # idempotent
@@ -49,7 +49,7 @@ def test_v0_profile_services():
 
 
 def test_import_provider_key_never_echoes(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(secrets, "_podman_socket", lambda: "/run/x.sock")
+    monkeypatch.setattr(secrets, "_container_socket", lambda: "/run/x.sock")
     p = _fake_repo(tmp_path)
     secrets.ensure(p)
     assert secrets.import_provider_key(p) is False                     # no dev/.env
@@ -65,7 +65,7 @@ def test_import_provider_key_never_echoes(tmp_path, monkeypatch, capsys):
 
 def test_gateway_mode_reads_compose_env(tmp_path, monkeypatch):
     from replicant_cli import testing
-    monkeypatch.setattr(secrets, "_podman_socket", lambda: "/run/x.sock")
+    monkeypatch.setattr(secrets, "_container_socket", lambda: "/run/x.sock")
     p = _fake_repo(tmp_path)
     assert testing.gateway_mode(p) == "script"                         # no .env yet
     secrets.ensure(p)
@@ -93,3 +93,49 @@ def test_worker_env_groups_select_and_deselect():
     names = [n for g, _ in testing.WORKER_ENV_GROUPS for n in g]
     assert {"license_prestep", "mid_run_can", "dependency_outage"} <= set(names)
     assert testing._scenario_k(("a", "b")) == "test_scenario and (a or b)"
+
+
+def test_engine_choice_and_docker_commands(monkeypatch):
+    import subprocess
+
+    from replicant_cli import engine
+    engine.name.cache_clear()
+    monkeypatch.setenv("REPLICANT_CONTAINER_ENGINE", "docker")
+    try:
+        assert engine.name() == "docker" and engine.socket() == "/var/run/docker.sock"
+        monkeypatch.delenv("REPLICANT_COMPOSE_BIN", raising=False)
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a[0], 0, "", ""))
+        assert engine.compose_bin() == ["docker", "compose"]
+        monkeypatch.setenv("REPLICANT_CONTAINER_CLI", "")  # restored after the test
+        engine.export()
+        import os
+        assert os.environ["REPLICANT_CONTAINER_CLI"] == "docker"
+        # Docker has no --depend: a failed first pass is retried on what is left
+        calls = []
+
+        def fake(cmd, **k):
+            calls.append(cmd)
+            if cmd[1] == "inspect" or cmd[:2] == ["docker", "container"]:
+                return subprocess.CompletedProcess(cmd, 0, "[{}]", "")
+            return subprocess.CompletedProcess(cmd, 1 if len(calls) == 1 else 0, "", "in use")
+        monkeypatch.setattr(subprocess, "run", fake)
+        engine.rm_containers(["pause", "agent"], force=True)
+        assert calls[0] == ["docker", "rm", "-f", "pause", "agent"] and "--depend" not in sum(calls, [])
+        assert calls[-1] == ["docker", "rm", "-f", "pause", "agent"]
+        monkeypatch.setenv("REPLICANT_CONTAINER_ENGINE", "lxc")
+        engine.name.cache_clear()
+        import pytest
+        with pytest.raises(SystemExit):
+            engine.name()
+    finally:
+        engine.name.cache_clear()
+
+
+def test_image_created_parses_both_engines(monkeypatch):
+    from replicant_cli import engine
+    monkeypatch.setattr(engine, "inspect", lambda kind, ids: [{"Created": "2026-11-10T12:00:00.123456789Z"}])
+    assert abs(engine.image_created("x") - 1794312000.123456789) < 1e-3
+    monkeypatch.setattr(engine, "inspect", lambda kind, ids: [{"Created": "2026-11-10T07:00:00.5-05:00"}])
+    assert abs(engine.image_created("x") - 1794312000.5) < 1e-3
+    monkeypatch.setattr(engine, "inspect", lambda kind, ids: [])
+    assert engine.image_created("x") is None

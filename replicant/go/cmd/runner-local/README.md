@@ -14,4 +14,13 @@ and the in-process notifier (Temporal Signal `run.status_changed`). Deviations: 
 - Smoke + contract cases (isolated `run-` stack: SeaweedFS, Temporal dev server, the real gateway shim in script mode,
   repo-mirror, runner-local, and contract fakes for grants/Gitea/broker):
   `go/cmd/runner-local/smoke/run-smoke.sh [--build] [--keep] [--only SMOKE-IMPL]`. Results in
-  `~/.cache/replicant-runner-smoke/results.json`.
+  `~/.cache/replicant-runner-smoke/results.json`. `--only RC-REPO-CFG` is the §8c repo-configuration case. It commits
+  `.claude/` config, a nested CLAUDE.md and `.mcp.json` on a branch of the fake Gitea repo, and runs with
+  `repo_config: use`. It then checks five things:
+  - the repo hook ran;
+  - the rules and nested CLAUDE.md were loaded;
+  - the URL MCP server was skipped;
+  - the managed `Bash(curl:*)` deny beat the project's allow rule;
+  - the config paths stayed out of the diff.
+
+  It needs a `cli-claude-code` image with the current entrypoint and agentd.

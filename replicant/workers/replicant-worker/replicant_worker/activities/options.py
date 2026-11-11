@@ -192,6 +192,9 @@ CATALOG: dict[str, ActivityDef] = {a.name: a for a in [
     ActivityDef("memory.write_episode", IO_INTERNAL, True),
     ActivityDef("memory.ingest_gate_feedback", LLM, True),  # MEM: request_changes/reject comments -> candidates
     ActivityDef("memory.ingest_human_edits", LLM, True),  # MEM-PR-D20: human commits on a merged PR -> candidates
+    # repo onboarding (design §8c): observations and readiness to control-plane-api, best effort
+    ActivityDef("inventory.record_observations", IO_INTERNAL, True),
+    ActivityDef("inventory.record_readiness", IO_INTERNAL, True),
     # agent runs (WS-03, XD-03-12)
     ActivityDef("agents.build_run_plan", IO_INTERNAL, False),
     ActivityDef("budget.allocate_run", IO_INTERNAL, False),

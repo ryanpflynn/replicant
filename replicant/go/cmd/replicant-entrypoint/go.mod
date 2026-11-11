@@ -21,6 +21,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.5 // indirect
 	github.com/aws/smithy-go v1.28.6 // indirect
 	github.com/dlclark/regexp2 v1.12.0 // indirect
+	github.com/gowebpki/jcs v1.0.2 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	golang.org/x/text v0.40.0 // indirect

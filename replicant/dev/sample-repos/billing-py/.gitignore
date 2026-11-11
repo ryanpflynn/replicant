@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+# written by the team's Claude Code PostToolUse hook (.claude/settings.json)
+.replicant-hook.log

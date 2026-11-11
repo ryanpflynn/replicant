@@ -224,25 +224,32 @@ class Gitea:
                              "message": redact((c.get("message") or "")[:500])} for c in keep[:10]],
                 "files": flist}
 
+    def _client(self) -> Any:
+        from replicant_scm.gitea import GiteaClient
+        return GiteaClient(self.base, token=self.token, http=http())
+
+    async def _scm(self, what: str, call: Any) -> Any:
+        """A replicant_scm.GiteaClient call with this module's error types (PermissionDenied, ScmUnavailable)."""
+        from replicant_scm.gitea import GiteaError
+        try:
+            return await call
+        except httpx.HTTPError as e:
+            raise ApplicationError(f"gitea {what}: {type(e).__name__}", type="ScmUnavailable") from None
+        except GiteaError as e:
+            if e.status in (401, 403):
+                raise ApplicationError(f"gitea {what}: HTTP {e.status}", type="PermissionDenied",
+                                       non_retryable=True) from None
+            raise ApplicationError(f"gitea {what}: HTTP {e.status}", type="ScmUnavailable",
+                                   non_retryable=e.status < 500 and e.status != 429) from None
+
     async def file_at(self, sha: str, path: str, *, max_bytes: int = 65536) -> str | None:
-        """The file's text at `sha`, None when missing; capped at max_bytes, None for binary content."""
-        t = await self._get(f"/raw/{quote(path)}", params={"ref": sha}, raw=True)
-        if t is None or "\x00" in t[:4096]:
-            return None
-        return t[:max_bytes]
+        """The file's text at `sha`, None when missing; capped at max_bytes, None for binary content
+        (replicant_scm.GiteaClient.file_at)."""
+        return await self._scm("raw", self._client().file_at(self.owner, self.name, sha, path, max_bytes=max_bytes))
 
     async def tree(self, sha: str, *, max_entries: int = 20000) -> list[str]:
-        """Blob paths of the tree at `sha` (recursive)."""
-        out: list[str] = []
-        for page in range(1, 50):
-            d = await self._get(f"/git/trees/{quote(sha, safe='')}", params={"recursive": "true", "page": page,
-                                                                              "per_page": 1000})
-            if not d:
-                break
-            out += [e["path"] for e in d.get("tree") or [] if e.get("type") == "blob" and e.get("path")]
-            if not d.get("truncated") or len(out) >= max_entries:
-                break
-        return out[:max_entries]
+        """Blob paths of the tree at `sha` (recursive; replicant_scm.GiteaClient.tree)."""
+        return await self._scm("tree", self._client().tree(self.owner, self.name, sha, max_entries=max_entries))
 
 
 async def token(repo: dict[str, Any], *, job_id: str | None, purpose: str) -> str:

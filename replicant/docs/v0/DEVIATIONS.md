@@ -923,3 +923,64 @@ User request: "a view of the graph in the UI … a detailed view of what the age
     hunks of 30 lines. Limits are 20 files and 10 commits overall, and 4000 characters of text.
   - The text is quoted as `<untrusted_input>` to the same extraction call (script key `memory_extraction`) with the
     prompt variant `memory-extraction-human-edit@1` ("what convention does the human's change imply").
+
+## Repo onboarding and agent configuration (design §8c, 2026-11-10)
+
+Interfaces: `docs/design/onboarding-interfaces.md` (ONBOARD-01).
+
+- **ONBOARD-D1 Repo configuration is used, reversing the spec's ignore stance (ADR-007).**
+  - **When it applies:** projects set `repo_config: use | ignore` (pinned, default `use`).
+  - **What `use` changes:** the entrypoint runs Claude Code with `--setting-sources user,project` and
+    `--include-hook-events`. It also stops disabling CLAUDE.md loading and allows project hooks. Nested CLAUDE.md
+    files, `.claude/rules`, hooks and skills are therefore all loaded.
+  - **What stays managed:** permission rules (`allowManagedPermissionRulesOnly`), MCP servers, the model, the gateway
+    URL and telemetry. Repo permission rules are counted in the report and not applied.
+  - **Instruction files:** CLAUDE.md is no longer quoted, because it is loaded natively. AGENTS.md and the Copilot
+    instructions are still quoted.
+  - **Config is taken from the base branch:** `.claude/**`, CLAUDE.md, AGENTS.md and `.mcp.json` are restored from
+    `config_base_sha` (the profiled default-branch commit) and made read-only. Diff collection still strips them, and
+    they still rate as critical risk.
+- **ONBOARD-D2 Repo skills are enabled with the repo configuration.** In `use` mode the `Skill` tool is on, unless
+  the agent definition denies it. This also exposes Claude Code's built-in skills, which is accepted inside the
+  sandbox.
+- **ONBOARD-D3 Hook results are matched to hooks by position.** The CLI's `hook_response` events don't name the hook
+  command, so each run is attributed by its position in a burst, plus a marker that the managed hooks print. A repo
+  hook that prints exactly `{"suppressOutput":true}` would be miscounted. Runs that can't be attributed are reported
+  with `command_hash: null` and aren't sent as observations.
+- **ONBOARD-D4 Repo MCP servers are skipped by default.** Only servers whose catalogue class or decision allows them
+  (`mcp_auto_allow`: stdio, an exact package version, no secret-like env vars or headers) are started. Everything
+  else is reported as skipped, so it can be ranked in `/admin/fleet`.
+- **ONBOARD-D5 Lint is advisory in QA.** A failing lint step gives `pass_with_warnings`, because a default branch may
+  already fail lint and v0 doesn't compare against a base run.
+- **ONBOARD-D6 How readiness is decided.**
+  - **The mapping:**
+    - pass → `ready`;
+    - `pass_with_warnings`, or only test or lint failures → `warnings`;
+    - missing tool, network, timeout, install or build failure → `blocked`.
+  - **Why test failures are only warnings:** a red default branch doesn't block jobs, since fixing it may be the job.
+  - **Overriding a block:** `triggers.readiness_override` (live) lets jobs run on a blocked repo.
+- **ONBOARD-D7 Environment images carry warm package caches.** There are no PyPI or npm mirrors in v0
+  (PLATFORM-D18), so the Python and Node images carry uv and pnpm caches built from the sample repos' lockfiles.
+  - The sandbox root filesystem is read-only, so a `seed-cache` bootstrap step copies the cache into
+    `/workspace/.cache` on every run. The entrypoint runs the `seed-*` steps before QA as well.
+  - Any package missing from the cache fails with `network`.
+- **ONBOARD-D8 Automatic probes run as an in-process service principal.** `svc_replicant-readiness` has no human
+  `on_behalf_of`, so that field is stored as NULL. A person's re-check runs as that person if they may start jobs.
+  A fleet admin's re-check also uses the service principal, but always starts a new probe.
+- **ONBOARD-D9 The catalogue and decisions are fleet-wide.** `inventory.catalog` and `inventory.decisions` have no
+  tenant RLS; only `replicant-admins` read them, under operator scope. One approval applies to every tenant.
+- **ONBOARD-D10 The impact score is a heuristic.** It compares jobs carrying an item with comparable jobs (same repo
+  and workflow type) that lack it. Each outcome rate is a smoothed ratio (with ÷ without), and the score is
+  `jobs_with × mean(ln ratio)`.
+- **ONBOARD-D11 The scanner remembers profiled repos in memory.** github-integration keeps the set of repos it has
+  already profiled in memory, so after a restart the first push to each repo triggers a scan.
+- **ONBOARD-D12 github-integration may read repo contents.** It now requests `contents:read` from the token broker,
+  whose allowlist is updated to match.
+- **TIER-D1 Model tiers are a platform policy.** `model_tiers` (the catalogue) and `model_tier_selection` (a
+  project's choice, emitted in the derived bundle only when it differs from the default) are added as C-DEF policy
+  types.
+  - **Defaults:** `standard` uses Opus at high effort for the planner and reviewer, and Sonnet at medium effort for
+    the implementer. `thorough` puts the implementer on Opus.
+  - **Escalation:** the implementer and repair move to `thorough` on repair cycle 2 or later, at risk high or above,
+    or after a failed attempt. Each run records a `run.model_selected` event.
+  - **Effort** is passed to Claude Code as `--effort`.

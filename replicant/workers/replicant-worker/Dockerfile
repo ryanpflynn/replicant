@@ -13,9 +13,10 @@ COPY libs/python/replicant-temporal /src/replicant-temporal
 COPY libs/python/replicant-telemetry /src/replicant-telemetry
 COPY libs/python/replicant-ids /src/replicant-ids
 COPY libs/python/replicant-cdef /src/replicant-cdef
+COPY libs/python/replicant-scm /src/replicant-scm
 COPY workers/replicant-worker/pyproject.toml /src/replicant-worker/pyproject.toml
 COPY workers/replicant-worker/replicant_worker /src/replicant-worker/replicant_worker
-RUN pip install --no-cache-dir /src/replicant-ids /src/replicant-cdef /src/replicant-telemetry /src/replicant-temporal /src/replicant-worker && rm -rf /src \
+RUN pip install --no-cache-dir /src/replicant-ids /src/replicant-cdef /src/replicant-scm /src/replicant-telemetry /src/replicant-temporal /src/replicant-worker && rm -rf /src \
  && replicant-worker nodecatalog export >/dev/null && replicant-worker local-bundle spec >/dev/null \
  && python -c "import replicant_worker.activities.catalog_impl"
 USER 65532:65532

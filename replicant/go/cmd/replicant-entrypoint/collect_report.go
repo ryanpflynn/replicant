@@ -17,6 +17,7 @@ import (
 )
 
 func (rc *runCtx) cliExecution(code int) map[string]any {
+	repoCfg := rc.repoConfigSection() // takes rc.mu itself
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	tb := rc.terminatedBy
@@ -48,6 +49,9 @@ func (rc *runCtx) cliExecution(code int) map[string]any {
 	}
 	if len(rc.instructions) > 0 {
 		c["instruction_files_loaded"] = rc.instructions
+	}
+	if repoCfg != nil {
+		c["repo_config"] = repoCfg
 	}
 	return c
 }

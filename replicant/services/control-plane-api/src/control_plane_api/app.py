@@ -15,6 +15,7 @@ from control_plane_api import (
     routes_admin,
     routes_gates,
     routes_graph,
+    routes_inventory,
     routes_jobs,
     routes_memory,
     routes_notify,
@@ -97,6 +98,8 @@ def create_app(settings: Settings | None = None, *, db: Database | None = None,
             queues = tuple(q for q in os.environ.get("REPLICANT_WORKER_READY_QUEUES", ",".join(WORKER_QUEUES_DEFAULT))
                            .split(",") if q)
             tasks.append(asyncio.create_task(worker_registrar_loop(db, temporal, queues)))
+            if os.environ.get("REPLICANT_READINESS_LOOP", "true") == "true":   # ONBOARD: readiness probes
+                tasks.append(asyncio.create_task(routes_inventory.readiness_loop(app.state)))
             if os.environ.get("REPLICANT_NOTIFY_LOOPS", "true") == "true":
                 tasks.append(asyncio.create_task(app.state.notify_loops.dispatcher_loop()))
                 tasks.append(asyncio.create_task(app.state.notify_loops.scheduler_loop()))
@@ -112,6 +115,7 @@ def create_app(settings: Settings | None = None, *, db: Database | None = None,
     app.state.s3 = S3(settings)
     app.state.auth = AuthContext(settings)
     app.state.auth.attach_db(db)               # CONFIG: DB role bindings (rbac.py)
+    app.state.auth.directory.add(routes_inventory.readiness_principal())   # ONBOARD: automatic readiness probes
     app.state.live_config = LiveConfig(db)     # CONFIG: live project settings (approver groups, Slack channel)
     app.state.intake = Intake(db, temporal, app.state.auth, settings.replicant_env, settings.web_origin)
     app.state.intake.app_state = app.state     # CONFIG: derived bundles need S3 + settings
@@ -139,6 +143,7 @@ def create_app(settings: Settings | None = None, *, db: Database | None = None,
     app.include_router(routes_projects.router)  # CONFIG-01: projects, access, team configuration
     app.include_router(routes_ui_prefs.router)  # WEB-UIPREF: /v1/me/ui-preferences
     app.include_router(routes_memory.router)  # MEM: /v1/admin/memory/**, /v1/jobs/{id}/memory, repo scan
+    app.include_router(routes_inventory.router)  # ONBOARD: inventory, readiness, /v1/admin/fleet/**
 
     try:
         import replicant_dev_auth

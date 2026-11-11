@@ -24,6 +24,7 @@ CPA = "http://127.0.0.1:58401"
 GI = "http://127.0.0.1:58080"
 GRANTS = "http://127.0.0.1:58403"
 GITEA = "http://127.0.0.1:53300"
+ENGINE = os.environ.get("REPLICANT_CONTAINER_CLI", "podman")
 ORG, REPO = "acme-payments", "ledger-api"
 
 
@@ -56,7 +57,7 @@ def ok(cond: bool, msg: str) -> None:
 
 
 def psql(sql: str) -> str:
-    return subprocess.run(["podman", "exec", "ctl-pg", "psql", "-U", "postgres", "-d", "replicant", "-Atc", sql],
+    return subprocess.run([ENGINE, "exec", "ctl-pg", "psql", "-U", "postgres", "-d", "replicant", "-Atc", sql],
                           check=True, capture_output=True, text=True).stdout.strip()
 
 
@@ -133,7 +134,7 @@ def run() -> None:
     job, start_status, rb, requester, submitted_by = row.split("|")
     ok(start_status == "started" and submitted_by == "svc_github-integration", "start_status=started, "
        "submitted_by=svc_github-integration")
-    d = subprocess.run(["podman", "exec", "ctl-temporal", "temporal", "workflow", "describe", "-n", "replicant-local",
+    d = subprocess.run([ENGINE, "exec", "ctl-temporal", "temporal", "workflow", "describe", "-n", "replicant-local",
                         "-w", job, "-o", "json"], capture_output=True, text=True, check=True).stdout
     info = json.loads(d)
     vi = (info.get("workflowExecutionInfo") or {}).get("versioningInfo") or {}
@@ -183,7 +184,7 @@ def run() -> None:
     if os.environ.get("STUB_WORKER", "1") == "1":
         st = ""
         for _ in range(20):
-            st = json.loads(subprocess.run(["podman", "exec", "ctl-temporal", "temporal", "workflow", "describe", "-n",
+            st = json.loads(subprocess.run([ENGINE, "exec", "ctl-temporal", "temporal", "workflow", "describe", "-n",
                                             "replicant-local", "-w", job, "-o", "json"], capture_output=True, text=True,
                                            check=True).stdout)["workflowExecutionInfo"]["status"]
             if "COMPLETED" in st:

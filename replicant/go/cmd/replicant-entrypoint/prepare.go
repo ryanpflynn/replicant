@@ -178,9 +178,15 @@ func prepare(ctx context.Context) error {
 	if err := checkout(ctx, bs, plan); err != nil {
 		return err
 	}
+	// repo_config use (§8c): the repo's agent configuration is trusted only as it is on the default branch
+	if plan.RepoConfigUse() && plan.ConfigBaseSHA != "" && plan.Role != "qa" {
+		if err := restoreBaseConfig(ctx, sandbox.RepoDir, plan.ConfigBaseSHA); err != nil {
+			return fail(exitRepoFetch, "restore repo configuration from %s: %v", plan.ConfigBaseSHA, err)
+		}
+	}
 	// repo instruction files at the base commit, before any prior diff is applied or the agent edits anything
 	if plan.RepoInstructions == "quote_as_context" && plan.Role != "qa" {
-		if q := quoteRepoInstructions(ctx, sandbox.RepoDir, patternRedactor); q != "" {
+		if q := quoteRepoInstructions(ctx, sandbox.RepoDir, quotedInstructionFiles(plan), patternRedactor); q != "" {
 			if err := os.WriteFile(filepath.Join(in, repoInstructionsFile), []byte(q), 0o444); err != nil {
 				return fail(exitInputs, "write %s: %v", repoInstructionsFile, err)
 			}

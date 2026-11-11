@@ -218,6 +218,10 @@ class NodesMixin:
     def binding_environment(self) -> str:
         return self._compose["environment"]
 
+    def repo_profile(self) -> dict[str, Any] | None:
+        """The job's pinned repo profile (design §8c), only on executions with the repo-profile-env-v1 patch."""
+        return self._repo_profile
+
     def environment_digest(self) -> str:
         """Pinned digest of the binding's environment definition, recorded by graph.compose (R1V-012)."""
         return self._compose["environment_digest"]

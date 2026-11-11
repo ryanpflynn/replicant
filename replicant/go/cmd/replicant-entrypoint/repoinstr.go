@@ -8,15 +8,32 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"example.com/replicant/internal/runner/sandbox"
 )
 
 // Repository instruction files (`repo_instructions: quote_as_context`, MEM-PR-D4 / ADR-007 intent): the CLI's own
 // CLAUDE.md/AGENTS.md loading stays disabled (CLAUDE_CODE_DISABLE_CLAUDE_MDS, guardPaths); instead the files as they
 // are at the base commit are read before the agent edits anything, capped, redacted, and quoted in the first message
-// as untrusted context.
+// as untrusted context. With repo_config use (§8c) the CLI loads CLAUDE.md natively, so only AGENTS.md and the
+// copilot instructions are quoted (not sent twice).
 
 // repoInstructionFiles are read in this order; the total quoted size is capped at repoInstructionsCap.
 var repoInstructionFiles = []string{"CLAUDE.md", "AGENTS.md", ".github/copilot-instructions.md"}
+
+// quotedInstructionFiles are the files quoted for this plan.
+func quotedInstructionFiles(p *sandbox.RunPlan) []string {
+	if !p.RepoConfigUse() {
+		return repoInstructionFiles
+	}
+	var out []string
+	for _, f := range repoInstructionFiles {
+		if f != "CLAUDE.md" {
+			out = append(out, f)
+		}
+	}
+	return out
+}
 
 const (
 	repoInstructionsCap  = 16 << 10
@@ -53,10 +70,10 @@ func patternRedactor(_ context.Context, text string) (string, bool) {
 
 // quoteRepoInstructions renders the quoted block for the files present in repo ("" when there are none). Only regular
 // files are read (a symlink could point outside the checkout).
-func quoteRepoInstructions(ctx context.Context, repo string, redact redactor) string {
+func quoteRepoInstructions(ctx context.Context, repo string, files []string, redact redactor) string {
 	var blocks []string
 	budget := repoInstructionsCap
-	for _, rel := range repoInstructionFiles {
+	for _, rel := range files {
 		if budget <= 0 {
 			break
 		}

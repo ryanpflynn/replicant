@@ -108,6 +108,48 @@ func (f *fakeGitea) setup(sample string) error {
 	return nil
 }
 
+// commitBranch commits files (path → content) on top of the base commit as branch `branch` of the served repo and
+// returns the new commit; main is unchanged. Used by RC-REPO-CFG for a repo that carries Claude Code configuration.
+func (f *fakeGitea) commitBranch(branch, msg string, files map[string]string) (string, error) {
+	work := filepath.Join(os.TempDir(), "sample-work")
+	run := func(args ...string) (string, error) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = work
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=replicant-bot", "GIT_AUTHOR_EMAIL=bot@replicant.invalid", "GIT_COMMITTER_NAME=replicant-bot",
+			"GIT_COMMITTER_EMAIL=bot@replicant.invalid", "GIT_AUTHOR_DATE=2026-10-24T00:00:00Z", "GIT_COMMITTER_DATE=2026-10-24T00:00:00Z")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out)), nil
+	}
+	if _, err := run("checkout", "-q", "-B", branch, f.baseSHA); err != nil {
+		return "", err
+	}
+	defer func() { _, _ = run("checkout", "-q", "main") }()
+	for p, c := range files {
+		full := filepath.Join(work, p)
+		_ = os.MkdirAll(filepath.Dir(full), 0o755)
+		if err := os.WriteFile(full, []byte(c), 0o644); err != nil {
+			return "", err
+		}
+	}
+	if _, err := run("add", "-A"); err != nil {
+		return "", err
+	}
+	if _, err := run("commit", "-q", "-m", msg); err != nil {
+		return "", err
+	}
+	sha, err := run("rev-parse", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	if _, err := run("push", "-q", "-f", filepath.Join(f.root, f.owner, f.name+".git"), branch); err != nil {
+		return "", err
+	}
+	return sha, nil
+}
+
 func (f *fakeGitea) handler() http.Handler {
 	backend := "/usr/lib/git-core/git-http-backend"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

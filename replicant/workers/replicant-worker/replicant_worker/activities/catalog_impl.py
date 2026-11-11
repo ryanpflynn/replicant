@@ -9,7 +9,17 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Callable
 
-from replicant_worker.activities import core, feedback, gates, memory, notify, qa, runner, staging  # noqa: F401  (register)
+from replicant_worker.activities import (  # noqa: F401  (register)
+    core,
+    feedback,
+    gates,
+    inventory,
+    memory,
+    notify,
+    qa,
+    runner,
+    staging,
+)
 from replicant_worker.activities.base import REGISTRY, not_in_v0
 from replicant_worker.activities.options import CATALOG, Q_JOBS, Q_LLM, Q_RUNNER
 

@@ -302,6 +302,176 @@
             "type": "string",
             "maxLength": 512
           }
+        },
+        "repo_config": {
+          "description": "What the run loaded from the repo's own Claude Code configuration (design section 8c, onboarding-interfaces.md section 6). Absent when repo_config is ignore.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "hook_events_available"
+          ],
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "use",
+                "ignore"
+              ]
+            },
+            "config_base_sha": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+            },
+            "settings_hash": {
+              "description": "sha256 over the JCS-canonical managed settings followed by the bytes of the project .claude/settings.json (empty when absent).",
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "hooks": {
+              "description": "Project command hooks. runs/failures/blocks come from the CLI's stream-json hook_started/hook_response events (null when hook_events_available is false). Results that could not be attributed to one command are reported with command_hash null.",
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "event",
+                  "command_hash",
+                  "runs",
+                  "failures",
+                  "cause"
+                ],
+                "properties": {
+                  "event": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "matcher": {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  "command_hash": {
+                    "description": "sha256 of the hook's command string (UTF-8).",
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "pattern": "^sha256:[0-9a-f]{64}$"
+                  },
+                  "runs": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0
+                  },
+                  "failures": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0
+                  },
+                  "blocks": {
+                    "description": "Runs that exited 2 (the hook's own blocking or feedback signal, not a failure).",
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "cause": {
+                    "description": "Cause of the last failure.",
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "enum": [
+                      "missing_tool",
+                      "network",
+                      "timeout",
+                      "non_zero_exit",
+                      null
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 256
+                  }
+                }
+              }
+            },
+            "rules": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "string",
+                "maxLength": 512
+              }
+            },
+            "skills": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "string",
+                "maxLength": 128
+              }
+            },
+            "claude_md": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "string",
+                "maxLength": 512
+              }
+            },
+            "mcp_skipped": {
+              "type": "array",
+              "maxItems": 32,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "identity",
+                  "reason"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 128
+                  },
+                  "identity": {
+                    "type": "string",
+                    "maxLength": 512
+                  },
+                  "reason": {
+                    "type": "string",
+                    "enum": [
+                      "not_allowed",
+                      "invalid"
+                    ]
+                  }
+                }
+              }
+            },
+            "mcp_allowed": {
+              "type": "array",
+              "maxItems": 16,
+              "items": {
+                "type": "string",
+                "maxLength": 64
+              }
+            },
+            "permission_rules_ignored": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "hook_events_available": {
+              "type": "boolean"
+            }
+          }
         }
       }
     },

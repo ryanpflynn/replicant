@@ -81,7 +81,7 @@ def put_claude_md() -> None:
 
 def worker_py(code: str) -> str:
     """Run Python inside the replicant-worker container (its S3 client and credentials; nothing printed is secret)."""
-    r = subprocess.run(["podman", "exec", "-i", "replicant_replicant-worker_1", "python", "-"], input=code,
+    r = subprocess.run([e.ENGINE, "exec", "-i", e.container("replicant-worker"), "python", "-"], input=code,
                        capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stderr[-500:]
     return r.stdout
@@ -108,15 +108,15 @@ print("".join(out))
 def deliveries(since: str) -> list[tuple[str, str, str]]:
     sql = ("SELECT event, target_type, coalesce(outcome, state) FROM github_app.inbound_deliveries WHERE "
            f"received_at > '{since}' ORDER BY received_at")
-    r = subprocess.run(["podman", "exec", "replicant_postgres-replicant_1", "psql", "-U", "postgres", "-d", "replicant",
-                        "-AtF", "|", "-c", sql], capture_output=True, text=True, timeout=60)
+    r = subprocess.run([e.ENGINE, "exec", e.container("postgres-replicant"), "psql", "-U", "postgres", "-d",
+                        "replicant", "-AtF", "|", "-c", sql], capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr[-300:]
     return [tuple(ln.split("|")) for ln in r.stdout.splitlines() if ln]  # type: ignore[misc]
 
 
 def db_now() -> str:
-    r = subprocess.run(["podman", "exec", "replicant_postgres-replicant_1", "psql", "-U", "postgres", "-d", "replicant",
-                        "-Atc", "SELECT now()"], capture_output=True, text=True, timeout=60)
+    r = subprocess.run([e.ENGINE, "exec", e.container("postgres-replicant"), "psql", "-U", "postgres", "-d",
+                        "replicant", "-Atc", "SELECT now()"], capture_output=True, text=True, timeout=60)
     return r.stdout.strip()
 
 
@@ -166,7 +166,8 @@ def run() -> str:
     # (2) bot and unlinked comments change nothing
     with gitea() as g:  # the link reply is once per user and repo per 24 h: forget earlier runs' replies to zed
         zed_id = ok(g.get(f"/users/{UNLINKED}"), "zed").json()["id"]
-    subprocess.run(["podman", "exec", "replicant_postgres-replicant_1", "psql", "-U", "postgres", "-d", "replicant", "-c",
+    subprocess.run([e.ENGINE, "exec", e.container("postgres-replicant"), "psql", "-U", "postgres", "-d", "replicant",
+                    "-c",
                     f"DELETE FROM github_app.unlinked_replies WHERE provider = 'gitea' AND user_id = {int(zed_id)}"],
                    capture_output=True, check=True, timeout=60)
     since = db_now()

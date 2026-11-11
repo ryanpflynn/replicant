@@ -6,10 +6,13 @@ local adjustments of plan.md §1.2/§1.3 (recorded in replicant/docs/v0/DEVIATIO
 
 * agents planner-claude, implementer-claude, qa-runner, reviewer-codex (all on the local Claude Code image
   `localhost/replicant/cli-claude-code:dev`; reviewer-codex keeps its graph-referenced name but runs claude-code in v0);
-* environment go-service on `localhost/replicant/env-go-service:dev` with laptop-sized resource profiles;
+* environments go-service, python-service and node-service on `localhost/replicant/env-<name>:dev` with laptop-sized
+  resource profiles (design §8c: the environment is inferred per repo and pinned on the job as `repo_profile`);
 * policies: router_rules (deterministic only, llm_risk_review off), repair_limits (0 repair cycles),
   runner_polling (short local timers), gate_rules (plan gate off, publish gate on for every bugfix; ui/cli);
-* graphs: the shipped graph definitions, unmodified.
+* graphs: the shipped graph definitions, unmodified, plus the label-selected repo-scan and readiness graphs;
+* policies model_tiers and model_tier_selection (design §8c, onboarding-interfaces.md §8-§9) when the C-DEF envelope
+  accepts those policy types.
 
 Every document is a C-DEF envelope; `digest = sha256(JCS(document))`. `export()` writes them in registry layout
 (`blobs/sha256/<hex>.json`, digests and bytes from the shared `replicant_cdef`) together with a ReleaseBundle `spec`, so the same bytes can be published to the local
@@ -27,6 +30,10 @@ from replicant_worker import resources
 
 CLI_IMAGE = os.environ.get("REPLICANT_LOCAL_CLI_IMAGE", "localhost/replicant/cli-claude-code:dev")
 ENV_IMAGE = os.environ.get("REPLICANT_LOCAL_ENV_IMAGE", "localhost/replicant/env-go-service:dev")
+ENV_IMAGES = {"go-service": ENV_IMAGE,
+              "python-service": os.environ.get("REPLICANT_LOCAL_ENV_IMAGE_PYTHON", "localhost/replicant/env-python-service:dev"),
+              "node-service": os.environ.get("REPLICANT_LOCAL_ENV_IMAGE_NODE", "localhost/replicant/env-node-service:dev")}
+DEFAULT_ENVIRONMENT = "go-service"  # jobs without a pinned repo_profile (M1 behaviour, replays)
 DEFINITION_VERSION = 1
 GRAPH_FILES = {"bugfix": "bugfix", "feature": "feature", "api_change": "api-change", "docs": "docs-low-risk",
                "hotfix": "hotfix", "maintenance": "maintenance-repo", "pr_repair": "pr-repair", "qa_only": "qa-only"}
@@ -114,19 +121,79 @@ def _qa() -> dict[str, Any]:
     return d
 
 
+SMALL_PROFILE = {"requests": {"cpu": "500m", "memory": "1Gi", "ephemeralStorage": "2Gi"},
+                 "limits": {"cpu": "2", "memory": "2Gi", "ephemeralStorage": "4Gi"},
+                 "memoryRequestPolicy": "match_limit", "workspace": {"sizeLimit": "3Gi", "overflow": {"policy": "local_only"}}}
+
+
 def _environment() -> dict[str, Any]:
     d = _ex("environment-go-service.yaml")
     s = d["spec"]
     d["metadata"]["description"] = "v0 local Go environment (localhost/replicant/env-go-service:dev, laptop-sized)."
     d["metadata"].setdefault("labels", {})["replicant.local"] = "v0"
     s["image"] = {"build": s["image"]["build"], "resolved": {"image": ENV_IMAGE, "buildSpecDigest": s["image"]["resolved"]["buildSpecDigest"]}}
-    small = {"requests": {"cpu": "500m", "memory": "1Gi", "ephemeralStorage": "2Gi"},
-             "limits": {"cpu": "2", "memory": "2Gi", "ephemeralStorage": "4Gi"},
-             "memoryRequestPolicy": "match_limit", "workspace": {"sizeLimit": "3Gi", "overflow": {"policy": "local_only"}}}
     for name in ("default", "qa"):
         prof = s["resourceProfiles"][name]
-        s["resourceProfiles"][name] = {**small, "derivation": prof.get("derivation")} if prof.get("derivation") else dict(small)
+        s["resourceProfiles"][name] = {**SMALL_PROFILE, "derivation": prof.get("derivation")} if prof.get("derivation") \
+            else dict(SMALL_PROFILE)
     return d
+
+
+def _ecosystem_environment(name: str, codebase_type: str, description: str, base: str, apt: list[str], mirror: str,
+                           env: dict[str, str], steps: list[dict[str, Any]]) -> dict[str, Any]:
+    """go-service's shape for another ecosystem (images/env-<name>). Bootstrap installs dependencies for the coding
+    roles only: QA runs the repo's own install command (run plan environment.commands) and classifies its failure."""
+    d = _environment()
+    s = d["spec"]
+    d["metadata"]["name"] = name
+    d["metadata"]["description"] = description
+    s["codebaseType"] = codebase_type
+    s["image"] = {"build": {"base": base, "packages": {"apt": apt}, "steps": []},
+                  "resolved": {"image": ENV_IMAGES[name], "buildSpecDigest": "sha256:" + replicant_cdef.digest_of_body(
+                      f"{name}|{base}|{','.join(apt)}".encode()).split(":", 1)[1]}}
+    s["env"] = dict(env)
+    s["packageMirrors"] = [mirror]
+    s["bootstrap"] = {"forRoles": ["implementer", "repair", "reviewer", "qa"], "steps": steps}
+    s["caches"] = []  # the images carry a warm package cache (no package mirrors in v0, PLATFORM-D18)
+    prov = {"method": "provisional", "reason": f"v0 local laptop-sized profile; no measured {codebase_type} baseline",
+            "expiresAt": "2027-06-30T00:00:00Z"}
+    s["resourceProfiles"] = {"default": {**SMALL_PROFILE, "derivation": dict(prov)},
+                             "qa": {**SMALL_PROFILE, "derivation": dict(prov)}}
+    return d
+
+
+def _seed_cache(src: str, dst: str) -> dict[str, Any]:
+    """The sandbox root filesystem is read-only and package managers lock and write their cache, so each run copies the
+    image's warm cache into the workspace once (`seed-*` steps run for every role, ahead of the repo's install)."""
+    return {"name": "seed-cache", "timeoutSeconds": 300,
+            "run": f"[ -d {dst} ] || {{ mkdir -p $(dirname {dst}) && cp -a {src} {dst}; }}"}
+
+
+def _python_environment() -> dict[str, Any]:
+    return _ecosystem_environment(
+        "python-service", "python_service",
+        "v0 local Python environment: Python 3.12 and 3.13 with uv (localhost/replicant/env-python-service:dev).",
+        "docker.io/library/python:3.12-slim-bookworm", ["git", "jq", "make", "zstd"], "pypi",
+        {"UV_PYTHON_DOWNLOADS": "never", "UV_LINK_MODE": "copy", "PYTHONDONTWRITEBYTECODE": "1",
+         "UV_CACHE_DIR": "/workspace/.cache/uv"},
+        [_seed_cache("/opt/uv/cache", "/workspace/.cache/uv"),
+         {"name": "python-deps", "timeoutSeconds": 600,
+          "run": "if [ -f uv.lock ]; then uv sync --frozen; "
+                 "elif [ -f requirements.txt ]; then python -m venv .venv && .venv/bin/pip install -r requirements.txt; "
+                 "elif [ -f pyproject.toml ]; then uv sync; fi"}])
+
+
+def _node_environment() -> dict[str, Any]:
+    return _ecosystem_environment(
+        "node-service", "node_service",
+        "v0 local Node environment: Node 22 with corepack npm, pnpm and yarn (localhost/replicant/env-node-service:dev).",
+        "docker.io/library/node:22-bookworm-slim", ["git", "jq", "make", "zstd"], "npm",
+        {"COREPACK_ENABLE_DOWNLOAD_PROMPT": "0", "CI": "true", "npm_config_store_dir": "/workspace/.cache/pnpm-store"},
+        [_seed_cache("/opt/pnpm-store", "/workspace/.cache/pnpm-store"),
+         {"name": "node-deps", "timeoutSeconds": 600,
+          "run": "if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; "
+                 "elif [ -f yarn.lock ]; then yarn install --frozen-lockfile; "
+                 "elif [ -f package-lock.json ]; then npm ci; elif [ -f package.json ]; then npm install; fi"}])
 
 
 def _policy(name: str, file: str, mutate: Any = None) -> dict[str, Any]:
@@ -145,6 +212,10 @@ def _router(s: dict[str, Any]) -> None:
     # that graph.compose sends to the repo-scan graph (DEVIATIONS MEM-D7); first, so docs never escalates to bugfix.
     s["rules"].insert(0, {"id": "v0-repo-scan", "match": {"labels_any": [REPO_SCAN_LABEL]},
                           "decide": {"workflow_type": "docs"}})
+    # Readiness probe (design §8c): a JobRequest labelled replicant-readiness is a qa_only job that graph.compose sends
+    # to the readiness graph (no LLM).
+    s["rules"].insert(0, {"id": "v0-readiness", "match": {"labels_any": [READINESS_LABEL]},
+                          "decide": {"workflow_type": "qa_only"}})
     s["rules"].insert(len(s["rules"]) - 1, {"id": "v0-issue-trigger-is-bugfix",
                                            "match": {"channel": ["github"], "event_type": ["issues.labeled", "issues.opened"]},
                                            "decide": {"workflow_type": "bugfix"}})
@@ -183,6 +254,8 @@ def _gate_policy() -> dict[str, Any]:
 
 REPO_SCAN_LABEL = "replicant-repo-scan"
 REPO_SCAN_GRAPH = "repo-scan"
+READINESS_LABEL = "replicant-readiness"  # the same literal as workflows/job/common.READINESS_LABEL
+READINESS_GRAPH = "readiness-probe"
 
 
 def repo_scan_graph() -> dict[str, Any]:
@@ -207,6 +280,67 @@ def repo_scan_graph() -> dict[str, Any]:
                                {"from": "memory", "to": "end:no_change_needed"}]}}
 
 
+def readiness_graph() -> dict[str, Any]:
+    """context -> probe (qa_run: the environment's bootstrap and the repo's install, build, test and lint commands in
+    a fresh sandbox, no LLM) -> end. The terminal handler writes the result back to the repo profile as ready, warnings
+    or blocked (onboarding-interfaces.md §7). Selected by label, like the repo scan."""
+    return {"apiVersion": "replicant.example.com/v1", "kind": "GraphDefinition",
+            "metadata": {"name": READINESS_GRAPH, "scope": {"level": "global"}, "owners": ["replicant-platform"],
+                         "description": "Readiness probe: can the repo's environment install, build and test it",
+                         "labels": {"workflow-type": "qa_only", "replicant.local": "v0"}},
+            "spec": {"workflowType": "qa_only", "fglVersion": 1, "entry": "context",
+                     "nodes": [{"key": "context", "type": "context_assembler", "phase": "context",
+                                "config": {"briefing": "minimal"}},
+                               {"key": "qa", "type": "qa_run", "phase": "qa", "maxVisits": 2,
+                                "config": {"agent": "qa-runner", "workloadClass": "qa_build"}}],
+                     "edges": [{"from": "context", "to": "qa"},
+                               {"from": "qa", "switch": [
+                                   {"when": "nodes['qa'].decision == 'proceed'", "to": "end:qa_completed"},
+                                   {"when": "nodes['qa'].decision == 'retry_qa'", "to": "qa"},
+                                   {"when": "nodes['qa'].verdict == 'inconclusive'", "to": "end:qa_inconclusive"}],
+                                "default": "end:qa_failed"}]}}
+
+
+def _tier_policies() -> dict[str, dict[str, Any]]:
+    """model_tiers (the platform catalogue) and model_tier_selection (the default a derived bundle replaces). Shipped
+    only once the C-DEF envelope lists both policy types; until then build_run_plan uses the same values from
+    replicant_worker.tiers, so the effective tiers are identical either way."""
+    from replicant_worker import tiers
+    if not {"model_tiers", "model_tier_selection"} <= set(_policy_type_enum()):
+        return {}
+
+    def doc(name: str, ptype: str, desc: str, spec: dict[str, Any]) -> dict[str, Any]:
+        return {"apiVersion": "replicant.example.com/v1", "kind": "Policy",
+                "metadata": {"name": name, "scope": {"level": "global"}, "owners": ["replicant-platform"],
+                             "description": desc, "labels": {"replicant.local": "v0"}},
+                "spec": {"policyType": ptype, **copy.deepcopy(spec)}}
+    return {"policy/model-tiers": doc("model-tiers", "model_tiers", "Model tier catalogue: tier x role -> model, "
+                                      "fallbacks, thinking budget, effort", tiers.DEFAULT_CATALOG),
+            "policy/model-tier-selection": doc("model-tier-selection", "model_tier_selection",
+                                               "Default model tier selection (derived bundles carry the project's)",
+                                               tiers.DEFAULT_SELECTION)}
+
+
+def _policy_type_enum() -> list[str]:
+    """The policyType enum of the vendored C-DEF envelope, wherever the schema keeps it."""
+    def walk(o: Any) -> list[str] | None:
+        if isinstance(o, dict):
+            pt = (o.get("properties") or {}).get("policyType") if isinstance(o.get("properties"), dict) else None
+            if isinstance(pt, dict) and isinstance(pt.get("enum"), list):
+                return list(pt["enum"])
+            for v in o.values():
+                r = walk(v)
+                if r is not None:
+                    return r
+        elif isinstance(o, list):
+            for v in o:
+                r = walk(v)
+                if r is not None:
+                    return r
+        return None
+    return walk(resources.load_json("00-contracts/schemas/definition-envelope.schema.json")) or []
+
+
 def _graph(wt: str) -> dict[str, Any]:
     return copy.deepcopy(resources.load_yaml(f"01-orchestration/graphs/definitions/{GRAPH_FILES[wt]}.yaml"))
 
@@ -217,11 +351,14 @@ def documents() -> dict[str, dict[str, Any]]:
     docs = {
         "agent/implementer-claude": _implementer(), "agent/planner-claude": _planner(),
         "agent/qa-runner": _qa(), "agent/reviewer-codex": _reviewer(), "environment/go-service": _environment(),
+        "environment/python-service": _python_environment(), "environment/node-service": _node_environment(),
         "agent/scanner-claude": _scanner(), f"graph/{REPO_SCAN_GRAPH}": repo_scan_graph(),
+        f"graph/{READINESS_GRAPH}": readiness_graph(),
         "policy/router-rules": _policy("router-rules", "router-rules.yaml", _router),
         "policy/repair-limits": _policy("repair-limits", "repair-limits.yaml", _repair),
         "policy/runner-polling": _policy("runner-polling", "runner-polling.yaml", _polling),
         "policy/gate-rules-local": _gate_policy(),
+        **_tier_policies(),
     }
     for wt in GRAPH_FILES:
         docs[f"graph/{GRAPH_FILES[wt]}"] = _graph(wt)

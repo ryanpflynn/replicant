@@ -11,7 +11,7 @@ from temporalio import workflow
 
 from replicant_worker import ids
 from replicant_worker.registry import NodeFailed
-from replicant_worker.workflows.job.common import _Can
+from replicant_worker.workflows.job.common import READINESS_LABEL, _Can
 from replicant_worker.workflows.state import TERMINAL_STATUS_FOR_OUTCOME, GateRecord
 
 
@@ -130,6 +130,23 @@ class TerminalMixin:
         except NodeFailed as e:
             workflow.logger.warning("compensation incomplete", extra={"error": str(e)[:200]})
 
+    async def _record_readiness(self, outcome: str) -> None:
+        """Readiness probe (design §8c, onboarding-interfaces.md §7): the QA verdict and the latest QA run's result go
+        back to the repo profile as ready, warnings or blocked. Only jobs with the repo-profile-env-v1 patch reach
+        here (self._repo_profile). Best effort: never changes the outcome."""
+        s, rp = self.s, self._repo_profile or {}
+        qa = [r for r in s.runs.values() if r.role == "qa"]
+        last = qa[-1] if qa else None
+        try:
+            await self._aux_act("inventory.record_readiness", {
+                "job_id": s.job_id, "tenant_id": s.tenant_id, "repo_id": self.primary_repo().get("repo_id"),
+                "profile_id": rp.get("profile_id"), "outcome": outcome, "verdict": s.last_qa_verdict,
+                "qa_result_uri": last.result_uri if last else None, "qa_failure_reason": last.reason if last else None,
+                "environment": self._compose.get("environment")},
+                node_key="finalize", effect="readiness", ordinal=1, block=False)
+        except NodeFailed as e:
+            workflow.logger.warning("readiness not recorded", extra={"error": str(e)[:200]})
+
     async def _finish(self, outcome: str | None, reason: str | None) -> str:
         outcome = outcome or "infrastructure_failure"
         if self.s.evaluation and outcome == "pr_merged":
@@ -153,6 +170,8 @@ class TerminalMixin:
                                     ordinal=1, block=False)
             except NodeFailed as e:  # retries exhausted or non-retryable
                 workflow.logger.warning("memory bookkeeping failed", extra={"error": str(e)[:200]})
+        if self._repo_profile and self._ready and READINESS_LABEL in (self.s.request_summary.get("labels") or []):
+            await self._record_readiness(outcome)
         self._set_status(status, "done")
         self.emit("job.terminal", f"job {status} ({outcome})")
         # notifications.md §2 `job.succeeded` / `job.failed` (and the other terminal statuses) to the requester.

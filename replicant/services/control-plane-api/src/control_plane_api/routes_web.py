@@ -33,6 +33,7 @@ def capabilities(p: Principal) -> list[str]:
         caps.add("identity:admin")
     if ADMIN_GROUP in p.groups:
         caps.add("memory:admin")
+        caps.add("fleet:admin")                # ONBOARD: /admin/fleet, the same rule as memory:admin
     return sorted(caps)
 
 

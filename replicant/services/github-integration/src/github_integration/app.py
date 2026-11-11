@@ -72,6 +72,8 @@ def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None =
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):  # noqa: ANN202
         tasks = [asyncio.create_task(consumer.loop()) for _ in range(max(1, s.consumer_workers))] if run_consumer else []
+        if run_consumer:
+            tasks.append(asyncio.create_task(consumer.scanner.loop()))   # ONBOARD: inventory scans
         yield
         for t in tasks:
             t.cancel()
@@ -199,7 +201,8 @@ def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None =
                 return _problem(409, "installation_claimed_by_other_tenant")
             else:
                 inst = inst_row.installation_id
-            await register_repo(conn, host, repo_id, int(inst), full_name, tenant, None, "svc_github-integration")
+            changed = await register_repo(conn, host, repo_id, int(inst), full_name, tenant, None,
+                                          "svc_github-integration")
             cur = (await conn.execute(text("SELECT version, settings FROM github_app.repo_settings WHERE provider = "
                                            "'gitea' AND host = :h AND repo_id = :r AND is_current FOR UPDATE"),
                                       {"h": host, "r": repo_id})).first()
@@ -211,8 +214,39 @@ def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None =
                     "INSERT INTO github_app.repo_settings (provider, host, repo_id, version, settings, is_current, "
                     "updated_by) VALUES ('gitea', :h, :r, :v, CAST(:s AS jsonb), true, :by)"),
                     {"h": host, "r": repo_id, "v": v, "s": json.dumps(settings_doc), "by": updated_by})
+        if changed or not consumer.scanner.known(repo_id):
+            consumer.scanner.request({"repo_id": repo_id, "installation_id": int(inst), "tenant_id": tenant,
+                                      "full_name": full_name, "default_branch": None}, "registered")
         return JSONResponse({"repo_id": repo_id, "full_name": full_name, **settings_doc,
                              "installation_id": int(inst), "tenant_id": tenant})
+
+    @app.post("/internal/v1/inventory:rescan")
+    async def inventory_rescan(request: Request) -> JSONResponse:
+        """control-plane-api `POST /v1/admin/fleet:rescan` (ONBOARD-01 §10) -> queue inventory scans of the given
+        repos, or of every active repo. Auth: control-plane-api's service token (or the local dev seed token)."""
+        seed = read_secret(s.dev_seed_token_file) if s.is_local else None
+        cpa = read_secret(s.notify_caller_token_file)
+        if not bearer_ok(request, (seed, cpa)):
+            return _problem(401, "unauthenticated")
+        try:
+            body = await request.json() if await request.body() else {}
+        except ValueError:
+            return _problem(422, "invalid_request")
+        ids = body.get("repo_ids") if isinstance(body, dict) else None
+        if ids is not None and (not isinstance(ids, list) or len(ids) > 10000 or
+                                not all(str(x).isdigit() for x in ids)):
+            return _problem(422, "invalid_request", detail="repo_ids: a list of numeric repo ids")
+        q = ("SELECT repo_id, installation_id, tenant_id, full_name, default_branch FROM github_app.repos WHERE "
+             "provider = 'gitea' AND NOT archived AND removed_at IS NULL")
+        params: dict[str, Any] = {}
+        if ids is not None:
+            q += " AND repo_id = ANY(:ids)"
+            params["ids"] = [str(x) for x in ids]
+        async with engine.begin() as conn:
+            rows = (await conn.execute(text(q), params)).all()
+        for r in rows:
+            consumer.scanner.request(dict(r._mapping), "rescan")
+        return JSONResponse({"queued": len(rows)}, status_code=202)
 
     @app.post("/internal/v1/notifications/deliver")
     async def deliver_notification(request: Request) -> JSONResponse:
@@ -279,8 +313,11 @@ async def _sync_repos(s: Settings, consumer: Consumer, engine: AsyncEngine, host
             repos = await g.list_org_repos(org)
         async with engine.begin() as conn:
             for r in repos:
-                await register_repo(conn, host, str(r["id"]), inst, r["full_name"], tenant, r.get("default_branch"),
-                                    "svc_github-integration")
+                if await register_repo(conn, host, str(r["id"]), inst, r["full_name"], tenant, r.get("default_branch"),
+                                       "svc_github-integration") or not consumer.scanner.known(str(r["id"])):
+                    consumer.scanner.request({"repo_id": str(r["id"]), "installation_id": inst, "tenant_id": tenant,
+                                              "full_name": r["full_name"], "default_branch": r.get("default_branch")},
+                                             "registered")
         return len(repos)
     except Exception as e:  # noqa: BLE001
         log.info("repo sync deferred to first webhook: %s", type(e).__name__)

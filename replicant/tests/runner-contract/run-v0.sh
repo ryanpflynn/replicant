@@ -10,8 +10,11 @@ set -eu
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 S="$ROOT/dev/.secrets/secrets"
 NET=replicant-core
+ENGINE="${REPLICANT_CONTAINER_CLI:-podman}"
+# Running container of a compose service (both compose implementations set these labels; names differ).
+ctr() { "$ENGINE" ps -q --filter label=com.docker.compose.project=replicant --filter "label=com.docker.compose.service=$1" | head -1; }
 for c in runner-local gateway-shim repo-mirror sbx-edge sbx-dns egress-proxy; do
-  podman ps --format '{{.Names}}' | grep -qx "replicant_${c}_1" || { echo "v0 service $c is not running (replicant dev up --profile v0)"; exit 2; }
+  [ -n "$(ctr "$c")" ] || { echo "v0 service $c is not running (replicant dev up --profile v0)"; exit 2; }
 done
 # SEC-EGRESS and the contract cases run on the scripted gateway: switch gateway-shim to `script` for the run and
 # restore the previous mode afterwards (like `replicant dev test e2e`).
@@ -23,7 +26,7 @@ if [ "$GW_PREV" != script ]; then
   trap 'gw "$GW_PREV" || echo "WARNING: could not restore gateway mode $GW_PREV (replicant dev gateway-mode $GW_PREV)"' EXIT
   trap 'exit 130' INT TERM
 fi
-ip() { podman inspect "replicant_$1_1" --format "{{(index .NetworkSettings.Networks \"$NET\").IPAddress}}"; }
+ip() { "$ENGINE" inspect "$(ctr "$1")" --format "{{(index .NetworkSettings.Networks \"$NET\").IPAddress}}"; }
 CORE="runner-local=$(ip runner-local):8480 postgres-replicant=$(ip postgres-replicant):5432 temporal=$(ip temporal):7233"
 CORE="$CORE github-token-broker=$(ip github-token-broker):8080 control-plane-api=$(ip control-plane-api):8401"
 
@@ -61,10 +64,14 @@ turns:
 YAML
 
 RES="$ROOT/tests/runner-contract/results-v0.json"
-podman rm -f plat-contract-driver >/dev/null 2>&1 || true
-SOCK="${REPLICANT_CONTAINER_SOCKET:-$(podman info --format '{{.Host.RemoteSocket.Path}}' | sed 's#^unix://##')}"
+"$ENGINE" rm -f plat-contract-driver >/dev/null 2>&1 || true
+if [ "$ENGINE" = podman ]; then
+  SOCK="${REPLICANT_CONTAINER_SOCKET:-$(podman info --format '{{.Host.RemoteSocket.Path}}' | sed 's#^unix://##')}"
+else
+  SOCK="${REPLICANT_CONTAINER_SOCKET:-/var/run/docker.sock}"
+fi
 # The engine socket lets the driver inject faults (stop Temporal, kill a sandbox container, pause agentd).
-podman run --name plat-contract-driver --network "$NET" -v "$ROOT:/src:ro" --security-opt label=disable \
+"$ENGINE" run --name plat-contract-driver --network "$NET" -v "$ROOT:/src:ro" --security-opt label=disable \
   -v "$SOCK:/var/run/docker.sock" -e CONTAINER_HOST=unix:///var/run/docker.sock -v plat-gomod:/go/pkg/mod -v plat-gocache:/root/.cache \
   -v replicant_runner-local-state:/runner-state:ro -v "$S:/secrets:ro" \
   -e SMOKE_TARGET=v0 -e GOWORK=off -e GOFLAGS=-mod=mod \
@@ -76,8 +83,8 @@ podman run --name plat-contract-driver --network "$NET" -v "$ROOT:/src:ro" --sec
   -e GITEA_URL=http://gitea:3300 -e GITEA_ADMIN_PASSWORD_FILE=/secrets/gitea_admin_password -e RESULTS_FILE=/tmp/results.json \
   -w /src/go/cmd/runner-local docker.io/library/golang:1.26 \
   sh -c "go build -o /tmp/smoke ./smoke && exec /tmp/smoke $*"
-RC=$(podman inspect plat-contract-driver --format '{{.State.ExitCode}}')
-podman cp plat-contract-driver:/tmp/results.json "$RES" >/dev/null 2>&1 || true
-podman rm -f plat-contract-driver >/dev/null 2>&1 || true
+RC=$("$ENGINE" inspect plat-contract-driver --format '{{.State.ExitCode}}')
+"$ENGINE" cp plat-contract-driver:/tmp/results.json "$RES" >/dev/null 2>&1 || true
+"$ENGINE" rm -f plat-contract-driver >/dev/null 2>&1 || true
 echo "driver exit $RC (results: $RES)"
 exit "$RC"

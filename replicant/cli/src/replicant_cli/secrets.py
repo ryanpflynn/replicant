@@ -12,9 +12,9 @@ import json
 import os
 import secrets as _rnd
 import string
-import subprocess
 from pathlib import Path
 
+from replicant_cli import engine
 from replicant_cli.paths import Paths
 
 DB_ROLES = (
@@ -205,14 +205,9 @@ def set_env(p: Paths, values: dict[str, str]) -> None:
     _write(p.env_file, "\n".join(out) + "\n")
 
 
-def _podman_socket() -> str:
-    """Path of the Podman API socket inside the Podman VM (what a bind mount source refers to)."""
-    try:
-        out = subprocess.run(["podman", "info", "--format", "{{.Host.RemoteSocket.Path}}"], capture_output=True,
-                             text=True, timeout=30, check=True).stdout.strip()
-        return out.removeprefix("unix://") or "/var/run/docker.sock"
-    except (OSError, subprocess.SubprocessError):
-        return "/var/run/docker.sock"
+def _container_socket() -> str:
+    """The engine's API socket inside its VM (what a bind mount source refers to)."""
+    return engine.socket()
 
 
 def _ensure_env(p: Paths, created: list[str]) -> None:
@@ -236,7 +231,7 @@ def _ensure_env(p: Paths, created: list[str]) -> None:
         "REPLICANT_LOCAL_RUNTIME": "runc",
         "REPLICANT_MAX_CONCURRENT_RUNS": "2",
         "REPLICANT_OTEL_DISABLED": "true",
-        "REPLICANT_CONTAINER_SOCKET": _podman_socket(),
+        "REPLICANT_CONTAINER_SOCKET": _container_socket(),
         "REPLICANT_CONTAINER_HOST": "unix:///var/run/docker.sock",
         "REPLICANT_KATA": "off",
         "REPLICANT_GVISOR": "off",

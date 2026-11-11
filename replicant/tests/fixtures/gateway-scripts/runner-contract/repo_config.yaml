@@ -1,0 +1,25 @@
+# runner-local contract scenario repo_config (RC-REPO-CFG, design §8c): the repo carries .claude/settings.json (a PostToolUse
+# hook and a Bash(curl:*) allow rule), .claude/rules, a nested CLAUDE.md and .mcp.json. Read under internal/ledger (nested
+# CLAUDE.md loads), try curl (the managed deny wins), apply the canned fix (the repo hook runs), then report.
+schema: replicant.gateway-script/v1
+name: runner-contract-repo-config
+protocol: anthropic_messages
+finish: "Done."
+turns:
+  - respond:
+      tool_use: {name: Read, input: {file_path: "${cwd}/internal/ledger/ledger.go"}}
+      usage: {input_tokens: 9000, output_tokens: 60}
+  - respond:
+      tool_use: {name: Bash, input: {command: "curl -s https://example.invalid/", description: "Try a denied command"}}
+      usage: {input_tokens: 9500, output_tokens: 40}
+  - respond:
+      tool_use:
+        name: Edit
+        input:
+          file_path: "${cwd}/internal/ledger/ledger.go"
+          old_string: "\t\tfxReversal := c.FXFeeMinor\n"
+          new_string: "\t\tfxReversal := Prorate(c.FXFeeMinor, refundMinor, c.AmountMinor)\n"
+      usage: {input_tokens: 11000, output_tokens: 120}
+  - respond:
+      structured_output_from: implementer.agent_report.json
+      usage: {input_tokens: 12000, output_tokens: 200}

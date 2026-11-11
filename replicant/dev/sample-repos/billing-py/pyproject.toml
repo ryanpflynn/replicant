@@ -1,0 +1,23 @@
+[project]
+name = "billing-py"
+version = "0.1.0"
+description = "Invoice totals for the billing service (sample repository for the local Replicant stack)."
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8.3", "ruff>=0.11"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

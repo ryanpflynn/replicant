@@ -142,6 +142,7 @@
               "unit",
               "integration",
               "build",
+              "lint",
               "image_build",
               "sbom",
               "secret_scan",
@@ -175,6 +176,29 @@
           "duration_seconds": {
             "type": "number",
             "minimum": 0
+          },
+          "cause": {
+            "description": "Why a failed stage failed (onboarding-interfaces.md section 3 probe_failure causes).",
+            "type": "string",
+            "enum": [
+              "missing_tool",
+              "network",
+              "timeout",
+              "test_failure",
+              "build_failure",
+              "install_failure",
+              "lint_failure"
+            ]
+          },
+          "detail": {
+            "description": "E.g. the missing binary's name or the unreachable host.",
+            "type": "string",
+            "maxLength": 256
+          },
+          "command": {
+            "description": "The repo command the stage ran (environment.commands), when not a built-in stage.",
+            "type": "string",
+            "maxLength": 4096
           }
         }
       }

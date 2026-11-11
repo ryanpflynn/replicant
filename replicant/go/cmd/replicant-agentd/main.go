@@ -72,6 +72,7 @@ type Agent struct {
 	prepared        bool
 	finished        bool
 	manifestWritten bool
+	instructions    []ipc.InstructionsReport // InstructionsLoaded reports (§8c), capped at maxInstructionReports
 
 	steerMu  sync.Mutex
 	steering []ipc.SteeringMessage

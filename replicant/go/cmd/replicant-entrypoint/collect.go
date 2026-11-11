@@ -76,6 +76,7 @@ func synthReport(role, reason string) map[string]any {
 // finalize implements §4.5 finalize steps 1–8 and returns the exit code.
 func (rc *runCtx) finalize(ctx context.Context, forced int, cliExit string) int {
 	killAll(rc)
+	rc.loadInstructions(ctx) // cli.instruction_files_loaded, from the managed InstructionsLoaded hook
 	p := rc.plan
 	role := p.Role
 	code := forced

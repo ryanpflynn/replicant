@@ -9,6 +9,7 @@
 #   tests/smoke/smoke.sh down       # stop and remove every ctl-* container, volume and network
 # Containers are prefixed ctl-. Secrets live in $CTL_HOME/secrets and are never printed.
 set -eu
+ENGINE="${REPLICANT_CONTAINER_CLI:-podman}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../../../.." && pwd)"
 CTL_HOME="${CTL_HOME:-${TMPDIR:-/tmp}/ctl-smoke}"; export CTL_HOME
@@ -20,8 +21,8 @@ PY="${PYTHON:-python3}"
 
 if [ "${1:-}" = down ]; then
   pkill -f "stub_worker.py" 2>/dev/null || true
-  podman rm -f -v ctl-cpa ctl-grants ctl-gi ctl-broker ctl-gitea >/dev/null 2>&1 || true
-  podman volume rm ctl-gitea-data ctl-gitea-config >/dev/null 2>&1 || true
+  "$ENGINE" rm -f -v ctl-cpa ctl-grants ctl-gi ctl-broker ctl-gitea >/dev/null 2>&1 || true
+  "$ENGINE" volume rm ctl-gitea-data ctl-gitea-config >/dev/null 2>&1 || true
   "$HERE/env.sh" down
   exit 0
 fi
@@ -49,8 +50,8 @@ fi
 chmod 0644 "$SEC"/* "$CTL_HOME/run-grant-jwks.json"   # containers run as non-root uids; the dir stays 0700 for others
 
 step "2. gitea + PLATFORM v0 bootstrap (org acme-payments, repo ledger-api, label replicant, org webhook)"
-if ! podman container exists ctl-gitea; then
-  podman run -d --name ctl-gitea --network $NET --network-alias git.replicant.localhost -p 127.0.0.1:53300:3300 \
+if ! "$ENGINE" container inspect ctl-gitea >/dev/null 2>&1; then
+  "$ENGINE" run -d --name ctl-gitea --network $NET --network-alias git.replicant.localhost -p 127.0.0.1:53300:3300 \
     -e GITEA__server__HTTP_PORT=3300 -e GITEA__server__ROOT_URL=http://git.replicant.localhost:3300/ \
     -e GITEA__server__DOMAIN=git.replicant.localhost -e GITEA__server__DISABLE_SSH=true -e GITEA__database__DB_TYPE=sqlite3 \
     -e GITEA__security__INSTALL_LOCK=true -e GITEA__security__ALLOWED_HOST_LIST=private \
@@ -58,10 +59,10 @@ if ! podman container exists ctl-gitea; then
     -e GITEA__service__REQUIRE_SIGNIN_VIEW=true -e GITEA__repository__DEFAULT_BRANCH=main -e GITEA__webhook__DELIVER_TIMEOUT=10 \
     -v ctl-gitea-data:/var/lib/gitea -v ctl-gitea-config:/etc/gitea "$GITEA_IMAGE" >/dev/null
 fi
-i=0; until podman exec ctl-gitea wget -q -O /dev/null http://127.0.0.1:3300/api/healthz 2>/dev/null; do
+i=0; until "$ENGINE" exec ctl-gitea wget -q -O /dev/null http://127.0.0.1:3300/api/healthz 2>/dev/null; do
   i=$((i+1)); [ $i -gt 60 ] && { echo "gitea not healthy"; exit 1; }; sleep 2; done
 # curl resolves *.localhost to loopback itself, so the bootstrap talks to the container name (see INTERFACES-LOG)
-podman run --rm --name ctl-gitea-bootstrap --network $NET --entrypoint /bin/sh \
+"$ENGINE" run --rm --name ctl-gitea-bootstrap --network $NET --entrypoint /bin/sh \
   -e GITEA_ADMIN_PASSWORD_FILE=/run/secrets/gitea_admin_password -e GITEA_BOT_PASSWORD_FILE=/run/secrets/gitea_bot_password \
   -e GITEA_URL=http://ctl-gitea:3300 -e GITEA_WEBHOOK_SECRET_FILE=/run/secrets/gitea_webhook_secret \
   -e GITEA_WEBHOOK_URL=http://github-integration:8080/webhooks/gitea -e GITEA_ORG=acme-payments -e GITEA_SAMPLE_REPOS=ledger-api \
@@ -74,7 +75,7 @@ step "3. CONTROL services"
 COMMON="-e REPLICANT_ENV=local -e REPLICANT_ORG=local -e REPLICANT_LOG_FORMAT=json -e REPLICANT_TEMPORAL_ADDRESS=ctl-temporal:7233 \
  -e REPLICANT_TEMPORAL_NAMESPACE=replicant-local -e REPLICANT_TEMPORAL_TLS=false -e REPLICANT_WORKER_BUILD_ID=$BUILD \
  -e REPLICANT_WEB_ORIGIN=http://app.replicant.localhost:8400 -v $SEC:/run/secrets:ro"
-podman container exists ctl-broker || podman run -d --name ctl-broker --network $NET --network-alias github-token-broker $COMMON \
+"$ENGINE" container inspect ctl-broker >/dev/null 2>&1 || "$ENGINE" run -d --name ctl-broker --network $NET --network-alias github-token-broker $COMMON \
   -e REPLICANT_HTTP_PORT=8080 -e REPLICANT_BROKER_CALLERS_FILE=/etc/replicant/broker-callers.yaml \
   -e REPLICANT_BROKER_CALLER_TOKENS_FILE=/run/secrets/broker_caller_tokens \
   -e REPLICANT_BROKER_GITEA_BASE_URL=http://git.replicant.localhost:3300 -e REPLICANT_BROKER_GITEA_BOT_USER=replicant-bot \
@@ -83,20 +84,20 @@ podman container exists ctl-broker || podman run -d --name ctl-broker --network 
   -e REPLICANT_DB_PASSWORD_FILE=/run/secrets/db_svc_github_token_broker \
   -v "$ROOT/dev/compose/config/github-token-broker/broker-callers.yaml:/etc/replicant/broker-callers.yaml:ro" \
   localhost/replicant/github-token-broker:dev >/dev/null
-podman container exists ctl-cpa || podman run -d --name ctl-cpa --network $NET --network-alias control-plane-api \
+"$ENGINE" container inspect ctl-cpa >/dev/null 2>&1 || "$ENGINE" run -d --name ctl-cpa --network $NET --network-alias control-plane-api \
   --network-alias api.replicant.localhost -p 127.0.0.1:58401:8401 $COMMON -e REPLICANT_HTTP_PORT=8401 \
   -e REPLICANT_DB_DSN=postgresql+psycopg://svc_control_plane_api@ctl-pg:5432/replicant \
   -e REPLICANT_DB_PASSWORD_FILE=/run/secrets/db_svc_control_plane_api -e REPLICANT_DEV_SEED_TOKEN_FILE=/run/secrets/dev_seed_token \
   -e REPLICANT_INTERNAL_CALLER_TOKENS_FILE=/run/secrets/control_plane_internal_callers \
   localhost/replicant/control-plane-api:dev >/dev/null
-podman container exists ctl-grants || podman run -d --name ctl-grants --network $NET --network-alias grants.replicant.localhost \
+"$ENGINE" container inspect ctl-grants >/dev/null 2>&1 || "$ENGINE" run -d --name ctl-grants --network $NET --network-alias grants.replicant.localhost \
   -p 127.0.0.1:58403:8403 $COMMON -e REPLICANT_HTTP_PORT=8403 \
   -e REPLICANT_DB_DSN=postgresql+psycopg://svc_control_plane_api@ctl-pg:5432/replicant \
   -e REPLICANT_DB_PASSWORD_FILE=/run/secrets/db_svc_control_plane_api -e REPLICANT_RUN_GRANT_JWKS_SOURCE=file \
   -e REPLICANT_RUN_GRANT_JWKS_FILE=/etc/replicant/run-grant-jwks.json \
   -v "$CTL_HOME/run-grant-jwks.json:/etc/replicant/run-grant-jwks.json:ro" \
   localhost/replicant/control-plane-api:dev control-plane-api serve-grants --port 8403 >/dev/null
-podman container exists ctl-gi || podman run -d --name ctl-gi --network $NET --network-alias github-integration \
+"$ENGINE" container inspect ctl-gi >/dev/null 2>&1 || "$ENGINE" run -d --name ctl-gi --network $NET --network-alias github-integration \
   -p 127.0.0.1:58080:8080 $COMMON -e REPLICANT_HTTP_PORT=8080 \
   -e REPLICANT_DB_DSN=postgresql+psycopg://svc_github_integration@ctl-pg:5432/replicant \
   -e REPLICANT_DB_PASSWORD_FILE=/run/secrets/db_svc_github_integration \
@@ -107,8 +108,8 @@ podman container exists ctl-gi || podman run -d --name ctl-gi --network $NET --n
   -e REPLICANT_S3_ENDPOINT= localhost/replicant/github-integration:dev >/dev/null
 for c in ctl-broker:8080 ctl-cpa:8401 ctl-grants:8403 ctl-gi:8080; do
   n="${c%%:*}"; p="${c##*:}"; path=/readyz; i=0
-  until podman exec "$n" python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:$p$path',timeout=3)" 2>/dev/null; do
-    i=$((i+1)); [ $i -gt 40 ] && { echo "$n not ready"; podman logs --tail 20 "$n"; exit 1; }; sleep 2; done
+  until "$ENGINE" exec "$n" python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:$p$path',timeout=3)" 2>/dev/null; do
+    i=$((i+1)); [ $i -gt 40 ] && { echo "$n not ready"; "$ENGINE" logs --tail 20 "$n"; exit 1; }; sleep 2; done
   echo "$n ready"
 done
 

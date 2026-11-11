@@ -22,6 +22,11 @@ var alwaysDenied = []string{"WebFetch", "WebSearch", "NotebookEdit", "EnterWorkt
 
 var taskTools = []string{"TaskCreate", "TaskGet", "TaskList", "TaskUpdate"}
 
+// skillsAllowed: with the repo's configuration in use, the Skill tool is on unless the agent definition denies it.
+func skillsAllowed(p *sandbox.RunPlan) bool {
+	return p.RepoConfigUse() && !slices.Contains(p.Agent.Tools.DenyTools, "Skill")
+}
+
 // toolLists renders --tools and --disallowedTools (§2.3 "Rendering of tools").
 func toolLists(p *sandbox.RunPlan) (tools, disallowed []string) {
 	t := p.Agent.Tools
@@ -42,6 +47,10 @@ func toolLists(p *sandbox.RunPlan) (tools, disallowed []string) {
 	}
 	tools = append(tools, taskTools...)
 	disallowed = append([]string{}, alwaysDenied...)
+	if skillsAllowed(p) { // repo skills are the team's know-how (design §8c, ONBOARD-D skills)
+		tools = append(tools, "Skill")
+		disallowed = slices.DeleteFunc(disallowed, func(s string) bool { return s == "Skill" })
+	}
 	if !t.Edit {
 		disallowed = append(disallowed, "Edit", "Write")
 	}
@@ -94,6 +103,10 @@ func managedSettings(p *sandbox.RunPlan, mcp []mcpEntry) map[string]any {
 		deny = append(deny, "Agent")
 	}
 	allow = append(allow, taskTools...)
+	if skillsAllowed(p) {
+		allow = append(allow, "Skill")
+	}
+	auto := autoAllowedMCP(p, mcp)
 	for _, m := range mcp {
 		if len(m.allow) == 0 {
 			allow = append(allow, "mcp__"+m.name+"__*")
@@ -105,6 +118,9 @@ func managedSettings(p *sandbox.RunPlan, mcp []mcpEntry) map[string]any {
 			deny = append(deny, "mcp__"+m.name+"__"+d)
 		}
 	}
+	for _, a := range auto {
+		allow = append(allow, "mcp__"+a.Name+"__*")
+	}
 	for _, d := range t.DenyTools {
 		if !slices.Contains(deny, d) {
 			deny = append(deny, d)
@@ -114,29 +130,68 @@ func managedSettings(p *sandbox.RunPlan, mcp []mcpEntry) map[string]any {
 	hook := func(name string) []map[string]any {
 		return []map[string]any{{"type": "command", "command": "/opt/replicant/bin/replicant-entrypoint hook " + name, "timeout": 10}}
 	}
+	allowedMCP := []map[string]any{{"serverUrl": "http://127.0.0.1:7801/*"}}
+	for _, a := range auto {
+		allowedMCP = append(allowedMCP, map[string]any{"serverCommand": append([]string{a.Command}, a.Args...)})
+	}
+	use := p.RepoConfigUse()
+	// repo_config use (§8c): project settings load under these managed settings. Repo hooks run (the managed ones stay),
+	// nested CLAUDE.md files under /workspace load natively; permission rules and .mcp.json stay platform-only.
+	claudeMdExcludes := []string{"/workspace/**", "/home/agent/**"}
+	env := map[string]string{"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "CLAUDE_CODE_DISABLE_WEB_FETCH": "1",
+		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
+	if use {
+		claudeMdExcludes = []string{"/home/agent/**"}
+		// managed env outranks project settings env: pin what the platform owns (gateway, models, telemetry content)
+		for k, v := range pinnedEnv(p) {
+			env[k] = v
+		}
+	}
 	return map[string]any{
 		"permissions": map[string]any{
 			"defaultMode": "dontAsk", "disableBypassPermissionsMode": "disable", "disableAutoMode": "disable",
 			"allow": allow, "deny": deny,
 		},
-		"allowManagedHooksOnly":           true,
+		"allowManagedHooksOnly":           !use,
 		"allowManagedPermissionRulesOnly": true,
 		"allowManagedMcpServersOnly":      true,
-		"allowedMcpServers":               []map[string]string{{"serverUrl": "http://127.0.0.1:7801/*"}},
+		"allowedMcpServers":               allowedMCP,
 		"hooks": map[string]any{
 			"InstructionsLoaded": []map[string]any{{"hooks": hook("instructions-loaded")}},
 			"PreToolUse":         []map[string]any{{"matcher": "Edit|Write|NotebookEdit", "hooks": hook("guard-paths")}},
 			"SessionEnd":         []map[string]any{{"hooks": hook("session-end")}},
 		},
 		"pluginConfigs":          map[string]any{"cc-plugin-agents-md@builtin": map[string]any{"options": map[string]any{"instructionFiles": "managed-only"}}},
-		"claudeMdExcludes":       []string{"/workspace/**", "/home/agent/**"},
+		"claudeMdExcludes":       claudeMdExcludes,
 		"disabledMcpjsonServers": []string{"*"},
 		"autoMemoryEnabled":      false,
 		"cleanupPeriodDays":      30,
-		"env": map[string]string{"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "CLAUDE_CODE_DISABLE_WEB_FETCH": "1",
-			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"},
+		"env":                    env,
 	}
 }
+
+// autoAllowedMCP is the plan's mcp_auto_allow list (repo .mcp.json stdio servers of catalogue class auto_allow, §8c)
+// when repo_config is use; names that are invalid, repeated or taken by a platform server are dropped.
+func autoAllowedMCP(p *sandbox.RunPlan, platform []mcpEntry) []sandbox.MCPAutoAllow {
+	if !p.RepoConfigUse() {
+		return nil
+	}
+	seen := map[string]bool{}
+	for _, m := range platform {
+		seen[m.name] = true
+	}
+	var out []sandbox.MCPAutoAllow
+	for _, a := range p.MCPAutoAllow {
+		if !mcpNameRe.MatchString(a.Name) || a.Command == "" || seen[a.Name] {
+			continue
+		}
+		seen[a.Name] = true
+		out = append(out, a)
+	}
+	return out
+}
+
+var mcpNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 type mcpEntry struct {
 	name, url   string
@@ -178,6 +233,13 @@ func renderManaged(dir string, p *sandbox.RunPlan, bs *sandbox.Bootstrap) error 
 	for _, m := range mcp {
 		servers[m.name] = map[string]string{"type": "http", "url": m.url}
 	}
+	for _, a := range autoAllowedMCP(p, mcp) {
+		args := a.Args
+		if args == nil {
+			args = []string{}
+		}
+		servers[a.Name] = map[string]any{"type": "stdio", "command": a.Command, "args": args}
+	}
 	if err := writeJSONFile(filepath.Join(cc, "managed-settings.json"), managedSettings(p, mcp), 0o444); err != nil {
 		return err
 	}
@@ -213,27 +275,7 @@ func cliEnv(p *sandbox.RunPlan, traceparent string) []string {
 		}
 		env[k] = v
 	}
-	m := p.Agent.Model
-	small := m.Small
-	if small == "" {
-		small = m.Primary
-	}
-	sub := m.Subagent
-	if sub == "" {
-		sub = m.Primary
-	}
-	maxOut := "32000"
-	if m.Parameters.MaxOutputTokens > 0 {
-		maxOut = fmt.Sprint(m.Parameters.MaxOutputTokens)
-	}
-	think := "8000"
-	if m.Parameters.ThinkingTokens > 0 {
-		think = fmt.Sprint(m.Parameters.ThinkingTokens)
-	}
-	timeout := "600000"
-	if p.Agent.Gateway.RequestTimeoutSeconds > 0 {
-		timeout = fmt.Sprint(p.Agent.Gateway.RequestTimeoutSeconds * 1000)
-	}
+	me := modelEnv(p)
 	bashDef, bashMax, bashOut := "300000", "1800000", "30000"
 	if s := p.Agent.Tools.Shell; s.DefaultTimeoutSeconds > 0 {
 		bashDef = fmt.Sprint(s.DefaultTimeoutSeconds * 1000)
@@ -246,10 +288,10 @@ func cliEnv(p *sandbox.RunPlan, traceparent string) []string {
 	}
 	set := map[string]string{
 		"HOME": sandbox.HomeDir, "CLAUDE_CONFIG_DIR": sandbox.HomeDir + "/.claude", "CLAUDE_CODE_PROJECT_DIR_NAME": "replicant-workspace",
-		"CLAUDE_CODE_SHELL": "/bin/bash", "ANTHROPIC_BASE_URL": "http://127.0.0.1:7800/anthropic",
-		"ANTHROPIC_AUTH_TOKEN": "replicant-loopback-placeholder", "ANTHROPIC_DEFAULT_HAIKU_MODEL": small,
-		"CLAUDE_CODE_SUBAGENT_MODEL": sub, "CLAUDE_CODE_MAX_OUTPUT_TOKENS": maxOut, "MAX_THINKING_TOKENS": think,
-		"API_TIMEOUT_MS": timeout, "CLAUDE_CODE_MAX_RETRIES": "4", "CLAUDE_CODE_RETRY_WATCHDOG": "0",
+		"CLAUDE_CODE_SHELL": "/bin/bash", "ANTHROPIC_BASE_URL": gatewayBaseURL,
+		"ANTHROPIC_AUTH_TOKEN": gatewayAuthPlaceholder, "ANTHROPIC_DEFAULT_HAIKU_MODEL": me["ANTHROPIC_DEFAULT_HAIKU_MODEL"],
+		"CLAUDE_CODE_SUBAGENT_MODEL": me["CLAUDE_CODE_SUBAGENT_MODEL"], "CLAUDE_CODE_MAX_OUTPUT_TOKENS": me["CLAUDE_CODE_MAX_OUTPUT_TOKENS"],
+		"MAX_THINKING_TOKENS": me["MAX_THINKING_TOKENS"], "API_TIMEOUT_MS": me["API_TIMEOUT_MS"], "CLAUDE_CODE_MAX_RETRIES": "4", "CLAUDE_CODE_RETRY_WATCHDOG": "0",
 		"CLAUDE_CODE_PROPAGATE_TRACEPARENT": "1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_AUTOUPDATER": "1",
 		"DISABLE_UPDATES": "1", "DISABLE_ERROR_REPORTING": "1", "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
 		"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1", "CLAUDE_CODE_DISABLE_WEB_FETCH": "1",
@@ -268,8 +310,14 @@ func cliEnv(p *sandbox.RunPlan, traceparent string) []string {
 			set[k] = v
 		}
 	}
+	if p.RepoConfigUse() {
+		delete(set, "CLAUDE_CODE_DISABLE_CLAUDE_MDS") // nested CLAUDE.md and .claude/rules load natively (§8c)
+	}
 	for k, v := range set {
 		env[k] = v
+	}
+	if p.RepoConfigUse() {
+		delete(env, "CLAUDE_CODE_DISABLE_CLAUDE_MDS")
 	}
 	if p.Effective.Deterministic && p.Effective.GitIdentityDate != "" {
 		env["GIT_AUTHOR_DATE"], env["GIT_COMMITTER_DATE"], env["TZ"] = p.Effective.GitIdentityDate, p.Effective.GitIdentityDate, "UTC"
@@ -301,6 +349,54 @@ func cliEnv(p *sandbox.RunPlan, traceparent string) []string {
 	return out
 }
 
+const (
+	gatewayBaseURL         = "http://127.0.0.1:7800/anthropic"
+	gatewayAuthPlaceholder = "replicant-loopback-placeholder"
+)
+
+// modelEnv is the model part of the adapter's environment (§2.2).
+func modelEnv(p *sandbox.RunPlan) map[string]string {
+	m := p.Agent.Model
+	small := m.Small
+	if small == "" {
+		small = m.Primary
+	}
+	sub := m.Subagent
+	if sub == "" {
+		sub = m.Primary
+	}
+	maxOut := "32000"
+	if m.Parameters.MaxOutputTokens > 0 {
+		maxOut = fmt.Sprint(m.Parameters.MaxOutputTokens)
+	}
+	think := "8000"
+	if m.Parameters.ThinkingTokens > 0 {
+		think = fmt.Sprint(m.Parameters.ThinkingTokens)
+	}
+	timeout := "600000"
+	if p.Agent.Gateway.RequestTimeoutSeconds > 0 {
+		timeout = fmt.Sprint(p.Agent.Gateway.RequestTimeoutSeconds * 1000)
+	}
+	return map[string]string{"ANTHROPIC_DEFAULT_HAIKU_MODEL": small, "CLAUDE_CODE_SUBAGENT_MODEL": sub,
+		"CLAUDE_CODE_MAX_OUTPUT_TOKENS": maxOut, "MAX_THINKING_TOKENS": think, "API_TIMEOUT_MS": timeout}
+}
+
+// pinnedEnv is what managed settings pin when project settings load (repo_config use): a project settings `env`
+// block must not move the gateway, the models or the telemetry content settings.
+func pinnedEnv(p *sandbox.RunPlan) map[string]string {
+	env := modelEnv(p)
+	for k, v := range map[string]string{"ANTHROPIC_BASE_URL": gatewayBaseURL, "ANTHROPIC_AUTH_TOKEN": gatewayAuthPlaceholder,
+		"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "CLAUDE_CODE_DISABLE_WEB_FETCH": "1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+		"DISABLE_AUTOUPDATER": "1", "DISABLE_UPDATES": "1", "OTEL_LOG_USER_PROMPTS": "0", "OTEL_LOG_TOOL_DETAILS": "0",
+		"CLAUDE_CODE_SHELL": "/bin/bash"} {
+		env[k] = v
+	}
+	return env
+}
+
+// effortLevels are the --effort values of the pinned CLI (2.1.310 `claude --help`: low, medium, high, xhigh, max).
+var effortLevels = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true, "max": true}
+
 // cliArgv renders §2.1 (exec form, never a shell).
 func cliArgv(p *sandbox.RunPlan, runID, schemaJSON, promptFile string) []string {
 	bin := "/opt/replicant/cli/claude-code/" + cliVersion() + "/claude"
@@ -313,13 +409,21 @@ func cliArgv(p *sandbox.RunPlan, runID, schemaJSON, promptFile string) []string 
 	if len(p.Agent.Model.Fallbacks) > 0 {
 		argv = append(argv, "--fallback-model", strings.Join(p.Agent.Model.Fallbacks, ","))
 	}
+	if e := p.Agent.Model.Parameters.ReasoningEffort; effortLevels[e] {
+		argv = append(argv, "--effort", e)
+	}
 	if maxTurns > 0 {
 		argv = append(argv, "--max-turns", fmt.Sprint(maxTurns))
 	}
 	if p.Effective.BudgetUSD > 0 {
 		argv = append(argv, "--max-budget-usd", fmt.Sprintf("%.2f", p.Effective.BudgetUSD))
 	}
-	argv = append(argv, "--permission-mode", "dontAsk", "--setting-sources", "user")
+	if p.RepoConfigUse() {
+		// project settings under the managed ones; hook lifecycle events feed cli.repo_config.hooks (§8c)
+		argv = append(argv, "--permission-mode", "dontAsk", "--setting-sources", "user,project", "--include-hook-events")
+	} else {
+		argv = append(argv, "--permission-mode", "dontAsk", "--setting-sources", "user")
+	}
 	if promptFile != "" {
 		if (p.Role == "planner" || p.Role == "reviewer") && promptMode(p) == "replace" {
 			argv = append(argv, "--system-prompt-file", promptFile)

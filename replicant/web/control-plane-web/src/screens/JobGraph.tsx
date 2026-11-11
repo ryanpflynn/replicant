@@ -1,6 +1,7 @@
 // Job detail → Graph tab (GRAPH-*): the job's C-DEF graph coloured by node status, a node panel with its visits and
 // runs, and the selected run's agent activity (assistant messages, tool calls with commands/paths/diffs, results,
 // gateway usage), polled while the run is live. URL state: /jobs/:id/graph?node=<key>&run=<run_id>.
+import { RepoConfigPanel } from "../components/RepoConfigPanel";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Glyph } from "../components/Glyph";
@@ -273,6 +274,7 @@ export function RunActivity({ jobId, runId }: { jobId: string; runId: string }) 
       </div>
       {d.result?.summary ? <div className="gsum"><span className="t3 small">Agent report{d.result.outcome ? ` · ${d.result.outcome}` : ""}</span><p>{d.result.summary}</p>
         {d.result.changes?.files_changed != null ? <p className="small t2">{d.result.changes.files_changed} file{d.result.changes.files_changed === 1 ? "" : "s"} changed <span className="a-mark">+{d.result.changes.insertions ?? 0}</span> <span className="d-mark">−{d.result.changes.deletions ?? 0}</span> {d.result.changes.paths?.map((p) => <span key={p} className="tag mono">{p}</span>)}</p> : null}</div> : null}
+      <RepoConfigPanel cli={d.result?.cli} />
       <div className="row g1 gfilt" role="radiogroup" aria-label="Filter activity">
         {FILTERS.map(([k, label]) => <button key={k} role="radio" aria-checked={filter === k} className={"chip" + (filter === k ? " on" : "")} onClick={() => setFilter(k)}>{label}</button>)}
         {d.items_dropped ? <span className="t3 small">{d.items_dropped} earlier items not shown</span> : null}

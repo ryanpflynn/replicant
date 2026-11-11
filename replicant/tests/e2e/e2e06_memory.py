@@ -80,9 +80,7 @@ for k in keys:
                     'snapshot': m.get('memory_snapshot_id'), 'rendered': r, 'first_message': fm}})
 print(json.dumps(sorted(out, key=lambda x: x['created_at'] or '')))
 """
-    cid = subprocess.run(["podman", "ps", "-q", "--filter", "label=com.docker.compose.service=replicant-worker"],
-                         capture_output=True, text=True).stdout.split()[0]
-    r = subprocess.run(["podman", "exec", cid, "python", "-c", code], capture_output=True, text=True, timeout=120)
+    r = subprocess.run([e.ENGINE, "exec", e.container("replicant-worker"), "python", "-c", code], capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stderr[-500:]
     return json.loads(r.stdout.strip().splitlines()[-1])
 
@@ -270,9 +268,7 @@ import asyncio, json
 from replicant_worker.activities.memory import mem
 print(json.dumps(asyncio.run(mem({path!r}, json.loads({json.dumps(body)!r})))))
 """
-    cid = subprocess.run(["podman", "ps", "-q", "--filter", "label=com.docker.compose.service=replicant-worker"],
-                         capture_output=True, text=True).stdout.split()[0]
-    r = subprocess.run(["podman", "exec", cid, "python", "-c", code], capture_output=True, text=True, timeout=120)
+    r = subprocess.run([e.ENGINE, "exec", e.container("replicant-worker"), "python", "-c", code], capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stderr[-500:]
     return json.loads(r.stdout.strip().splitlines()[-1])
 
@@ -351,9 +347,7 @@ keys = [o['Key'] for p in c.get_paginator('list_objects_v2').paginate(Bucket=b, 
         if o['Key'].endswith('/memory_candidates/extracted.json')]
 print(json.dumps(json.loads(c.get_object(Bucket=b, Key=keys[0])['Body'].read())))
 """
-    cid = subprocess.run(["podman", "ps", "-q", "--filter", "label=com.docker.compose.service=replicant-worker"],
-                         capture_output=True, text=True).stdout.split()[0]
-    r = subprocess.run(["podman", "exec", cid, "python", "-c", code], capture_output=True, text=True, timeout=120)
+    r = subprocess.run([e.ENGINE, "exec", e.container("replicant-worker"), "python", "-c", code], capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stderr[-500:]
     return json.loads(r.stdout.strip().splitlines()[-1])
 

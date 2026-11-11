@@ -22,7 +22,9 @@ ROOT = Path(__file__).resolve().parents[3]
 SECRETS = ROOT / "dev" / ".secrets" / "secrets"
 API = os.environ.get("REPLICANT_API_URL", "http://127.0.0.1:8401")
 GITEA = os.environ.get("REPLICANT_GITEA_URL", "http://127.0.0.1:3300")
-ORG, REPO, TENANT = "acme-payments", "ledger-api", "payments"
+ORG, REPO, TENANT = "acme-payments", "ledger-api", "payments"  # REPO: the default repo of every helper
+# Gitea sample repos (dev/sample-repos, bootstrap-v0.sh); the onboarding ones (design §8c) are in project prj_payments-web
+SAMPLE_REPOS = ("ledger-api", "billing-py", "web-console")
 REQUESTER = os.environ.get("E2E_REQUESTER", "alice")
 APPROVER = os.environ.get("E2E_APPROVER", "bob")
 READER = os.environ.get("E2E_READER", "grace")
@@ -30,11 +32,22 @@ ACK_TIMEOUT_S = 60
 JOB_TIMEOUT_S = float(os.environ.get("E2E_JOB_TIMEOUT_S", "1800"))
 JOB_RE = re.compile(r"\bjob_[0-9a-hjkmnp-tv-z]{26}\b")
 TERMINAL = {"succeeded", "failed", "cancelled", "rejected", "expired", "taken_over"}
+ENGINE = os.environ.get("REPLICANT_CONTAINER_CLI", "podman")  # set by `replicant dev`: podman | docker
 
 
 
 
 TAG = "e2e"  # log prefix; drivers set replicant_e2e.TAG
+
+
+def container(service: str) -> str:
+    """Id of the container of a compose service, running or not (both compose implementations set these labels; the
+    container names differ: replicant_<svc>_1 under podman-compose, replicant-<svc>-1 under docker compose)."""
+    r = subprocess.run([ENGINE, "ps", "-a", "-q", "--filter", "label=com.docker.compose.project=replicant",
+                        "--filter", f"label=com.docker.compose.service={service}"], capture_output=True, text=True)
+    ids = r.stdout.split()
+    assert ids, f"compose service {service} has no container"
+    return ids[0]
 
 
 def log(msg: str) -> None:
@@ -61,31 +74,31 @@ def ok(r: httpx.Response, what: str) -> httpx.Response:
     return r
 
 
-def issue_text() -> tuple[str, str]:
-    raw = (ROOT / "dev" / "sample-repos" / REPO / "ISSUES" / "001.md").read_text()
+def issue_text(repo: str = REPO) -> tuple[str, str]:
+    raw = (ROOT / "dev" / "sample-repos" / repo / "ISSUES" / "001.md").read_text()
     _, fm, body = raw.split("---", 2)
     return yaml.safe_load(fm)["title"], body.strip()
 
 
-def open_issue(run_tag: str) -> tuple[int, float]:
-    title, body = issue_text()
+def open_issue(run_tag: str, repo: str = REPO) -> tuple[int, float]:
+    title, body = issue_text(repo)
     with gitea() as g:
-        labels = ok(g.get(f"/repos/{ORG}/{REPO}/labels", params={"limit": 50}), "labels").json()
+        labels = ok(g.get(f"/repos/{ORG}/{repo}/labels", params={"limit": 50}), "labels").json()
         label_id = next(lb["id"] for lb in labels if lb["name"] == "replicant")
     with gitea(sudo=REQUESTER) as g:
         t0 = time.monotonic()
-        r = ok(g.post(f"/repos/{ORG}/{REPO}/issues",
+        r = ok(g.post(f"/repos/{ORG}/{repo}/issues",
                       json={"title": title, "body": f"{body}\n\n<!-- {TAG} run {run_tag} -->", "labels": [label_id]}),
                "create issue")
     n = r.json()["number"]
-    log(f"opened issue #{n} as {REQUESTER} with label replicant")
+    log(f"opened issue #{n} on {repo} as {REQUESTER} with label replicant")
     return n, t0
 
 
-def wait_ack(number: int, t0: float) -> str:
+def wait_ack(number: int, t0: float, repo: str = REPO) -> str:
     with gitea() as g:
         while time.monotonic() - t0 < ACK_TIMEOUT_S:
-            comments = ok(g.get(f"/repos/{ORG}/{REPO}/issues/{number}/comments"), "comments").json()
+            comments = ok(g.get(f"/repos/{ORG}/{repo}/issues/{number}/comments"), "comments").json()
             for c in comments:
                 if c["user"]["login"] == "replicant-bot":
                     m = JOB_RE.search(c["body"])
@@ -142,10 +155,10 @@ def approve(gate: dict) -> None:
         assert res.get("outcome", "accepted") in ("accepted", "duplicate"), res
 
 
-def wait_pr(job_id: str, deadline: float) -> dict:
+def wait_pr(job_id: str, deadline: float, repo: str = REPO) -> dict:
     with gitea() as g:
         while time.monotonic() < deadline:
-            prs = ok(g.get(f"/repos/{ORG}/{REPO}/pulls", params={"state": "open", "limit": 50}), "pulls").json()
+            prs = ok(g.get(f"/repos/{ORG}/{repo}/pulls", params={"state": "open", "limit": 50}), "pulls").json()
             for pr in prs:
                 if job_id in (pr.get("head") or {}).get("ref", "") or job_id in (pr.get("body") or ""):
                     return pr
@@ -153,13 +166,13 @@ def wait_pr(job_id: str, deadline: float) -> dict:
     raise AssertionError("no PR for the job")
 
 
-def merge(pr: dict) -> None:
+def merge(pr: dict, repo: str = REPO) -> None:
     with gitea(sudo=REQUESTER) as g:
-        r = g.post(f"/repos/{ORG}/{REPO}/pulls/{pr['number']}/merge",
+        r = g.post(f"/repos/{ORG}/{repo}/pulls/{pr['number']}/merge",
                    json={"Do": "merge", "merge_message_field": f"Merge #{pr['number']} ({TAG})"})
         if r.status_code >= 300:  # fall back to the site admin (no branch protection in v0)
             with gitea() as ga:
-                r = ok(ga.post(f"/repos/{ORG}/{REPO}/pulls/{pr['number']}/merge", json={"Do": "merge"}), "merge PR")
+                r = ok(ga.post(f"/repos/{ORG}/{repo}/pulls/{pr['number']}/merge", json={"Do": "merge"}), "merge PR")
     log(f"merged PR #{pr['number']}")
 
 
@@ -169,10 +182,7 @@ COMPARED = ("job_id", "tenant_id", "workflow_type", "status", "phase", "release_
 
 def temporal_snapshot(job_id: str) -> dict:
     """Query `job.snapshot` (C-MSG) on the ReplicantJob through the Temporal CLI inside the temporal container."""
-    name = subprocess.run(["podman", "ps", "-q", "--filter", "label=io.podman.compose.project=replicant",
-                           "--filter", "label=com.docker.compose.service=temporal"], capture_output=True, text=True)
-    cid = name.stdout.split()[0]
-    r = subprocess.run(["podman", "exec", cid, "temporal", "workflow", "query", "--address", "127.0.0.1:7233",
+    r = subprocess.run([ENGINE, "exec", container("temporal"), "temporal", "workflow", "query", "--address", "127.0.0.1:7233",
                         "-n", "replicant-local", "-w", job_id, "--type", "job.snapshot", "-o", "json"],
                        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, f"temporal query failed: {r.stderr[-300:]}"
@@ -236,6 +246,11 @@ def never(pred, what: str, duration: float, every: float = 2) -> None:  # noqa: 
         time.sleep(every)
 
 
+def gitea_repo_id(repo: str = REPO) -> str:
+    with gitea() as g:
+        return str(ok(g.get(f"/repos/{ORG}/{repo}"), f"repo {repo}").json()["id"])
+
+
 def open_jobs() -> list[dict]:
     with api(READER) as c:
         r = ok(c.get("/v1/jobs", params={"status": "queued,running,waiting_human,waiting_external,paused",
@@ -243,13 +258,13 @@ def open_jobs() -> list[dict]:
     return r.json()["items"]
 
 
-def reset_repo() -> str:
-    """Force main of acme-payments/ledger-api back to its initial commit (the planted bug), so each case is a real
+def reset_repo(repo: str = REPO) -> str:
+    """Force main of acme-payments/<repo> (default ledger-api) back to its initial commit (the planted bug), so each case is a real
     bugfix job on a stack that already merged a fix. Credentials go through GIT_CONFIG_* env, never argv."""
     auth = base64.b64encode(f"gitea-admin:{secret('gitea_admin_password')}".encode()).decode()
     env = {**os.environ, "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "http.extraHeader",
            "GIT_CONFIG_VALUE_0": f"Authorization: Basic {auth}", "GIT_TERMINAL_PROMPT": "0"}
-    url = f"{GITEA}/acme-payments/ledger-api.git"
+    url = f"{GITEA}/{ORG}/{repo}.git"
     with tempfile.TemporaryDirectory() as d:
         subprocess.run(["git", "clone", "-q", url, d], env=env, check=True, capture_output=True)
         root = subprocess.run(["git", "-C", d, "rev-list", "--max-parents=0", "HEAD"], capture_output=True, text=True,
@@ -308,18 +323,18 @@ def cleanup_memory(job_ids: list[str], reason: str) -> list[str]:
     return purge
 
 
-def ensure_claude_md(tag: str) -> None:
+def ensure_claude_md(tag: str, repo: str = REPO) -> None:
     """The sample repo ships CLAUDE.md, but reset_repo() goes back to the initial commit, which has none on older
     stacks: make sure main has it (an ordinary commit by the admin)."""
-    text = (ROOT / "dev" / "sample-repos" / REPO / "CLAUDE.md").read_text()
+    text = (ROOT / "dev" / "sample-repos" / repo / "CLAUDE.md").read_text()
     with gitea() as g:
-        r = g.get(f"/repos/{ORG}/{REPO}/contents/CLAUDE.md", params={"ref": "main"})
+        r = g.get(f"/repos/{ORG}/{repo}/contents/CLAUDE.md", params={"ref": "main"})
         body = {"content": base64.b64encode(text.encode()).decode(), "message": f"Add CLAUDE.md ({tag})",
                 "branch": "main"}
         if r.status_code == 200:
             if base64.b64decode(r.json()["content"]).decode() == text:
                 return
-            ok(g.put(f"/repos/{ORG}/{REPO}/contents/CLAUDE.md", json={**body, "sha": r.json()["sha"]}), "update CLAUDE.md")
+            ok(g.put(f"/repos/{ORG}/{repo}/contents/CLAUDE.md", json={**body, "sha": r.json()["sha"]}), "update CLAUDE.md")
         else:
-            ok(g.post(f"/repos/{ORG}/{REPO}/contents/CLAUDE.md", json=body), "create CLAUDE.md")
+            ok(g.post(f"/repos/{ORG}/{repo}/contents/CLAUDE.md", json=body), "create CLAUDE.md")
     log("main has CLAUDE.md")

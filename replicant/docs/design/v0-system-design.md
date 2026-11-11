@@ -536,6 +536,156 @@ flowchart LR
   - memory is best effort locally (a job never fails because memory is down);
   - the local repair budget is 2 cycles.
 
+## 8c. Repo onboarding and agent configuration at scale (proposed, 2026-11-10)
+
+**Status:** implemented on 2026-11-10 (ONBOARD-D1..D12, TIER-D1). This section reverses part of the spec's ADR-007
+stance, and records why. Verified by e2e08 against three sample repos: `ledger-api` (Go), `billing-py` (Python with a
+repo hook, rules, nested CLAUDE.md and `.mcp.json`) and `web-console` (Node, deliberately missing `vips`).
+
+### Today
+
+- **Where each run's configuration comes from.** Every agent run is configured entirely from the derived bundle:
+  - agent definitions (CLI and version, model, thinking budget, tools, limits);
+  - an environment definition (toolchain image, bootstrap steps);
+  - the project's pinned config.
+
+  The sandbox entrypoint turns these into Claude Code's own configuration:
+  - a read-only `managed-settings.json`;
+  - the `--tools` and `--disallowedTools` lists;
+  - `--permission-mode dontAsk` and `--setting-sources user`.
+- **What it ignores in the repo.** The entrypoint deletes pre-existing `.claude/` settings, agents, skills and
+  plugins. It also turns off the CLI's own CLAUDE.md loading. Only the root `CLAUDE.md`, `AGENTS.md` and
+  `copilot-instructions.md` are quoted, as untrusted context.
+- **Gaps:**
+  - **One environment.** v0 has one environment (Go), so a Python or Node repo gets the wrong toolchain.
+  - **Repo config is thrown away.** The team's hooks, path rules, nested CLAUDE.md files and skills are dropped, so
+    changes don't follow the team's own enforcement.
+  - **Fixed models.** Models and effort are the same for every project (Sonnet 5.5, 8k thinking), and the reviewer
+    is the same model as the implementer.
+  - **Nothing for scale.** There is no way to find out what thousands of repos need without debugging them one at
+    a time.
+
+### Principles
+
+1. **Use the repo's configuration, with the platform's limits on top.**
+   - The sandbox is the security boundary, so the repo's guidance and enforcement are used.
+   - Managed settings stay the ceiling: they take precedence over project settings, and the model, permission
+     mode, gateway and telemetry are always the platform's.
+2. **Repo config is trusted only from the protected base branch.**
+   - It is read at the base commit, never from the PR branch or the agent's own edits.
+   - The agent can't change `.claude/`, `CLAUDE.md` or `.mcp.json` during the run. A diff that touches them is
+     sensitive and goes to a human at the publish gate.
+3. **Classify across the fleet, not per repo.**
+   - Inventory everything automatically and deduplicate it across the fleet.
+   - Apply a safe default to each class.
+   - Approve once for the whole platform, and fix once in a shared image.
+4. **Rank by evidence.** Record what was loaded, skipped and failed in every job. Correlate it with outcomes, so
+   admins work on what matters first.
+
+```mermaid
+flowchart LR
+  subgraph Detect["1 · Inventory (no jobs)"]
+    REG["Repo registered /<br/>push to default branch<br/>touching config paths"] --> SCAN["Inventory scanner<br/>(SCM API, base branch)"]
+    SCAN --> INV[("Repo profile<br/>manifests · CI · devcontainer<br/>.claude/ · .mcp.json · pre-commit")]
+  end
+  subgraph Classify["2 · Classify (fleet-wide, deduplicated)"]
+    INV --> ENV["Environment inference<br/>(CI config > devcontainer > manifests)"]
+    INV --> CAT["Fleet catalogue<br/>MCP servers · hooks · toolchains"]
+    CAT --> POL["Class → default<br/>(auto-allow · skip · map to platform · review)"]
+  end
+  subgraph Ready["3 · Readiness probe (no LLM)"]
+    ENV --> PROBE["Sandbox: bootstrap ·<br/>build · test command"]
+    PROBE --> ST{"ready / warnings /<br/>blocked"}
+  end
+  subgraph Learn["4 · Evidence"]
+    JOBS["Every job records<br/>loaded · skipped · failed"] --> RANK["Impact ranking<br/>(occurrences × outcome delta)"]
+    PROBE -- "failures clustered" --> RANK
+  end
+  RANK --> QUEUE["Platform admin queue<br/>approve once · fix once"]
+  ST --> UIP["Project page:<br/>readiness + requests"]
+  UIP -- "request support" --> QUEUE
+```
+
+### Repo configuration at run time
+
+| Repo config | Behaviour | Why |
+|---|---|---|
+| Nested `CLAUDE.md` files, `.claude/rules/` | Loaded natively by the CLI. The quoting path is kept for `AGENTS.md` and `copilot-instructions.md`. | Claude gets the right guidance for the directory it's editing. |
+| Hooks in `.claude/settings.json` | Run inside the sandbox with no network. Each failure is classified (missing binary, network, timeout, non-zero exit) and reported. | Hooks are the team's own enforcement. |
+| Skills, commands, subagents | Loaded. | They carry the team's know-how. |
+| Other project settings (env vars, extra deny rules) | Loaded under managed settings. They can make the agent stricter, never looser. | |
+| `.mcp.json` servers | Skipped by default and recorded. Allowed only when the server's class (below) allows it. | They usually need personal credentials or network access. |
+| Model, permission mode, gateway URL, telemetry, `apiKeyHelper` | The platform's only (managed settings). | Cost, audit and the gateway depend on them. |
+| Pre-commit, lint and format configs | Run in QA and verify, using the repo's own commands. | They're the same checks a human's PR has to pass. |
+
+**Per-project opt-out.** The project's pinned config gets a `repo_config: use | ignore` setting. The default is
+`use`. `ignore` is for repos whose `.claude/` only works on a laptop.
+
+### MCP servers: classes, not allowlists
+
+Most coding jobs don't need repo MCP servers, and the platform provides memory, context, code search and docs
+itself. A server is identified by its package and version, or by its URL. It is approved once for the whole platform,
+never per repo.
+
+| Class | Example | Default |
+|---|---|---|
+| Local stdio, pinned package from the mirror, no network or credentials | a formatter or schema tool | Allowed automatically; the sandbox contains it. |
+| Has a platform equivalent | docs or code search | Replaced by the platform service. |
+| Needs an internal host | internal docs API | Skipped. It needs an egress rule, which is a platform change. |
+| Needs credentials | GitHub, Jira, databases | Skipped. It needs credential-broker integration. |
+| Unknown | — | Skipped and queued. |
+
+### Environments
+
+1. **Infer the environment.**
+   - Sources, by priority: CI workflow files (the best record of how a repo really builds and tests), then
+     `devcontainer.json`, `.tool-versions` and other version files, then manifests and lockfiles.
+   - The result is a standard environment: Go, Python (uv or pip), or Node (npm, pnpm or yarn), with a version.
+     It comes with the build, test and lint commands taken from CI.
+   - Codebase bindings can still override this explicitly.
+2. **Run the readiness probe** when a repo is registered and whenever its inventory changes. In the sandbox, with no
+   LLM, it runs the bootstrap, the build and the test command.
+3. **Cluster failures across the fleet** by cause, e.g. "60 repos need Node 22 and libvips". The fix lands once, in a
+   shared image.
+4. **Gate jobs on readiness.** A repo that is `blocked` doesn't accept jobs unless a project admin overrides it.
+
+### Models and effort
+
+- **Defaults by role.** These are starting points, adjusted from outcome metrics:
+
+  | Role | Model | Effort |
+  |---|---|---|
+  | Planner | Opus | high |
+  | Implementer | Sonnet | medium |
+  | Reviewer | a different model from the implementer | — |
+  | QA and triage | Haiku or Sonnet | low |
+
+- **Automatic escalation.** The implementer moves up to Opus on its second repair cycle, for high-risk jobs, or
+  after a failed attempt.
+- **Tiers, not model names.** Teams pick `standard` or `thorough` per workflow type in their pinned config. The
+  platform owns the menu of allowed models, the maximum effort and the cost ceilings. Model names stay platform
+  aliases, so retiring a model means changing one mapping.
+
+### What each job records
+
+Each run's report records:
+- a hash of the settings Claude actually ran with;
+- which repo config files were loaded;
+- which hooks ran and how failures were classified;
+- which MCP servers were skipped, and why;
+- any attempts to call a tool that wasn't available;
+- the tier and model used.
+
+The job view shows these, so "why did it do that?" has an answer. These records feed the impact ranking and the
+outcome metrics by agent version and tier: QA passing first time, review rejections, merge rate, repair cycles and
+cost.
+
+### Out of scope here
+
+- the config repo and bundle promotion pipeline;
+- the Claude Code upgrade conformance check;
+- credential-broker integration for MCP servers.
+
 ## 9. Security model (v0 subset)
 
 - **Tenant isolation.** The schema has RLS with FORCE on every tenant table: the WS-10 gate found 0 tables without
@@ -598,6 +748,7 @@ fix prorates the FX fee reversal, which is correct. The API key appeared in no c
 | Real Slack | Needs the app created from the manifest, `slack_bot_token` and `slack_signing_secret` secrets, `SLACK_API_URL` unset, and identity links | `services/slack-integration/README.md` |
 | Graph view | Gateway cost shows "pending" while a run is live (usage log is batched; tokens come from the transcript); the ~220 gitleaks rules are not applied in the API; Grafana links need the observability profile; repair-cycle visits counted per node, not per cycle; no `/runs/{run_id}/live` streaming endpoint | GRAPH-D1–D10 |
 | Audit | A rejected `audit.emit` is logged and the change proceeds (spec: fail the change) | CONTROL-D6 |
+| Repo onboarding | Done for Go, Python and Node (§8c). Not done: package mirrors (warm caches only), credential-broker integration for MCP servers, CI providers other than GitHub Actions and GitLab, the config repo and promotion pipeline, a Claude Code upgrade conformance check | §8c, ONBOARD-D* |
 | Spec follow-ups | About 70 `[unverified]` claims, R2 red-team partials, `tradeoffs.md` | `spec/90-reviews/known-issues.md` |
 
 ### 10.4 Operational notes

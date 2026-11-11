@@ -39,6 +39,19 @@ class ControlPlane:
             body = {"raw": r.text[:300]}
         return IntakeResponse(r.status_code, body)
 
+    async def put_profile(self, repo_id: str, profile: dict[str, Any]) -> int:
+        """Inventory scanner -> control-plane-api `PUT /internal/v1/repos/{repo_id}/profile` (ONBOARD-01 §1); the
+        same internal caller token as job submission (svc_github-integration)."""
+        tok = read_secret(self.s.control_plane_token_file)
+        headers = {"Content-Type": "application/json"}
+        if tok:
+            headers["Authorization"] = f"Bearer {tok}"
+        async with httpx.AsyncClient(base_url=self.s.control_plane_url, timeout=30, transport=self._transport) as c:
+            r = await c.put(f"/internal/v1/repos/{repo_id}/profile", json=profile, headers=headers)
+        if r.status_code >= 300:
+            log.warning("profile PUT %s: HTTP %s %s", repo_id, r.status_code, r.text[:200])
+        return r.status_code
+
 
 class Broker:
     """Installation tokens from github-token-broker (github-integration may hold issues/PR/checks write)."""

@@ -118,7 +118,14 @@ func (a *Agent) ipcHandler() http.Handler {
 	mux.HandleFunc("POST /v1/report/instructions", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(io.LimitReader(r.Body, 8192))
 		a.log.Info("instructions loaded", "report", string(b))
+		a.keepInstructions(b)
 		w.WriteHeader(204)
+	})
+	mux.HandleFunc("GET /v1/report/instructions", func(w http.ResponseWriter, r *http.Request) {
+		a.evMu.Lock()
+		out := ipc.Instructions{Reports: append([]ipc.InstructionsReport{}, a.instructions...)}
+		a.evMu.Unlock()
+		writeJSON(w, 200, out)
 	})
 	mux.HandleFunc("POST /v1/heartbeat:now", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
@@ -131,6 +138,21 @@ func (a *Agent) ipcHandler() http.Handler {
 		writeJSON(w, 200, out)
 	})
 	return mux
+}
+
+const maxInstructionReports = 200
+
+// keepInstructions keeps an InstructionsLoaded report so the entrypoint can fill cli.instruction_files_loaded (§8c).
+func (a *Agent) keepInstructions(b []byte) {
+	var rep ipc.InstructionsReport
+	if json.Unmarshal(b, &rep) != nil || rep.FilePath == "" {
+		return
+	}
+	a.evMu.Lock()
+	defer a.evMu.Unlock()
+	if len(a.instructions) < maxInstructionReports {
+		a.instructions = append(a.instructions, rep)
+	}
 }
 
 // uploaderHandler serves the private uploader-ipc socket (agentd and the uploader only).

@@ -39,18 +39,43 @@ async def load_bundle_core(a: dict[str, Any]) -> dict[str, Any]:
 async def graph_compose(a: dict[str, Any]) -> dict[str, Any]:
     b = bundles.load(a["release_bundle_id"])
     wt = a["workflow_type"]
-    if local_bundle.REPO_SCAN_LABEL in (a.get("labels") or []) and wt == "docs":
+    labels = a.get("labels") or []
+    if local_bundle.REPO_SCAN_LABEL in labels and wt == "docs":
         pin, doc = b.graph_variant(local_bundle.REPO_SCAN_GRAPH)  # MEM repo scan (MEM-D7)
+    elif local_bundle.READINESS_LABEL in labels and wt == "qa_only":
+        pin, doc = b.graph_variant(local_bundle.READINESS_GRAPH)  # design §8c readiness probe
     else:
         pin, doc = b.graph_for(wt)  # CONFIG: through the bundle's spec.graphs mapping
     base = parse_definition(doc, version=pin["version"], digest=pin["digest"])
     cat = registry.catalog_entries()
     g = compose(base, [], catalog=cat)  # no codebase bindings (graph modifiers) in M1
     validate_composed(base, g, catalog=cat)
-    env_name = "go-service"  # M1: the only environment; codebase bindings arrive with WS-04's catalog
+    env_name, source = select_environment(b, a.get("repo_profile"), a.get("repo_ref"))
     env_pin, _ = b.environment(env_name)
     return {"spec": g.to_json(), "composed_digest": g.composed_digest(), "environment": env_name,
-            "environment_digest": env_pin["digest"], "graph": {**pin, "kind": "graph"}}
+            "environment_digest": env_pin["digest"], "graph": {**pin, "kind": "graph"}, "environment_source": source}
+
+
+def select_environment(b: bundles.Bundle, repo_profile: dict[str, Any] | None,
+                       repo_ref: dict[str, Any] | None) -> tuple[str, str]:
+    """(environment name, source). Without a pinned repo_profile (jobs before §8c, replays): go-service, the M1
+    environment. With one: an explicit codebase binding's environment wins, then the profile's inferred environment;
+    either only when the bundle has that definition, else go-service (logged)."""
+    if not repo_profile:
+        return local_bundle.DEFAULT_ENVIRONMENT, "default"
+    binding = b.binding_for(repo_ref)
+    if binding and binding.get("environment"):
+        name = str(binding["environment"]).split("/", 1)[-1].split("@", 1)[0]
+        if b.has("environment", name):
+            return name, "binding"
+    name = str(repo_profile.get("environment") or "")
+    if name and b.has("environment", name):
+        return name, "repo_profile"
+    if not name:  # no supported ecosystem found (onboarding-interfaces.md §11): the old behaviour
+        return local_bundle.DEFAULT_ENVIRONMENT, "default"
+    activity.logger.warning("repo profile environment not in the bundle; using go-service",
+                            extra={"environment": name[:64], "profile_id": repo_profile.get("profile_id")})
+    return local_bundle.DEFAULT_ENVIRONMENT, "default"
 
 
 # ------------------------------------------------------------------------------------------------ router (rules only)

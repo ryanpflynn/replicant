@@ -9,7 +9,7 @@ import time
 
 import typer
 
-from replicant_cli import compose, secrets, testing
+from replicant_cli import compose, engine, secrets, testing
 from replicant_cli import prune as prunemod
 from replicant_cli import seed as seedmod
 from replicant_cli.paths import paths
@@ -27,6 +27,7 @@ def _guard() -> None:
     env = os.environ.get("REPLICANT_ENV", "local")
     if env != "local":
         raise typer.BadParameter(f"`replicant dev` runs only with REPLICANT_ENV=local (got {env!r})")
+    engine.export()
 
 
 def _closure(svcs: dict[str, compose.Service], wanted: list[str]) -> set[str]:
@@ -113,6 +114,7 @@ def up(
     if gateway not in (None, "script", "passthrough"):
         raise typer.BadParameter("--gateway must be script or passthrough")
     created = secrets.ensure(p)
+    secrets.set_env(p, {"REPLICANT_CONTAINER_SOCKET": engine.socket()})  # follows a change of engine
     gateway = gateway or testing.gateway_mode(p)
     prunemod.auto(p, log)
     if gateway == "passthrough" and not secrets.import_provider_key(p):
@@ -134,10 +136,10 @@ def up(
     try:
         r = compose.run_compose(p, profile, ["up", "-d", "--no-build", *names], timeout=timeout)
     except subprocess.TimeoutExpired:
-        log("podman-compose up timed out")
+        log("compose up timed out")
         raise typer.Exit(1) from None
     if r.returncode != 0:
-        log("podman-compose up reported errors:\n" + "\n".join((r.stdout + r.stderr).splitlines()[-30:]))
+        log("compose up reported errors:\n" + "\n".join((r.stdout + r.stderr).splitlines()[-30:]))
     # podman-compose 1.6 removes exited dependents when it recreates a changed service but does not recreate them;
     # a second pass creates whatever is still missing.
     missing = [n for n in names if n not in compose.containers()]
@@ -177,37 +179,34 @@ def down(volumes: bool = typer.Option(False, "--volumes", "-v", help="also delet
             pass
     left = compose.containers()
     if left:
-        subprocess.run(["podman", "rm", "-f", "-v", *[c.name for c in left.values()]], capture_output=True)
+        engine.rm_containers([c.name for c in left.values()], force=True, volumes_too=True)
     if volumes:  # stack.md §7: sandbox containers and volumes labelled with a run id go with the state
         sel = "label=replicant.example.com/run-id"
         for _ in range(3):  # pause containers go last: the rest of each pod group shares their netns
-            r = subprocess.run(["podman", "ps", "-a", "-q", "--filter", sel], capture_output=True, text=True)
-            if not r.stdout.split():
+            ids = engine.container_ids(sel)
+            if not ids:
                 break
-            subprocess.run(["podman", "rm", "-f", "-v", "--depend", *r.stdout.split()], capture_output=True)
-        r = subprocess.run(["podman", "volume", "ls", "-q", "--filter", sel], capture_output=True, text=True)
-        if r.stdout.split():
-            subprocess.run(["podman", "volume", "rm", "-f", *r.stdout.split()], capture_output=True)
+            engine.rm_containers(ids, force=True, volumes_too=True)
+        run_vols = [v["Name"] for v in engine.volumes(sel)]
+        if run_vols:
+            subprocess.run(engine.cli("volume", "rm", "-f", *run_vols), capture_output=True)
         left_vols: list[str] = []
         for _ in range(5):  # a volume still held by a stopping container is retried, then reported
-            r = subprocess.run(["podman", "volume", "ls", "-q", "--filter",
-                                f"label=io.podman.compose.project={compose.PROJECT}"], capture_output=True, text=True)
-            left_vols = [v for v in r.stdout.split()] + [
-                v for v in subprocess.run(["podman", "volume", "ls", "-q"], capture_output=True, text=True).stdout.split()
-                if v.startswith(f"{compose.PROJECT}_")]
-            left_vols = sorted(set(left_vols))
+            left_vols = sorted({v["Name"] for v in engine.volumes()
+                                if v["Labels"].get(engine.PROJECT_LABEL) == compose.PROJECT
+                                or v["Name"].startswith(f"{compose.PROJECT}_")})
             if not left_vols:
                 break
             left = compose.containers()
             if left:
-                subprocess.run(["podman", "rm", "-f", "-v", *[c.name for c in left.values()]], capture_output=True)
-            subprocess.run(["podman", "volume", "rm", "-f", *left_vols], capture_output=True)
+                engine.rm_containers([c.name for c in left.values()], force=True, volumes_too=True)
+            subprocess.run(engine.cli("volume", "rm", "-f", *left_vols), capture_output=True)
             time.sleep(2)
         if left_vols:
             log(f"WARNING: volumes not removed: {' '.join(left_vols)}")
             raise typer.Exit(1)
     for net in ("replicant-core", "replicant-sbx", "replicant-egress"):
-        subprocess.run(["podman", "network", "rm", net], capture_output=True)
+        subprocess.run(engine.cli("network", "rm", net), capture_output=True)
     log("stack down" + (" (volumes removed)" if volumes else ""))
 
 
@@ -229,12 +228,12 @@ def status(profile: str = typer.Option("v0,observability")) -> None:
         log(f"{n:22s} {compose.OWNERS.get(n, ''):9s} {st}")
     mig = cs.get("migrate")
     if mig:
-        out = subprocess.run(["podman", "logs", mig.name], capture_output=True, text=True)
+        out = subprocess.run(engine.cli("logs", mig.name), capture_output=True, text=True)
         m = re.findall(r'"event": "migrate\.succeeded".*?"to": "([^"]+)"', out.stdout + out.stderr)
         log(f"migration revision: {m[-1] if m else 'unknown (see replicant dev logs migrate)'}")
     tmp = cs.get("temporal")
     if tmp and tmp.status == "running":
-        r = subprocess.run(["podman", "exec", tmp.name, "temporal", "operator", "namespace", "describe", "-n",
+        r = subprocess.run([*engine.cli("exec", tmp.name), "temporal", "operator", "namespace", "describe", "-n",
                             "replicant-local", "--address", "127.0.0.1:7233"], capture_output=True, text=True)
         log("temporal namespace replicant-local: " + ("registered" if r.returncode == 0 else "missing"))
 
@@ -245,7 +244,7 @@ def logs(
     follow: bool = typer.Option(False, "--follow", "-f"),
     tail: int = typer.Option(200, help="lines per service"),
 ) -> None:
-    """Container logs of the stack (podman logs)."""
+    """Container logs of the stack."""
     _guard()
     cs = compose.containers()
     names = services or sorted(cs)

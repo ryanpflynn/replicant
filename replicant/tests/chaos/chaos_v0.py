@@ -29,21 +29,20 @@ e.TAG = "chaos-v0"
 RUNNER = "http://127.0.0.1:8480"
 
 
-def podman(*args: str) -> str:
-    r = subprocess.run(["podman", *args], capture_output=True, text=True)
+def engine(*args: str) -> str:
+    r = subprocess.run([e.ENGINE, *args], capture_output=True, text=True)
     if r.returncode != 0:
-        raise RuntimeError(f"podman {' '.join(args)}: {r.stderr.strip()[-300:]}")
+        raise RuntimeError(f"{e.ENGINE} {' '.join(args)}: {r.stderr.strip()[-300:]}")
     return r.stdout
 
 
-def container(service: str) -> str:
-    return f"replicant_{service}_1"
+container = e.container
 
 
 def wait_healthy(service: str, timeout_s: float = 300) -> None:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        st = json.loads(podman("inspect", container(service)))[0]["State"]
+        st = json.loads(engine("inspect", container(service)))[0]["State"]
         h = (st.get("Health") or st.get("Healthcheck") or {}).get("Status", "")
         if st.get("Running") and h in ("healthy", ""):
             return
@@ -67,17 +66,17 @@ def runner_runs(job_id: str) -> list[dict]:
 
 def kill_and_restart(service: str, how: str = "kill") -> str:
     t0 = time.monotonic()
-    podman("kill", "--signal", "KILL", container(service))
+    engine("kill", "--signal", "KILL", container(service))
     time.sleep(5)
-    podman("start", container(service))
+    engine("start", container(service))
     wait_healthy(service)
     return f"{service} killed and back healthy in {time.monotonic() - t0:.0f}s"
 
 
 def pause_pg(seconds: int) -> str:
-    podman("pause", container("postgres-replicant"))
+    engine("pause", container("postgres-replicant"))
     time.sleep(seconds)
-    podman("unpause", container("postgres-replicant"))
+    engine("unpause", container("postgres-replicant"))
     wait_healthy("postgres-replicant")
     return f"postgres-replicant paused {seconds}s"
 
@@ -119,7 +118,7 @@ def run_case(case: str) -> dict:
     assert not dup, f"more than one AgentRun per logical run: {dup}"
     assert len(runs) == len(s.get("runs", [])), f"runner has {len(runs)} runs, projection {len(s.get('runs', []))}"
     for r in runs:
-        pods = [n for n in podman("ps", "-a", "--filter", f"label=replicant.example.com/run-id={r['run_id']}",
+        pods = [n for n in engine("ps", "-a", "--filter", f"label=replicant.example.com/run-id={r['run_id']}",
                                   "--format", "{{.Names}}").split() if n.endswith("-pause")]
         assert len(pods) <= 1, f"run {r['run_id']} has {len(pods)} pod groups"
     # no lost decision

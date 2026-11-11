@@ -9,6 +9,8 @@
 # run-grants; the run token goes straight into ANTHROPIC_AUTH_TOKEN with the X-Replicant-* headers that agentd would
 # add (ANTHROPIC_CUSTOM_HEADERS). Tokens are written to files and never printed. Containers are named gw-*.
 set -euo pipefail
+ENGINE="${REPLICANT_CONTAINER_CLI:-podman}"
+Z=""; if [ "$ENGINE" = podman ]; then Z=":Z"; fi   # SELinux relabel: a Podman-only volume option
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../../../.." && pwd)            # monorepo root (replicant/)
 spec_cfg=${GATEWAY_CONFIG_DIR:-$root/dev/compose/config/gateway-shim}
@@ -16,18 +18,18 @@ W=${1:-$(mktemp -d)}
 PORT=${GW_PORT:-18420}
 IMG=localhost/replicant/replicant-gateway-shim:dev
 mkdir -p "$W/keys" "$W/secrets" "$W/usage" "$W/evidence"; chmod 777 "$W/usage"
-cleanup() { podman rm -f -v gw-smoke-shim >/dev/null 2>&1 || true; }
+cleanup() { "$ENGINE" rm -f -v gw-smoke-shim >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-podman run --rm --name gw-smoke-mint -v "$W/keys:/keys:Z" --user 0 --entrypoint /usr/local/bin/replicant-gateway-shim "$IMG" \
+"$ENGINE" run --rm --name gw-smoke-mint -v "$W/keys:/keys$Z" --user 0 --entrypoint /usr/local/bin/replicant-gateway-shim "$IMG" \
   devtool mint --dir /keys --role implementer --budget 15
 chmod 644 "$W/keys/"*.json "$W/keys/run-token"
 python3 -c "import secrets;print(secrets.token_urlsafe(32),end='')" > "$W/secrets/svc_token"
 printf '"%s": svc_replicant-services\n' "$(cat "$W/secrets/svc_token")" > "$W/secrets/gateway_service_tokens"
 chmod 644 "$W/secrets/"*
 
-podman rm -f -v gw-smoke-shim >/dev/null 2>&1 || true
-podman run -d --name gw-smoke-shim -p "127.0.0.1:$PORT:8420" \
+"$ENGINE" rm -f -v gw-smoke-shim >/dev/null 2>&1 || true
+"$ENGINE" run -d --name gw-smoke-shim -p "127.0.0.1:$PORT:8420" \
   -v "$spec_cfg:/etc/gateway-shim:ro" -v "$root/tests/fixtures/gateway-scripts:/cassettes/scripts:ro" \
   -v "$W/keys:/keys:ro" -v "$W/secrets:/run/secrets:ro" -v "$W/usage:/usage" \
   -e REPLICANT_ENV=local \
@@ -39,7 +41,7 @@ podman run -d --name gw-smoke-shim -p "127.0.0.1:$PORT:8420" \
   -e REPLICANT_GATEWAY_USAGE_S3_URI=file:///usage \
   "$IMG" replicant-gateway-shim --config=/etc/gateway-shim/gateway-shim.yaml --upstream-backend=script >/dev/null
 for _ in $(seq 1 20); do curl -sf "http://127.0.0.1:$PORT/readyz" >/dev/null && break; sleep 0.5; done
-podman exec gw-smoke-shim replicant-gateway-shim devtool register --dir /keys --url http://127.0.0.1:8420 \
+"$ENGINE" exec gw-smoke-shim replicant-gateway-shim devtool register --dir /keys --url http://127.0.0.1:8420 \
   --service-token-file /run/secrets/svc_token --stub tests/walkthrough-ledger-api/implementer.c0.n1 >/dev/null
 
 rm -rf "$W/repo"; cp -R "$root/dev/sample-repos/ledger-api" "$W/repo"
@@ -79,6 +81,6 @@ assert res["structured_output"]["outcome"] == "completed"
 print("claude -p result:", res["subtype"], "turns", res["num_turns"], "outcome", res["structured_output"]["outcome"])
 PY
 grep -q '^+		fxReversal := Prorate(c.FXFeeMinor, refundMinor, c.AmountMinor)$' "$W/evidence/implementer.diff"
-podman run --rm --name gw-smoke-gotest -v "$W/repo:/r:ro" -w /r -e GOFLAGS=-buildvcs=false docker.io/library/golang:1.26 \
+"$ENGINE" run --rm --name gw-smoke-gotest -v "$W/repo:/r:ro" -w /r -e GOFLAGS=-buildvcs=false docker.io/library/golang:1.26 \
   sh -c 'go vet ./... && go build ./... && go test -count=1 ./...' | tee "$W/evidence/go-test.txt"
 echo "SMOKE OK (evidence in $W/evidence)"

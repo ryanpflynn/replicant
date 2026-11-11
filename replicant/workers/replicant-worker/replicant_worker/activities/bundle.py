@@ -7,6 +7,7 @@ Cached by digest in-process (content is immutable).
 """
 from __future__ import annotations
 
+import fnmatch
 import json
 import logging
 import threading
@@ -69,6 +70,36 @@ class Bundle:
                 return self.pinned(ref), doc
         ref, doc = local_bundle.find("graph", name)
         return local_bundle.pinned(ref), doc
+
+    def has(self, kind: str, name: str) -> bool:
+        return any(ref.startswith(f"{kind}/{name}@") for ref in self.docs)
+
+    def binding_for(self, repo: dict[str, Any] | None) -> dict[str, Any] | None:
+        """The codebase_bindings binding that matches a repo (policy-codebase_bindings: highest priority, then the more
+        specific selector), or None when the bundle has no bindings policy or only the default applies. Catalog
+        selectors are not evaluated (no catalog in v0). `repo`: {host, owner, name, repo_id}."""
+        pol = self.policies().get("codebase_bindings") or {}
+        if not repo or not pol.get("bindings"):
+            return None
+        full = f"{repo.get('host', '')}/{repo.get('owner', '')}/{repo.get('name', '')}"
+        best: tuple[tuple[int, int, str], dict[str, Any]] | None = None
+        for b in pol["bindings"]:
+            m = b.get("match") or {}
+            spec = 0
+            if str(repo.get("repo_id") or "") in [str(x) for x in m.get("repoIds") or []]:
+                spec = 4
+            else:
+                for pat in m.get("repos") or []:
+                    if pat == full:
+                        spec = max(spec, 3)
+                    elif fnmatch.fnmatchcase(full, pat):
+                        spec = max(spec, 2)
+            if not spec:
+                continue
+            key = (int(b.get("priority", 0)), spec, str(b.get("name", "")))
+            if best is None or key[:2] > best[0][:2] or (key[:2] == best[0][:2] and key[2] < best[0][2]):
+                best = (key, b)
+        return best[1] if best else None
 
     def risk_rules(self) -> dict[str, Any]:
         """The bundle's risk_rules policy (CONFIG); today's constants are the defaults."""

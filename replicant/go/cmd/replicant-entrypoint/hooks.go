@@ -19,20 +19,22 @@ import (
 // hookMain implements the managed Claude Code hooks (§2.3): instructions-loaded, guard-paths, session-end.
 func hookMain(name string) int {
 	in, _ := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
+	code := 0
 	switch name {
 	case "guard-paths":
-		return guardPaths(in)
+		code = guardPaths(in)
 	case "instructions-loaded":
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		var ev map[string]any
 		_ = json.Unmarshal(in, &ev)
 		_ = ipc.New(sandbox.IPCSocket).Do(ctx, http.MethodPost, "/v1/report/instructions", nil, ev, nil)
-		return 0
 	case "session-end":
-		return 0
 	}
-	return 0
+	if code == 0 && managedHookMarked() {
+		fmt.Println(managedHookMarker) // tells the managed hooks' stream-json events apart from the repo's (§8c)
+	}
+	return code
 }
 
 var configNames = []string{"CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", "AGENTS.override.md", ".mcp.json"}

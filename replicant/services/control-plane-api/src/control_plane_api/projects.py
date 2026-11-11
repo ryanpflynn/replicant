@@ -21,7 +21,11 @@ from control_plane_api import contracts
 from control_plane_api.db import OPERATOR_SCOPE
 
 LIVE_SECTIONS = ("triggers", "approvals")
-PINNED_SECTIONS = ("gates", "risk", "workflows")
+PINNED_SECTIONS = ("gates", "risk", "workflows", "repo_config", "models")
+# Sections compiled into the derived bundle. `models` joins the digest only when it differs from the default, so the
+# derived bundle of every config written before it existed keeps its digest; `repo_config` travels on the job
+# (JobRequest.repo_profile, ONBOARD-01 §4), not in the bundle.
+BUNDLE_SECTIONS = ("gates", "risk", "workflows")
 WORKFLOW_TYPES = ("bugfix", "feature", "api_change", "docs", "hotfix", "maintenance", "pr_repair", "qa_only")
 PROJECT_ROLES = ("viewer", "engineer", "approver", "project_admin")
 
@@ -29,11 +33,13 @@ DEFAULTS: dict[str, Any] = {
     # github-integration's register_repo defaults (consumer.py) and the v0 local bundle's gate/risk behaviour
     "triggers": {"enabled": True, "label": "replicant", "modes": ["label", "command"],
                  "allowed_workflow_types": ["auto", "bugfix", "feature", "docs", "api_change"],
-                 "default_priority": "normal", "min_trigger_role": "engineer"},
+                 "default_priority": "normal", "min_trigger_role": "engineer", "readiness_override": False},
     "approvals": {"approver_groups": [], "slack_channel": None},
     "gates": {"plan": "off", "publish": "always", "requester_may_decide": True},
     "risk": {"large_change_files": 20, "sensitive_paths": [], "forbidden_paths": []},
     "workflows": {},
+    "repo_config": "use",
+    "models": {"default_tier": "standard", "workflows": {}},
 }
 
 
@@ -49,8 +55,17 @@ def merge(*layers: dict[str, Any] | None) -> dict[str, Any]:
                             cur[k] = {**cur[k], **v}
                         else:
                             cur[k] = copy.deepcopy(v)
+            elif sec == "models" and isinstance(val, dict):
+                cur_m = out.setdefault("models", {"default_tier": "standard", "workflows": {}})
+                for k, v in val.items():
+                    if k == "workflows" and isinstance(v, dict):
+                        cur_m.setdefault("workflows", {}).update(copy.deepcopy(v))
+                    else:
+                        cur_m[k] = copy.deepcopy(v)
             elif isinstance(val, dict):
                 out.setdefault(sec, {}).update(copy.deepcopy(val))
+            elif val is not None:
+                out[sec] = copy.deepcopy(val)
     # drop empty workflow entries (a cleared override equals the default)
     out["workflows"] = {wt: wc for wt, wc in out["workflows"].items()
                         if wc.get("graph_yaml") or wc.get("params") or wc.get("max_visits")}
@@ -58,7 +73,12 @@ def merge(*layers: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def pinned_part(eff: dict[str, Any]) -> dict[str, Any]:
-    return {k: eff[k] for k in PINNED_SECTIONS}
+    """What the derived bundle is compiled from (and its digest): the bundle sections, plus `models` when it is not
+    the default."""
+    out = {k: eff[k] for k in BUNDLE_SECTIONS}
+    if eff.get("models", DEFAULTS["models"]) != DEFAULTS["models"]:
+        out["models"] = eff["models"]
+    return out
 
 
 def is_default_pinned(eff: dict[str, Any]) -> bool:

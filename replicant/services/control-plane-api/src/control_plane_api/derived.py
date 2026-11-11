@@ -130,6 +130,44 @@ def risk_rules_spec(risk: dict[str, Any]) -> dict[str, Any]:
             "forbidden_paths": list(risk.get("forbidden_paths") or [])}
 
 
+ESCALATION = {"repair_cycle_at_least": 2, "risk_at_least": "high", "after_failed_attempt": True}
+
+
+def model_tier_selection_spec(models: dict[str, Any]) -> dict[str, Any]:
+    """ONBOARD-01 §8: the project's tier choice; the worker resolves tiers against the base bundle's model_tiers."""
+    return {"policyType": "model_tier_selection", "default_tier": str(models.get("default_tier") or "standard"),
+            "workflows": dict(sorted((models.get("workflows") or {}).items())), "escalation": dict(ESCALATION)}
+
+
+def model_tier_errors(models: dict[str, Any] | None, tiers_spec: dict[str, Any] | None) -> list[dict[str, str]]:
+    """Tiers the project picked that the platform's model_tiers catalogue does not offer (no catalogue: no check)."""
+    if not models or not tiers_spec or not isinstance(tiers_spec.get("tiers"), dict):
+        return []
+    have = set(tiers_spec["tiers"])
+    errs = []
+    if models.get("default_tier") and models["default_tier"] not in have:
+        errs.append({"path": "/models/default_tier",
+                     "message": f"unknown tier {models['default_tier']!r} (have {', '.join(sorted(have))})"})
+    for wt, tier in sorted((models.get("workflows") or {}).items()):
+        if tier not in have:
+            errs.append({"path": f"/models/workflows/{wt}",
+                         "message": f"unknown tier {tier!r} (have {', '.join(sorted(have))})"})
+    return errs
+
+
+async def validate_models(state: Any, eff: dict[str, Any]) -> list[dict[str, str]]:
+    """config:validate: check a non-default `models` section against the default base bundle's model_tiers."""
+    if eff.get("models", P.DEFAULTS["models"]) == P.DEFAULTS["models"]:
+        return []
+    try:
+        _, base_spec = await default_base(state)
+        pols = await _policy_types(Registry(state), base_spec)
+    except Exception as e:  # noqa: BLE001 - no readable catalogue: intake's compile checks again
+        log.warning("model tier catalogue unavailable for validation: %s", type(e).__name__)
+        return []
+    return model_tier_errors(eff["models"], (pols.get("model_tiers") or (None, {}))[1].get("spec"))
+
+
 def policy_doc(name: str, description: str, spec: dict[str, Any]) -> dict[str, Any]:
     return {"apiVersion": "replicant.example.com/v1", "kind": "Policy",
             "metadata": {"name": name, "scope": {"level": "tenant"}, "owners": ["replicant-platform"],
@@ -315,12 +353,20 @@ async def ensure_derived(state: Any, conn: Any, db: Any, base_rb: str, tenant_id
     gate_ref, gate_doc = pols["gate_rules"]
     gate_spec = {k: v for k, v in gate_doc["spec"].items() if k != "policyType"}
     short = dg.split(":")[1][:10]
-    new_pols = [p for p in spec.get("policies") or [] if p["ref"] != gate_ref["ref"] and
-                not (pols.get("risk_rules") and p["ref"] == pols["risk_rules"][0]["ref"])]
+    replaced = {"gate_rules", "risk_rules"} | ({"model_tier_selection"} if "models" in pinned else set())
+    new_pols = [p for p in spec.get("policies") or [] if not any(
+        pols.get(t) and p["ref"] == pols[t][0]["ref"] for t in replaced)]
     gdoc = policy_doc(f"gate-rules-c{short}", f"gate rules of project {project_id}",
                       {"policyType": "gate_rules", **compile_gate_rules(gate_spec, pinned["gates"])})
     rdoc = policy_doc(f"risk-rules-c{short}", f"risk rules of project {project_id}", risk_rules_spec(pinned["risk"]))
-    for d in (gdoc, rdoc):
+    docs = [gdoc, rdoc]
+    if "models" in pinned:     # ONBOARD-01 §8: only when the project's tiers differ from the default
+        errs = model_tier_errors(pinned["models"], (pols.get("model_tiers") or (None, {}))[1].get("spec"))
+        if errs:
+            raise CompileError(errs)
+        docs.append(policy_doc(f"model-tier-selection-c{short}", f"model tiers of project {project_id}",
+                               model_tier_selection_spec(pinned["models"])))
+    for d in docs:
         new_pols.append({"ref": f"policy/{d['metadata']['name']}@1", "digest": await reg.put_definition(d)})
     spec["policies"] = sorted(new_pols, key=lambda r: r["ref"])
     for wt, (name, doc) in (await compile_graphs(reg, base_spec, eff)).items():

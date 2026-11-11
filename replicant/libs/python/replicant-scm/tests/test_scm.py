@@ -94,3 +94,82 @@ def test_gitea_review_and_pr_comment_headers():
                     "issue": {"number": 2, "title": "x", "pull_request": {"merged": False}},
                     "comment": {"id": 12, "body": "please rename", "user": ALICE}}, host=HOST)
     assert ev.kind == "issue_comment.created" and ev.issue.is_pull and ev.comment.body == "please rename"
+
+
+def _client(handler):
+    import httpx
+
+    from replicant_scm.gitea import GiteaClient
+    return GiteaClient("http://gitea:3000", token="t", transport=httpx.MockTransport(handler))
+
+
+def test_file_at_caps_rejects_binary_and_missing():
+    import asyncio
+
+    import httpx
+    seen = []
+
+    def handler(req):
+        seen.append(req)
+        path = req.url.path
+        if path.endswith("/raw/big.txt"):
+            return httpx.Response(200, content=b"a" * 100)
+        if path.endswith("/raw/logo.png"):
+            return httpx.Response(200, content=b"\x89PNG\x00\x00rest")
+        if path.endswith("/raw/dir/CLAUDE.md"):
+            return httpx.Response(200, content="héllo".encode())
+        if path.endswith("/raw/bad"):
+            return httpx.Response(422)
+        return httpx.Response(404)
+
+    async def go():
+        async with _client(handler) as g:
+            return (await g.file_at("o", "r", "a" * 40, "big.txt", max_bytes=10),
+                    await g.file_at("o", "r", "a" * 40, "logo.png"),
+                    await g.file_at("o", "r", "a" * 40, "dir/CLAUDE.md"),
+                    await g.file_at("o", "r", "a" * 40, "missing"),
+                    await g.file_at("o", "r", "a" * 40, "bad"))
+    big, png, md, missing, bad = asyncio.run(go())
+    assert big == "a" * 10 and png is None and md == "héllo" and missing is None and bad is None
+    assert seen[0].url.params["ref"] == "a" * 40 and seen[0].headers["authorization"] == "token t"
+    assert seen[2].url.path == "/api/v1/repos/o/r/raw/dir/CLAUDE.md"
+
+
+def test_file_at_raises_on_server_error():
+    import asyncio
+
+    import httpx
+    import pytest
+
+    from replicant_scm.gitea import GiteaError
+
+    async def go():
+        async with _client(lambda req: httpx.Response(500, text="boom")) as g:
+            await g.file_at("o", "r", "a" * 40, "x")
+    with pytest.raises(GiteaError):
+        asyncio.run(go())
+
+
+def test_tree_pages_blobs_only_and_caps():
+    import asyncio
+
+    import httpx
+    pages = []
+
+    def handler(req):
+        page = int(req.url.params["page"])
+        pages.append(page)
+        if req.url.path.endswith("/git/trees/" + "f" * 40):
+            return httpx.Response(404)
+        tree = [{"path": f"p{page}/f{i}", "type": "blob", "size": i, "sha": "s"} for i in range(3)]
+        tree.append({"path": f"p{page}", "type": "tree"})
+        return httpx.Response(200, json={"tree": tree, "truncated": page < 2})
+
+    async def go():
+        async with _client(handler) as g:
+            return (await g.tree("o", "r", "a" * 40), await g.tree_entries("o", "r", "a" * 40, max_entries=2),
+                    await g.tree("o", "r", "f" * 40))
+    paths, capped, unknown = asyncio.run(go())
+    assert paths == ["p1/f0", "p1/f1", "p1/f2", "p2/f0", "p2/f1", "p2/f2"]
+    assert capped == [{"path": "p1/f0", "size": 0, "sha": "s"}, {"path": "p1/f1", "size": 1, "sha": "s"}]
+    assert unknown == []

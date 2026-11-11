@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from github_integration.clients import S3, Broker, ControlPlane, Temporal
 from github_integration.config import Settings
+from github_integration.inventory import Scanner, push_touches_watched
 from replicant_ids import dev_principal, ulid
 from replicant_scm import canonical_host
 from replicant_scm.events import NormalizedEvent
@@ -52,6 +53,8 @@ class Consumer:
         self.s, self.engine, self.cp, self.broker, self.s3, self.temporal = s, engine, cp, broker, s3, temporal
         self._gitea_transport = gitea_transport
         self._bots = frozenset(s.bot_logins)
+        self.scanner = Scanner(lambda repo: self._gitea(repo, "inventory.scan", permissions={"contents": "read"}),
+                               lambda repo_id, profile: self.cp.put_profile(repo_id, profile))
 
     # ----------------------------------------------------------------------------------------- claim loop
     async def claim(self, limit: int = 20) -> list[Any]:
@@ -117,6 +120,8 @@ class Consumer:
         ev = normalize(headers, payload, host=self.s.gitea_base_url, bot_logins=self._bots)
         if ev.repo is None:
             return "ignored_no_repo"
+        if ev.kind == "push":
+            return await self._push(ev, payload)
         if ev.sender is None or ev.sender.is_bot:
             if self._is_pr_feedback(ev):
                 log.info(json.dumps({"event": "pr_feedback.ignored", "reason": "bot", "delivery_id": ev.delivery_id,
@@ -141,6 +146,22 @@ class Consumer:
             return await self._pr_feedback(ev, repo, r.received_at)
         return "ignored_event"
 
+    async def _push(self, ev: NormalizedEvent, payload: dict[str, Any]) -> str:
+        """Inventory: a push to the default branch that touches a watched path (or of a repo this process has not
+        profiled yet) queues a rescan. Pushes by anyone count: the default branch is what the profile describes."""
+        repo = await self._repo(ev)
+        if repo is None:
+            return "ignored_not_installed"
+        if repo["archived"] or repo["removed_at"] is not None:
+            return "ignored_archived"
+        branch = repo["default_branch"] or (ev.repo.default_branch if ev.repo else None) or "main"
+        if (ev.extra or {}).get("ref") != f"refs/heads/{branch}":
+            return "ignored_push_branch"
+        if not (push_touches_watched(payload) or not self.scanner.known(repo["repo_id"])):
+            return "ignored_push_unwatched"
+        self.scanner.request(repo, "push")
+        return "inventory_scan_queued"
+
     async def _repo(self, ev: NormalizedEvent) -> dict[str, Any] | None:
         """github_app.repos row (lazily registered for repos of an installed Gitea org)."""
         assert ev.repo is not None
@@ -152,13 +173,17 @@ class Consumer:
                 "r.provider = 'gitea' AND r.host = :h AND r.repo_id = :id"), {"h": ev.repo.host, "id": ev.repo.repo_id})
             ).first()
             if row is not None:
-                if row.full_name != ev.repo.full_name or (ev.repo.default_branch and
-                                                          row.default_branch != ev.repo.default_branch):
+                branch_changed = bool(ev.repo.default_branch and row.default_branch != ev.repo.default_branch)
+                if row.full_name != ev.repo.full_name or branch_changed:
                     await conn.execute(text("UPDATE github_app.repos SET full_name = :f, default_branch = coalesce(:b, "
                                             "default_branch) WHERE provider = 'gitea' AND host = :h AND repo_id = :id"),
                                        {"f": ev.repo.full_name, "b": ev.repo.default_branch, "h": ev.repo.host,
                                         "id": ev.repo.repo_id})
-                return dict(row._mapping)
+                out = dict(row._mapping)
+                if branch_changed:
+                    out.update(full_name=ev.repo.full_name, default_branch=ev.repo.default_branch)
+                    self.scanner.request(out, "default_branch_changed")
+                return out
             inst = (await conn.execute(text(
                 "SELECT installation_id, tenant_id FROM github_app.installations WHERE provider = 'gitea' AND host = :h "
                 "AND lower(account_login) = lower(:o) AND status = 'active'"), {"h": ev.repo.host, "o": ev.repo.owner})
@@ -167,6 +192,9 @@ class Consumer:
                 return None
             await register_repo(conn, ev.repo.host, ev.repo.repo_id, inst.installation_id, ev.repo.full_name,
                                 inst.tenant_id, ev.repo.default_branch, "svc_github-integration")
+        self.scanner.request({"repo_id": ev.repo.repo_id, "installation_id": inst.installation_id,
+                              "tenant_id": inst.tenant_id, "full_name": ev.repo.full_name,
+                              "default_branch": ev.repo.default_branch}, "registered")
         return await self._repo(ev)
 
     async def _issue_trigger(self, ev: NormalizedEvent, repo: dict[str, Any], label: str, received_at: Any) -> str:
@@ -200,8 +228,9 @@ class Consumer:
                 "SELECT principal_id FROM identity.links WHERE kind = 'gitea' AND external_id = :e AND status = 'active' "
                 "ORDER BY created_at DESC LIMIT 1"), {"e": str(gitea_user_id)})).scalar()
 
-    async def _gitea(self, repo: dict[str, Any], purpose: str, job_id: str | None = None) -> GiteaClient:
-        tok = await self.broker.token(repo["installation_id"], repo["repo_id"], purpose, job_id)
+    async def _gitea(self, repo: dict[str, Any], purpose: str, job_id: str | None = None,
+                     permissions: dict[str, str] | None = None) -> GiteaClient:
+        tok = await self.broker.token(repo["installation_id"], repo["repo_id"], purpose, job_id, permissions)
         return GiteaClient(self.s.gitea_base_url, token=tok, transport=self._gitea_transport)
 
     def _ack_body(self, ev: NormalizedEvent, job_id: str, duplicate: bool) -> str:
@@ -584,7 +613,11 @@ def build_job_request(ev: NormalizedEvent, *, tenant: str, installation_id: int,
 
 
 async def register_repo(conn: Any, host: str, repo_id: str, installation_id: int, full_name: str, tenant_id: str,
-                        default_branch: str | None, by: str) -> None:
+                        default_branch: str | None, by: str) -> bool:
+    """Registers or updates the repo; True when it was new or its default branch changed (inventory rescan)."""
+    prev = (await conn.execute(text(
+        "SELECT default_branch FROM github_app.repos WHERE provider = 'gitea' AND host = :h AND repo_id = :id"),
+        {"h": host, "id": repo_id})).first()
     await conn.execute(text(
         "INSERT INTO github_app.repos (provider, host, repo_id, installation_id, full_name, tenant_id, default_branch) "
         "VALUES ('gitea', :h, :id, :i, :f, :t, :b) ON CONFLICT (provider, host, repo_id) DO UPDATE SET "
@@ -599,3 +632,4 @@ async def register_repo(conn: Any, host: str, repo_id: str, installation_id: int
         "SELECT 'gitea', :h, :id, 1, CAST(:s AS jsonb), true, :by WHERE NOT EXISTS (SELECT 1 FROM github_app.repo_settings "
         "WHERE provider = 'gitea' AND host = :h AND repo_id = :id)"),
         {"h": host, "id": repo_id, "s": json.dumps(settings), "by": by})
+    return prev is None or bool(default_branch and prev.default_branch != default_branch)

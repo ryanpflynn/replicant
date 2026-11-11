@@ -50,6 +50,16 @@ func TestArgvAndManagedSettings(t *testing.T) {
 	if !strings.Contains(string(b), `"defaultMode":"dontAsk"`) {
 		t.Error("defaultMode")
 	}
+	// repo_config absent: today's behaviour (§8c "ignore")
+	if strings.Contains(s, "--include-hook-events") || strings.Contains(s, "--setting-sources user,project") || strings.Contains(s, "--effort") {
+		t.Errorf("repo_config absent must not load project settings: %s", s)
+	}
+	if ms["allowManagedHooksOnly"] != true || !slices.Contains(ms["claudeMdExcludes"].([]string), "/workspace/**") {
+		t.Error("repo_config absent must keep managed-only hooks and exclude /workspace CLAUDE.md files")
+	}
+	if !slices.Contains(cliEnv(p, ""), "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1") {
+		t.Error("repo_config absent must keep CLAUDE_CODE_DISABLE_CLAUDE_MDS")
+	}
 	p.Agent.Tools.Edit = false
 	_, dis := toolLists(p)
 	if !slices.Contains(dis, "Edit") {
@@ -79,5 +89,22 @@ func TestAgentReportSchemaInlined(t *testing.T) {
 	s, _, err := agentReportSchema(plan(t))
 	if err != nil || strings.Contains(s, "$ref") || !strings.Contains(s, "tests_run") {
 		t.Fatalf("%v %s", err, s)
+	}
+}
+
+func TestSkillOnlyWithRepoConfig(t *testing.T) {
+	p := plan(t)
+	tools, dis := toolLists(p)
+	if slices.Contains(tools, "Skill") || !slices.Contains(dis, "Skill") {
+		t.Fatalf("ignore mode: Skill must stay denied: %v / %v", tools, dis)
+	}
+	p.RepoConfig = "use"
+	tools, dis = toolLists(p)
+	if !slices.Contains(tools, "Skill") || slices.Contains(dis, "Skill") {
+		t.Fatalf("use mode: Skill must be on: %v / %v", tools, dis)
+	}
+	p.Agent.Tools.DenyTools = append(p.Agent.Tools.DenyTools, "Skill")
+	if _, dis = toolLists(p); !slices.Contains(dis, "Skill") {
+		t.Fatalf("an explicit deny wins: %v", dis)
 	}
 }

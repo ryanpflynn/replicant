@@ -51,15 +51,15 @@ def log(m: str) -> None:
 
 # ------------------------------------------------------------------------------------------------ no rebuild/restart
 def containers() -> dict[str, tuple[str, str]]:
-    ids = subprocess.run(["podman", "ps", "-q", "--filter", "label=io.podman.compose.project=replicant"],
+    ids = subprocess.run([e.ENGINE, "ps", "-q", "--filter", "label=com.docker.compose.project=replicant"],
                          capture_output=True, text=True, check=True).stdout.split()
-    out = json.loads(subprocess.run(["podman", "inspect", *ids], capture_output=True, text=True, check=True).stdout)
+    out = json.loads(subprocess.run([e.ENGINE, "inspect", *ids], capture_output=True, text=True, check=True).stdout)
     return {c["Name"].lstrip("/"): (c["Image"], c["State"]["StartedAt"]) for c in out
             if not c["Name"].lstrip("/").startswith("replicant-sbx-")}
 
 
 def images() -> dict[str, str]:
-    out = subprocess.run(["podman", "images", "--format", "{{.Repository}}:{{.Tag}} {{.ID}}"], capture_output=True,
+    out = subprocess.run([e.ENGINE, "images", "--format", "{{.Repository}}:{{.Tag}} {{.ID}}"], capture_output=True,
                          text=True, check=True).stdout.split("\n")
     return dict(ln.split(" ", 1) for ln in out if ln.startswith("localhost/replicant/"))
 

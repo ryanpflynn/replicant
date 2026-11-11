@@ -323,6 +323,41 @@
               }
             }
           }
+        },
+        "commands": {
+          "description": "The repo's own commands (design section 8c, onboarding-interfaces.md section 2), resolved at intake from the pinned repo profile. replicant-qa runs the configured ones in the order install, build, test, lint; when absent it falls back to the Go stages.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "install": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 4096
+            },
+            "build": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 4096
+            },
+            "test": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 4096
+            },
+            "lint": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 4096
+            }
+          }
         }
       }
     },
@@ -334,6 +369,55 @@
         "trusted_load"
       ],
       "default": "quote_as_context"
+    },
+    "repo_config": {
+      "description": "use: the CLI loads the repo's Claude Code configuration (project settings, hooks, rules, skills, nested CLAUDE.md) under the managed settings; ignore (or absent): only Replicant's bundle configures the run (design section 8c).",
+      "type": "string",
+      "enum": [
+        "use",
+        "ignore"
+      ],
+      "default": "ignore"
+    },
+    "config_base_sha": {
+      "description": "Default-branch commit the repo configuration is trusted from. With repo_config use, the entrypoint restores .claude/, CLAUDE.md, CLAUDE.local.md, AGENTS.md and .mcp.json from this commit after checkout and makes them read-only.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+    },
+    "mcp_auto_allow": {
+      "description": "Repo .mcp.json stdio servers whose fleet catalogue class is auto_allow; with repo_config use they are added to the managed MCP config and allowedMcpServers (by command).",
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "command"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "command": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "args": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {
+              "type": "string",
+              "maxLength": 512
+            }
+          }
+        }
+      }
     }
   },
   "$defs": {

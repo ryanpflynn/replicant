@@ -4,6 +4,7 @@
 #   tests/smoke/env.sh up | down
 # Secrets are generated into $CTL_HOME (never printed).
 set -eu
+ENGINE="${REPLICANT_CONTAINER_CLI:-podman}"
 CTL_HOME="${CTL_HOME:-${TMPDIR:-/tmp}/ctl-smoke}"
 NET=ctl-net
 PG_IMAGE="${PG_IMAGE:-localhost/replicant/postgres:17-pgvector0.8.2}"
@@ -20,9 +21,9 @@ up() {
   mkdir -p "$CTL_HOME/secrets"; chmod 700 "$CTL_HOME"
   gen "$CTL_HOME/secrets/pg_replicant_superuser"; gen "$CTL_HOME/secrets/db_replicant_migrator"
   for r in $ROLES; do gen "$CTL_HOME/secrets/db_$r"; done
-  podman network exists $NET || podman network create $NET >/dev/null
-  if ! podman container exists ctl-pg; then
-    podman run -d --name ctl-pg --network $NET -p 127.0.0.1:55432:5432 \
+  "$ENGINE" network inspect $NET >/dev/null 2>&1 || "$ENGINE" network create $NET >/dev/null
+  if ! "$ENGINE" container inspect ctl-pg >/dev/null 2>&1; then
+    "$ENGINE" run -d --name ctl-pg --network $NET -p 127.0.0.1:55432:5432 \
       -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD_FILE=/run/secrets/pg_replicant_superuser -e POSTGRES_DB=replicant \
       -e REPLICANT_MIGRATOR_PASSWORD_FILE=/run/secrets/db_replicant_migrator \
       -v "$CTL_HOME/secrets:/run/secrets:ro" \
@@ -31,15 +32,15 @@ up() {
       -v "$ROOT/dev/compose/config/postgres-replicant/02-migrator-password.sh:/docker-entrypoint-initdb.d/02-migrator-password.sh:ro" \
       "$PG_IMAGE" postgres -c shared_preload_libraries=pg_stat_statements,pgaudit -c max_connections=200 >/dev/null
   fi
-  i=0; until podman exec ctl-pg pg_isready -U postgres -d replicant >/dev/null 2>&1; do i=$((i+1)); [ $i -gt 60 ] && exit 1; sleep 1; done
+  i=0; until "$ENGINE" exec ctl-pg pg_isready -U postgres -d replicant >/dev/null 2>&1; do i=$((i+1)); [ $i -gt 60 ] && exit 1; sleep 1; done
   sleep 2
-  podman run --rm --name ctl-migrate --network $NET -e REPLICANT_ENV=local -e REPLICANT_DB_HOST=ctl-pg -e REPLICANT_DB_NAME=replicant \
+  "$ENGINE" run --rm --name ctl-migrate --network $NET -e REPLICANT_ENV=local -e REPLICANT_DB_HOST=ctl-pg -e REPLICANT_DB_NAME=replicant \
     -e REPLICANT_DB_USER=replicant_migrator -e REPLICANT_DB_PASSWORD_FILE=/run/secrets/db_replicant_migrator \
     -e REPLICANT_DB_ROLE_PASSWORDS_DIR=/run/secrets -e REPLICANT_MIGRATE_LOCK_TIMEOUT_SECONDS=120 \
     -v "$CTL_HOME/secrets:/run/secrets:ro" "$MIGRATE_IMAGE" \
     replicant-db migrate --to head --advisory-lock --verify-drift --ensure-roles
-  if ! podman container exists ctl-temporal; then
-    podman run -d --name ctl-temporal --network $NET -p 127.0.0.1:57233:7233 --entrypoint temporal "$TEMPORAL_IMAGE" \
+  if ! "$ENGINE" container inspect ctl-temporal >/dev/null 2>&1; then
+    "$ENGINE" run -d --name ctl-temporal --network $NET -p 127.0.0.1:57233:7233 --entrypoint temporal "$TEMPORAL_IMAGE" \
       server start-dev --ip=0.0.0.0 --port=7233 --headless --namespace=replicant-local --log-level=warn \
       --dynamic-config-value=system.enableDeploymentVersions=true \
       --dynamic-config-value=frontend.workerVersioningWorkflowAPIs=true \
@@ -56,9 +57,9 @@ up() {
 }
 
 down() {
-  podman rm -f -v ctl-pg ctl-temporal ctl-migrate >/dev/null 2>&1 || true
-  podman ps -a --format '{{.Names}}' | grep '^ctl-' | xargs -r podman rm -f -v >/dev/null 2>&1 || true
-  podman network rm $NET >/dev/null 2>&1 || true
+  "$ENGINE" rm -f -v ctl-pg ctl-temporal ctl-migrate >/dev/null 2>&1 || true
+  "$ENGINE" ps -a --format '{{.Names}}' | grep '^ctl-' | xargs -r "$ENGINE" rm -f -v >/dev/null 2>&1 || true
+  "$ENGINE" network rm $NET >/dev/null 2>&1 || true
   echo "ctl env down"
 }
 

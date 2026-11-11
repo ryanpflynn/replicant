@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -61,6 +62,9 @@ type runCtx struct {
 	cmdOrder      []string
 	pendingTool   map[string]string // tool_use_id -> command
 	instructions  []string
+	hooks         *hookTracker // repo hook events (repo_config use, §8c)
+	initSkills    []string     // system/init skills; nil when the event had none
+	repoDir       string       // tests only: the checkout (default sandbox.RepoDir)
 	bootstrapRes  map[string]any
 	integrityPre  string
 	eventSeq      int
@@ -97,7 +101,7 @@ func runMain() int {
 	signal.Ignore(syscall.SIGINT, syscall.SIGHUP, syscall.SIGQUIT) // only the controller ends the run (§4.5)
 	term := make(chan os.Signal, 1)
 	signal.Notify(term, syscall.SIGTERM)
-	rc := &runCtx{start: time.Now(), commands: map[string]*cmdRec{}, pendingTool: map[string]string{}}
+	rc := &runCtx{start: time.Now(), commands: map[string]*cmdRec{}, pendingTool: map[string]string{}, hooks: newHookTracker()}
 	plan, man, err := readPlan()
 	if err != nil {
 		log.Error("inputs not prepared", "err", err)
@@ -119,10 +123,19 @@ func runMain() int {
 	}
 	wcancel()
 	if plan.Role == "qa" {
+		// QA installs and builds itself; only the environment's `seed-*` steps (e.g. copying the image's warm package
+		// cache to a writable path, design §8c) run first.
+		if slices.ContainsFunc(plan.Environment.BootstrapSteps, func(st sandbox.Step) bool {
+			return strings.HasPrefix(st.Name, "seed-")
+		}) {
+			if code := rc.bootstrap(ctx, true); code != 0 {
+				return rc.finalize(ctx, code, "")
+			}
+		}
 		return rc.runQA(ctx, term)
 	}
 	// Environment bootstrap (exit 44 on onFailure: fail).
-	if code := rc.bootstrap(ctx); code != 0 {
+	if code := rc.bootstrap(ctx, false); code != 0 {
 		return rc.finalize(ctx, code, "")
 	}
 	schemaJSON, _, err := agentReportSchema(plan)
@@ -144,11 +157,14 @@ func runMain() int {
 	return rc.runCLI(ctx, term, schemaJSON, promptFile)
 }
 
-// bootstrap runs the environment's bootstrap steps for this role.
-func (rc *runCtx) bootstrap(ctx context.Context) int {
+// bootstrap runs the environment's bootstrap steps for this role (only the `seed-*` steps when seedsOnly).
+func (rc *runCtx) bootstrap(ctx context.Context, seedsOnly bool) int {
 	var steps []map[string]any
 	ok := true
 	for _, st := range rc.plan.Environment.BootstrapSteps {
+		if seedsOnly && !strings.HasPrefix(st.Name, "seed-") {
+			continue
+		}
 		if st.When != nil {
 			skip := false
 			for _, p := range st.When.PathsExist {
@@ -601,6 +617,9 @@ func (rc *runCtx) handleEvent(l []byte) bool {
 	}
 	typ, _ := ev["type"].(string)
 	sub, _ := ev["subtype"].(string)
+	if rc.hooks != nil {
+		rc.hooks.observe(typ, sub, ev)
+	}
 	switch {
 	case typ == "system" && sub == "init":
 		rc.onInit(ev)
@@ -738,6 +757,14 @@ func (rc *runCtx) onInit(ev map[string]any) {
 		for _, t := range tools {
 			if s, _ := t.(string); s == "WebFetch" || s == "WebSearch" {
 				rc.configErr, rc.stopCause = "web tool present: "+s, "config"
+			}
+		}
+	}
+	if skills, ok := ev["skills"].([]any); ok {
+		rc.initSkills = []string{}
+		for _, s := range skills {
+			if n, ok := s.(string); ok {
+				rc.initSkills = append(rc.initSkills, n)
 			}
 		}
 	}

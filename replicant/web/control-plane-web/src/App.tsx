@@ -9,6 +9,7 @@ import { Waiting } from "./screens/Waiting";
 import { Releases } from "./screens/Releases";
 import { Admin } from "./screens/Admin";
 import { Memory } from "./screens/Memory";
+import { Fleet } from "./screens/Fleet";
 import { ProjectSettings, Projects } from "./screens/ProjectSettings";
 import { hasCap, useMe, useSession, useWaiting } from "./lib/session";
 import { badgeCount, titleWithCount } from "./lib/waiting";
@@ -27,6 +28,7 @@ function Routes() {
   if ((m = match("/projects/:projectId/settings/:tab?", p))) return <ProjectSettings key={m.projectId} projectId={m.projectId} tab={m.tab} />;
   if (p === "/projects") return <Projects />;
   if (p.startsWith("/admin/memory")) return <Memory />;
+  if (p.startsWith("/admin/fleet")) return <Fleet />;
   if (p === "/admin") return <Admin />;
   return (
     <>

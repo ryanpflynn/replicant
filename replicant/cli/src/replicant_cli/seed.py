@@ -32,6 +32,7 @@ from pathlib import Path
 import httpx
 import yaml
 
+from replicant_cli import engine
 from replicant_cli.paths import Paths
 
 PLATFORM_CAPS = {  # stack.md §5 step 2 (local values)
@@ -44,7 +45,10 @@ TENANTS = [  # stack.md §5 step 2
     {"tenant_id": "replicant-eval", "display_name": "Replicant evaluation"},
 ]
 GITEA_HOST = "git.replicant.localhost:3300"
-ORG, REPO, TENANT = "acme-payments", "ledger-api", "payments"
+ORG, REPO, TENANT = "acme-payments", "ledger-api", "payments"  # REPO: the default repo (prj_ledger, e2e01-07)
+# Design §8c onboarding samples (Python, Node): bound like ledger-api, in project prj_payments-web
+ONBOARDING_REPOS = ("billing-py", "web-console")
+SAMPLE_REPOS = (REPO, *ONBOARDING_REPOS)
 WEBHOOK_URL = "http://github-integration:8080/webhooks/gitea"
 WEBHOOK_EVENTS = {"issues", "issue_comment", "pull_request"}
 
@@ -89,9 +93,14 @@ def step_tenants(c: Ctx) -> str:
     return ",".join(t["tenant_id"] for t in TENANTS)
 
 
-def gitea_repo_id(c: Ctx) -> int:
-    r = _check(c.gitea.get(f"/api/v1/repos/{ORG}/{REPO}"), f"Gitea GET repo {ORG}/{REPO}")
+def gitea_repo_id(c: Ctx, repo: str = REPO) -> int:
+    r = _check(c.gitea.get(f"/api/v1/repos/{ORG}/{repo}"), f"Gitea GET repo {ORG}/{repo}")
     return int(r.json()["id"])
+
+
+def _present(c: Ctx, repo: str) -> bool:
+    """An optional sample repo exists in Gitea (stacks bootstrapped before §8c have only ledger-api)."""
+    return c.gitea.get(f"/api/v1/repos/{ORG}/{repo}").status_code == 200
 
 
 def step_scm_installation(c: Ctx) -> str:
@@ -111,7 +120,7 @@ def step_scm_installation(c: Ctx) -> str:
         "headers={'Authorization':'Bearer '+tok,'Content-Type':'application/json','Idempotency-Key':'\"seed-scm-1\"'})\n"
         "try:\n r=u.urlopen(r,timeout=20); print(r.status, r.read()[:300].decode())\n"
         "except u.HTTPError as e: print(e.code, e.read()[:300].decode()); sys.exit(1)\n")
-    r = subprocess.run(["podman", "exec", "-i", cont.name, "python", "-c", script],
+    r = subprocess.run([*engine.cli("exec"), "-i", cont.name, "python", "-c", script],
                        input=c.p.secret("dev_seed_token") + "\n", capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
         raise SeedError(f"scm-installations: {(r.stdout + r.stderr).strip()[-400:]}")
@@ -119,10 +128,16 @@ def step_scm_installation(c: Ctx) -> str:
 
 
 def step_repo_binding(c: Ctx) -> str:
-    rid = str(gitea_repo_id(c))
+    out = [_bind_repo(c, REPO)]
+    out += [_bind_repo(c, r) for r in ONBOARDING_REPOS if _present(c, r)]
+    return "; ".join(out)
+
+
+def _bind_repo(c: Ctx, repo: str) -> str:
+    rid = str(gitea_repo_id(c, repo))
     body = {
         "repo_id": rid,
-        "full_name": f"{ORG}/{REPO}",
+        "full_name": f"{ORG}/{repo}",
         "enabled": True,
         "trigger_modes": ["label"],
         "trigger_label": "replicant",
@@ -134,7 +149,7 @@ def step_repo_binding(c: Ctx) -> str:
                      headers={"Idempotency-Key": idem("repo", rid), "X-Replicant-Scm-Provider": "gitea",
                               "X-Replicant-Scm-Host": GITEA_HOST}),
            "PUT repo settings", ok=(200, 201, 204, 404))
-    return f"{GITEA_HOST}/{ORG}/{REPO} (gitea repo_id {rid}) -> tenant {TENANT}"
+    return f"{GITEA_HOST}/{ORG}/{repo} (gitea repo_id {rid}) -> tenant {TENANT}"
 
 
 def _definition_docs(p: Paths) -> list[dict]:
@@ -184,7 +199,7 @@ def step_dev_bundle(c: Ctx) -> str:
     fw = compose.containers().get("replicant-worker")
     if not fw or fw.status != "running":
         raise SeedError("replicant-worker is not running (its `local-bundle spec` defines the v0 bundle)")
-    out = subprocess.run(["podman", "exec", fw.name, "replicant-worker", "local-bundle", "spec"], capture_output=True,
+    out = subprocess.run([*engine.cli("exec"), fw.name, "replicant-worker", "local-bundle", "spec"], capture_output=True,
                          text=True, timeout=60)
     if out.returncode != 0:
         raise SeedError(f"replicant-worker local-bundle spec: {out.stderr.strip()[-300:]}")
@@ -222,10 +237,12 @@ def step_gitea_webhook(c: Ctx) -> str:
     missing = WEBHOOK_EVENTS - set(h.get("events") or [])
     if not h.get("active") or missing or (h.get("config") or {}).get("content_type") != "json":
         raise SeedError(f"webhook {h.get('id')} misconfigured: active={h.get('active')} missing events={sorted(missing)}")
-    labels = _check(c.gitea.get(f"/api/v1/repos/{ORG}/{REPO}/labels"), "Gitea GET labels").json()
-    if not any(lbl.get("name") == "replicant" for lbl in labels):
-        raise SeedError("label `replicant` missing on acme-payments/ledger-api")
-    return f"org hook {h.get('id')} -> {WEBHOOK_URL} active, label replicant present"
+    repos = [REPO] + [r for r in ONBOARDING_REPOS if _present(c, r)]
+    for repo in repos:
+        labels = _check(c.gitea.get(f"/api/v1/repos/{ORG}/{repo}/labels"), "Gitea GET labels").json()
+        if not any(lbl.get("name") == "replicant" for lbl in labels):
+            raise SeedError(f"label `replicant` missing on {ORG}/{repo}")
+    return f"org hook {h.get('id')} -> {WEBHOOK_URL} active, label replicant present on {', '.join(repos)}"
 
 
 DEV_LOGINS = ("grace", "carol", "alice", "bob", "dave", "erin", "frank")   # replicant_dev_auth static users
@@ -275,7 +292,7 @@ def step_identity_links(c: Ctx) -> str:
     cont = compose.containers().get("postgres-replicant")
     if not cont or cont.status != "running":
         raise SeedError("postgres-replicant is not running")
-    r = subprocess.run(["podman", "exec", "-i", cont.name, "psql", "-v", "ON_ERROR_STOP=1", "-q", "-U", "postgres",
+    r = subprocess.run([*engine.cli("exec"), "-i", cont.name, "psql", "-v", "ON_ERROR_STOP=1", "-q", "-U", "postgres",
                         "-d", "replicant"], input="\n".join(stmts), capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
         raise SeedError(f"identity links: {(r.stdout + r.stderr).strip()[-400:]}")
@@ -313,7 +330,8 @@ SEED_BINDINGS = [  # (group, scope, tenant, role)
     ("replicant-release-managers", "platform", None, "release_manager"),
 ]
 PROJECTS = [  # (project_id, name, owners_group, repos)
-    ("prj_ledger", "Ledger", "ledger-admins", True), ("prj_payments-web", "Payments web", "payments-admins", False),
+    ("prj_ledger", "Ledger", "ledger-admins", (REPO,)),
+    ("prj_payments-web", "Payments web", "payments-admins", ONBOARDING_REPOS),  # design §8c samples
 ]
 
 
@@ -347,15 +365,16 @@ def step_projects_rbac(c: Ctx) -> str:
     cont = compose.containers().get("postgres-replicant")
     if not cont or cont.status != "running":
         raise SeedError("postgres-replicant is not running")
-    r = subprocess.run(["podman", "exec", "-i", cont.name, "psql", "-v", "ON_ERROR_STOP=1", "-q", "-U", "postgres",
+    r = subprocess.run([*engine.cli("exec"), "-i", cont.name, "psql", "-v", "ON_ERROR_STOP=1", "-q", "-U", "postgres",
                         "-d", "replicant"], input="\n".join(stmts), capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
         raise SeedError(f"groups/bindings: {(r.stdout + r.stderr).strip()[-400:]}")
-    rid = str(gitea_repo_id(c))
-    for pid, name, owners, with_repo in PROJECTS:
+    for pid, name, owners, repos in PROJECTS:
         body: dict = {"project_id": pid, "name": name, "owners_group": owners}
-        if with_repo:
-            body["repos"] = [{"repo_id": rid, "full_name": f"{ORG}/{REPO}", "host": GITEA_HOST, "provider": "gitea"}]
+        present = [r for r in repos if r == REPO or _present(c, r)]
+        if present:
+            body["repos"] = [{"repo_id": str(gitea_repo_id(c, r)), "full_name": f"{ORG}/{r}", "host": GITEA_HOST,
+                              "provider": "gitea"} for r in present]
         _check(c.api.post(f"/v1/tenants/{TENANT}/projects", json=body), f"POST project {pid}", ok=(200, 201))
     acc = _check(c.api.get("/v1/projects/prj_ledger/access"), "GET access").json()
     if not acc["bindings"]:

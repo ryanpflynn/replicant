@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from temporalio.exceptions import ApplicationError
 
-from replicant_worker import local_bundle
+from replicant_worker import local_bundle, tiers
 from replicant_worker.activities import bundle as bundles
 from replicant_worker.activities import s3
 from replicant_worker.activities.base import http, implements, info_ids, parse_lid, retryable_http
@@ -110,10 +111,34 @@ def _timeouts(agent: dict[str, Any], requested: dict[str, Any] | None) -> dict[s
     return t
 
 
+REPO_INSTRUCTIONS = ("quote_as_context", "ignore", "trusted_load")
+COMMAND_KEYS = ("install", "build", "test", "lint")
+_SHA = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
+_MCP_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def repo_profile_fields(rp: dict[str, Any]) -> dict[str, Any]:
+    """Run-plan fields from the job's pinned repo profile (onboarding-interfaces.md §4 -> §5): repo_config,
+    config_base_sha, mcp_auto_allow. environment.commands is added by plan_document."""
+    mode = rp.get("repo_config") if rp.get("repo_config") in ("use", "ignore") else "ignore"
+    sha = rp.get("config_base_sha") or rp.get("sha")
+    allow = []
+    for m in rp.get("mcp_auto_allow") or []:
+        if isinstance(m, dict) and _MCP_NAME.match(str(m.get("name") or "")) and m.get("command"):
+            allow.append({"name": str(m["name"]), "command": str(m["command"])[:256],
+                          "args": [str(x)[:512] for x in (m.get("args") or [])][:32]})
+    return {"repo_config": mode, "config_base_sha": sha if isinstance(sha, str) and _SHA.match(sha) else None,
+            "mcp_auto_allow": allow[:16]}
+
+
 def plan_document(a: dict[str, Any], agent_doc: dict[str, Any], env_doc: dict[str, Any], *, budget: float,
                   timeouts: dict[str, int], audiences: list[str], scopes: list[str], network_profile: str,
-                  base_sha: str | None) -> dict[str, Any]:
-    spec, env = agent_doc["spec"], env_doc["spec"]
+                  base_sha: str | None, agent_spec: dict[str, Any] | None = None,
+                  repo_instructions: str = "quote_as_context") -> dict[str, Any]:
+    """`agent_spec`: the agent spec with the run's model tier applied (default: the definition's). With a pinned
+    `repo_profile` in `a` the plan also carries environment.commands, repo_config, config_base_sha and
+    mcp_auto_allow, and the coding roles bootstrap with the repo's own install command."""
+    spec, env = agent_spec or agent_doc["spec"], env_doc["spec"]
     role = a["role"]
     texts = local_bundle.PROMPTS.get((agent_doc.get("metadata") or {}).get("name", "")) \
         or local_bundle.PROMPTS.get(role, local_bundle.PROMPTS["implementer"])  # MEM: agent-specific prompts (scanner)
@@ -131,21 +156,44 @@ def plan_document(a: dict[str, Any], agent_doc: dict[str, Any], env_doc: dict[st
     boot = env.get("bootstrap") or {}
     steps = [{k: s[k] for k in ("name", "run", "timeoutSeconds") if k in s} for s in boot.get("steps", [])] \
         if role in (boot.get("forRoles") or [role]) else []
-    return {"schema": "replicant.run-plan/v1", "run_id": a["run_id"], "role": role, "agent": spec, "effective": eff,
-            "prompts": {"role": ptxt(texts["role"]), "constraints": ptxt(local_bundle.CONSTRAINTS),
-                        "task_template": ptxt(texts["task"]), "finalize": ptxt(local_bundle.FINALIZE)},
-            "workspace": {"repo_path": "/workspace/repo", **({"base_sha": base_sha} if base_sha else {}),
-                          "branch_name": f"replicant/{a['job_id']}"},
-            "environment": {"codebase_type": env.get("codebaseType"), "bootstrap_steps": steps, "env": dict(env.get("env") or {}),
-                            "package_mirrors": list(env.get("packageMirrors") or []),
-                            "caches": [{k: c[k] for k in ("name", "path", "kind", "env") if k in c} for c in env.get("caches", [])],
-                            "services": []},
-            "repo_instructions": "quote_as_context"}
+    if role == "qa":  # QA installs and builds itself; only `seed-*` steps run ahead of it (design §8c)
+        steps = [s for s in steps if str(s.get("name", "")).startswith("seed-")]
+    rp = a.get("repo_profile") or None
+    cmds = (rp or {}).get("commands") or {}
+    if rp and role != "qa" and cmds.get("install") and role in (boot.get("forRoles") or [role]):
+        steps = [s for s in steps if str(s.get("name", "")).startswith("seed-")] + \
+            [{"name": "repo-install", "run": str(cmds["install"])[:4096], "timeoutSeconds": 900}]
+    doc = {"schema": "replicant.run-plan/v1", "run_id": a["run_id"], "role": role, "agent": spec, "effective": eff,
+           "prompts": {"role": ptxt(texts["role"]), "constraints": ptxt(local_bundle.CONSTRAINTS),
+                       "task_template": ptxt(texts["task"]), "finalize": ptxt(local_bundle.FINALIZE)},
+           "workspace": {"repo_path": "/workspace/repo", **({"base_sha": base_sha} if base_sha else {}),
+                         "branch_name": f"replicant/{a['job_id']}"},
+           "environment": {"codebase_type": env.get("codebaseType"), "bootstrap_steps": steps, "env": dict(env.get("env") or {}),
+                           "package_mirrors": list(env.get("packageMirrors") or []),
+                           "caches": [{k: c[k] for k in ("name", "path", "kind", "env") if k in c} for c in env.get("caches", [])],
+                           "services": []},
+           "repo_instructions": repo_instructions if repo_instructions in REPO_INSTRUCTIONS else "quote_as_context"}
+    if rp:  # design §8c (onboarding-interfaces.md §5); absent fields mean today's behaviour
+        doc["environment"]["commands"] = {k: (str(cmds[k])[:4096] if cmds.get(k) else None) for k in COMMAND_KEYS}
+        doc.update(repo_profile_fields(rp))
+    return doc
+
+
+def _repo_instructions(b: bundles.Bundle, repo: dict[str, Any] | None) -> str:
+    """The codebase binding's repoInstructions for the job's repo (the bindings policy default when no binding
+    matches); quote_as_context without a bindings policy (v0's local bundle)."""
+    pol = b.policies().get("codebase_bindings") or {}
+    binding = b.binding_for(repo) if repo else None
+    v = (binding or {}).get("repoInstructions") or (pol.get("default") or {}).get("repoInstructions")
+    return v if v in REPO_INSTRUCTIONS else "quote_as_context"
 
 
 @implements("agents.build_run_plan")
 async def agents_build_run_plan(a: dict[str, Any]) -> dict[str, Any]:
-    """WS-03 agent-definition.md §3. Writes inputs/run-plan.json once and returns the effective per-run values."""
+    """WS-03 agent-definition.md §3. Writes inputs/run-plan.json once and returns the effective per-run values.
+    `tier_facts` (sent by workflows with the model-tiers-v1 patch) selects the run's model tier (replicant_worker.tiers)
+    from the bundle's model_tiers / model_tier_selection policies; `repo_profile` and `repo` (repo-profile-env-v1)
+    add the repo's commands and configuration mode and the binding's repoInstructions."""
     b = bundles.load(a["release_bundle_id"])
     agent_pin, agent_doc = b.agent(a["agent_ref"])
     env_pin, env_doc = b.environment(a["environment_ref"])
@@ -153,6 +201,11 @@ async def agents_build_run_plan(a: dict[str, Any]) -> dict[str, Any]:
     if a["role"] not in spec.get("roles", []) and not (a["role"] == "repair" and "implementer" in spec.get("roles", [])):
         raise ApplicationError(f"agent {a['agent_ref']} does not declare role {a['role']}", type="InvalidInput",
                                non_retryable=True)
+    tier = None
+    if a.get("tier_facts") is not None:
+        tier = tiers.resolve(b.policies(), role=a["role"], agent_name=agent_pin["name"],
+                             workflow_type=str(a.get("workflow_type") or ""), facts=a["tier_facts"])
+    run_spec = tiers.apply(spec, tier["params"]) if tier else spec
     t = _timeouts(spec, a.get("timeouts"))
     audiences = RUN_AUDIENCES.get(a["role"], RUN_AUDIENCES["implementer"])
     scopes = list(BASE_SCOPES) + (["inbox:read"] if (spec.get("steering") or {}).get("live") else [])
@@ -163,15 +216,22 @@ async def agents_build_run_plan(a: dict[str, Any]) -> dict[str, Any]:
     # min(plan max_cost, job cap).
     budget = round(min(max_cost, float(a.get("job_cap_usd") or max_cost)), 2)
     doc = plan_document(a, agent_doc, env_doc, budget=budget, timeouts=t, audiences=audiences, scopes=scopes,
-                        network_profile=net, base_sha=a.get("base_sha"))
+                        network_profile=net, base_sha=a.get("base_sha"), agent_spec=run_spec,
+                        repo_instructions=_repo_instructions(b, a.get("repo")))
     r = s3.ref("artifacts", run_prefix(a["tenant_id"], a["job_id"], a["run_id"]) + "inputs/run-plan.json")
     put = _reuse_or_put(r, _j(doc), "application/json")
-    return {"agent_ref": agent_pin, "environment_ref": env_pin,
-            "run_plan": {"name": "run_plan", "key": r.key, "sha256": put["sha256"], "size_bytes": put["size_bytes"]},
-            "audiences": audiences, "scopes": scopes, "network_profile": net,
-            "resource_profile": (env_doc["spec"].get("profileByRole") or {}).get(a["role"], a.get("resource_profile") or "default"),
-            "timeouts": t, "max_cost_usd": max_cost, "steering_live": doc["effective"]["steering_live"],
-            "models": doc["effective"]["models"], "max_turns": doc["effective"]["max_turns"], "max_concurrency": 4}
+    out = {"agent_ref": agent_pin, "environment_ref": env_pin,
+           "run_plan": {"name": "run_plan", "key": r.key, "sha256": put["sha256"], "size_bytes": put["size_bytes"]},
+           "audiences": audiences, "scopes": scopes, "network_profile": net,
+           "resource_profile": (env_doc["spec"].get("profileByRole") or {}).get(a["role"], a.get("resource_profile") or "default"),
+           "timeouts": t, "max_cost_usd": max_cost, "steering_live": doc["effective"]["steering_live"],
+           "models": doc["effective"]["models"], "max_turns": doc["effective"]["max_turns"], "max_concurrency": 4}
+    if tier:  # recorded by the workflow (run.model_selected) and in the run's observations
+        p = (doc["agent"].get("model") or {})
+        out["tier"] = {"tier": tier["tier"], "role": tier["role"], "escalated": tier["escalated"],
+                       "model": p.get("primary"), "reasoning_effort": (p.get("parameters") or {}).get("reasoningEffort"),
+                       "thinking_tokens": (p.get("parameters") or {}).get("thinkingTokens")}
+    return out
 
 
 # ------------------------------------------------------------------------------------------------ inputs manifest
@@ -315,11 +375,13 @@ def _pinned_from_plan(b: bundles.Bundle, a: dict[str, Any], plan_doc: dict[str, 
     """The manifest's pinned agent/environment: the bundle documents whose spec equals the plan's (the plan holds the
     verified spec verbatim). The workflow input carries only names through `extra`, so match by content."""
     from replicant_worker.activities import jcs
-    want = jcs.digest(plan_doc["agent"]) if kind == "agent" else None  # compares two specs, not a registry digest
+    def unmodelled(spec: dict[str, Any]) -> str:  # the run's model tier may have replaced spec.model
+        return jcs.digest({k: v for k, v in spec.items() if k != "model"})
+    want = unmodelled(plan_doc["agent"]) if kind == "agent" else None  # compares two specs, not a registry digest
     for ref, doc in b.docs.items():
         if not ref.startswith(f"{kind}/"):
             continue
-        if kind == "agent" and jcs.digest(doc["spec"]) == want:
+        if kind == "agent" and unmodelled(doc["spec"]) == want:
             return b.pinned(ref)
         if kind == "environment" and doc["spec"].get("codebaseType") == plan_doc["environment"].get("codebase_type"):
             return b.pinned(ref)

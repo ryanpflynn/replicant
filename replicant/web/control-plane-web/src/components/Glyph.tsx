@@ -32,6 +32,7 @@ const I: Record<string, string> = {
   approvals: '<path d="M7 1.5L12.5 7 7 12.5 1.5 7z"/>',
   releases: '<path d="M2 11.5h10M3.5 9V5.5M7 9V2.5M10.5 9V6.5"/>',
   memory: '<path d="M3 2.5h8v9H3zM5 2.5v9M3 5.5h2M3 8.5h2"/>',
+  fleet: '<rect x="1.5" y="2" width="4.5" height="4.5"/><rect x="8" y="2" width="4.5" height="4.5"/><rect x="1.5" y="8" width="4.5" height="4.5"/><rect x="8" y="8" width="4.5" height="4.5"/>',
   projects: '<path d="M1.5 3h4l1.2 1.5h5.8v7h-11z"/>',
   admin: '<circle cx="7" cy="7" r="2"/><path d="M7 1.5v2M7 10.5v2M1.5 7h2M10.5 7h2M3.1 3.1l1.4 1.4M9.5 9.5l1.4 1.4M3.1 10.9l1.4-1.4M9.5 4.5l1.4-1.4"/>',
   temporal: '<circle cx="7" cy="7" r="5.2"/><path d="M7 4v3l2 1.5"/>',

@@ -320,6 +320,12 @@ async def _validate(request: Request, row: Any, scope_key: str, config: Any) -> 
         old_eff, new_eff = P.merge(proj_cfg), P.merge(config if not errs else {})
     out: dict[str, Any] = {"valid": not errs, "errors": errs, "changes": P.changes(old_eff, new_eff) if not errs else [],
                            "effective": new_eff, "graphs": {}}
+    if not errs:
+        merrs = await derived.validate_models(request.app.state, new_eff)
+        if merrs:
+            out["valid"] = False
+            out["errors"] = merrs
+            return out
     if not errs and new_eff["workflows"]:
         try:
             compiled = await derived.preview_graphs(request.app.state, new_eff)

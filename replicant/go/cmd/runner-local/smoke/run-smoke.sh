@@ -9,25 +9,30 @@
 set -eu
 ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
 SMOKE_HOME="${SMOKE_HOME:-$HOME/.cache/replicant-runner-smoke}"
-SOCK="${REPLICANT_CONTAINER_SOCKET:-$(podman info --format '{{.Host.RemoteSocket.Path}}' | sed 's#^unix://##')}"
+ENGINE="${REPLICANT_CONTAINER_CLI:-podman}"
+if [ "$ENGINE" = podman ]; then
+  SOCK="${REPLICANT_CONTAINER_SOCKET:-$(podman info --format '{{.Host.RemoteSocket.Path}}' | sed 's#^unix://##')}"
+else
+  SOCK="${REPLICANT_CONTAINER_SOCKET:-/var/run/docker.sock}"
+fi
 NET=run-smoke
 BUILD=0; KEEP=0
 while [ $# -gt 0 ]; do case "$1" in --build) BUILD=1; shift;; --keep) KEEP=1; shift;; *) break;; esac; done
 
 if [ "$BUILD" = 1 ]; then
-  podman build -q -t localhost/replicant/runner-local:dev -f "$ROOT/go/cmd/runner-local/Dockerfile" "$ROOT"
-  podman build -q -t localhost/replicant/repo-mirror:dev -f "$ROOT/go/cmd/repo-mirror/Dockerfile" "$ROOT"
-  podman build -q -t localhost/replicant/sandbox-sidecars:dev --target sidecars -f "$ROOT/go/cmd/sandbox-sidecars/Dockerfile" "$ROOT"
-  podman build -q -t localhost/replicant/pause:3.10 --target pause -f "$ROOT/go/cmd/sandbox-sidecars/Dockerfile" "$ROOT"
-  podman build -q -t localhost/replicant/cli-claude-code:dev -f "$ROOT/images/cli-claude-code/Dockerfile" "$ROOT"
-  podman build -q -t localhost/replicant/env-go-service:dev -f "$ROOT/images/env-go-service/Dockerfile" "$ROOT"
+  "$ENGINE" build -q -t localhost/replicant/runner-local:dev -f "$ROOT/go/cmd/runner-local/Dockerfile" "$ROOT"
+  "$ENGINE" build -q -t localhost/replicant/repo-mirror:dev -f "$ROOT/go/cmd/repo-mirror/Dockerfile" "$ROOT"
+  "$ENGINE" build -q -t localhost/replicant/sandbox-sidecars:dev --target sidecars -f "$ROOT/go/cmd/sandbox-sidecars/Dockerfile" "$ROOT"
+  "$ENGINE" build -q -t localhost/replicant/pause:3.10 --target pause -f "$ROOT/go/cmd/sandbox-sidecars/Dockerfile" "$ROOT"
+  "$ENGINE" build -q -t localhost/replicant/cli-claude-code:dev -f "$ROOT/images/cli-claude-code/Dockerfile" "$ROOT"
+  "$ENGINE" build -q -t localhost/replicant/env-go-service:dev -f "$ROOT/images/env-go-service/Dockerfile" "$ROOT"
 fi
 
 cleanup() {
-  for n in $(podman ps -a --format '{{.Names}}' | grep -E '^(run-(s3|temporal|shim|mirror|runner|driver)|ar-)'); do podman rm -f -v "$n" >/dev/null 2>&1 || true; done
-  for v in $(podman volume ls --format '{{.Name}}' | grep -E '^ar-'); do podman volume rm -f "$v" >/dev/null 2>&1 || true; done
-  podman volume rm -f run-runner-state run-mirror-cache >/dev/null 2>&1 || true
-  podman network rm -f "$NET" >/dev/null 2>&1 || true
+  for n in $("$ENGINE" ps -a --format '{{.Names}}' | grep -E '^(run-(s3|temporal|shim|mirror|runner|driver)|ar-)'); do "$ENGINE" rm -f -v "$n" >/dev/null 2>&1 || true; done
+  for v in $("$ENGINE" volume ls --format '{{.Name}}' | grep -E '^ar-'); do "$ENGINE" volume rm -f "$v" >/dev/null 2>&1 || true; done
+  "$ENGINE" volume rm -f run-runner-state run-mirror-cache >/dev/null 2>&1 || true
+  "$ENGINE" network rm -f "$NET" >/dev/null 2>&1 || true
 }
 cleanup
 [ "$KEEP" = 1 ] || trap cleanup EXIT
@@ -50,16 +55,16 @@ rm -rf "$SMOKE_HOME/scripts"; mkdir -p "$SMOKE_HOME/scripts"
 cp -r "$ROOT/tests/fixtures/gateway-scripts/walkthrough-ledger-api" "$SMOKE_HOME/scripts/"
 cp -r "$ROOT/tests/fixtures/gateway-scripts/runner-contract" "$SMOKE_HOME/scripts/"
 
-podman network create "$NET" >/dev/null
-podman volume create run-runner-state >/dev/null
-podman volume create run-mirror-cache >/dev/null
+"$ENGINE" network create "$NET" >/dev/null
+"$ENGINE" volume create run-runner-state >/dev/null
+"$ENGINE" volume create run-mirror-cache >/dev/null
 
-podman run -d --name run-s3 --network "$NET" -v "$S/s3.json:/etc/s3.json:ro" docker.io/chrislusf/seaweedfs:4.48 \
+"$ENGINE" run -d --name run-s3 --network "$NET" -v "$S/s3.json:/etc/s3.json:ro" docker.io/chrislusf/seaweedfs:4.48 \
   server -dir=/data -s3 -s3.port=8333 -s3.config=/etc/s3.json -master.volumeSizeLimitMB=64 >/dev/null
-podman run -d --name run-temporal --network "$NET" --user 0:0 docker.io/temporalio/admin-tools:1.32.1 \
+"$ENGINE" run -d --name run-temporal --network "$NET" --user 0:0 docker.io/temporalio/admin-tools:1.32.1 \
   temporal server start-dev --ip 0.0.0.0 --port 7233 --headless --namespace replicant-local --log-level warn >/dev/null
 
-podman run -d --name run-driver --network "$NET" -v "$ROOT:/src:ro" -v run-gomod:/go/pkg/mod -v run-gocache:/root/.cache \
+"$ENGINE" run -d --name run-driver --network "$NET" -v "$ROOT:/src:ro" -v run-gomod:/go/pkg/mod -v run-gocache:/root/.cache \
   -v run-runner-state:/runner-state:ro -v "$S:/secrets:ro" \
   -e GOWORK=off -e GOFLAGS=-mod=mod -e S3_ENDPOINT=http://run-s3:8333 -e S3_ACCESS_KEY=admin -e "S3_SECRET_KEY=$(cat "$S/s3_secret")" \
   -e RUNNER_URL=http://run-runner:8480 -e RUNNER_SANDBOX_URL=http://run-runner:8490 -e SHIM_URL=http://run-shim:8420 \
@@ -69,7 +74,7 @@ podman run -d --name run-driver --network "$NET" -v "$ROOT:/src:ro" -v run-gomod
   -w /src/go/cmd/runner-local docker.io/library/golang:1.26 \
   sh -c "go build -o /tmp/smoke ./smoke && exec /tmp/smoke $*" >/dev/null
 
-podman run -d --name run-shim --network "$NET" -v "$ROOT/dev/compose/config/gateway-shim:/etc/gateway-shim:ro" \
+"$ENGINE" run -d --name run-shim --network "$NET" -v "$ROOT/dev/compose/config/gateway-shim:/etc/gateway-shim:ro" \
   -v "$SMOKE_HOME/scripts:/cassettes/scripts:ro" -v "$S:/run/secrets:ro" \
   -e REPLICANT_ENV=local -e REPLICANT_RUN_TOKEN_ISSUERS=http://run-runner:8480 -e REPLICANT_RUN_TOKEN_JWKS_URLS=http://run-runner:8490/.well-known/jwks.json \
   -e REPLICANT_RUN_GRANT_ISSUER=replicant-local-core -e REPLICANT_RUN_GRANT_JWKS_URL=http://run-driver:8403/.well-known/jwks.json \
@@ -80,7 +85,7 @@ podman run -d --name run-shim --network "$NET" -v "$ROOT/dev/compose/config/gate
   -e REPLICANT_GATEWAY_USAGE_S3_URI=file:///tmp/gateway-usage \
   localhost/replicant/replicant-gateway-shim:dev replicant-gateway-shim --config=/etc/gateway-shim/gateway-shim.yaml --upstream-backend=script >/dev/null
 
-podman run -d --name run-mirror --network "$NET" -v run-mirror-cache:/var/cache/repo-mirror -v "$S:/run/secrets:ro" \
+"$ENGINE" run -d --name run-mirror --network "$NET" -v run-mirror-cache:/var/cache/repo-mirror -v "$S:/run/secrets:ro" \
   -e MIRROR_RUN_TOKEN_ISSUERS=http://run-runner:8480 -e MIRROR_RUN_TOKEN_JWKS_URLS=http://run-runner:8490/.well-known/jwks.json \
   -e MIRROR_RUN_GRANT_ISSUER=replicant-local-core -e MIRROR_RUN_GRANT_JWKS_URL=http://run-driver:8403/.well-known/jwks.json \
   -e MIRROR_RUN_GRANT_REVOCATION_URL=http://run-driver:8403/grants/revoked -e MIRROR_EXEC_REVOCATIONS_URLS=http://run-runner:8480/v1/revocations \
@@ -88,7 +93,7 @@ podman run -d --name run-mirror --network "$NET" -v run-mirror-cache:/var/cache/
   -e MIRROR_BROKER_URL=http://run-driver:8081 -e MIRROR_BROKER_TOKEN_FILE=/run/secrets/broker_token \
   localhost/replicant/repo-mirror:dev >/dev/null
 
-podman run -d --name run-runner --network "$NET" --security-opt label=disable -v "$SOCK:/var/run/docker.sock" \
+"$ENGINE" run -d --name run-runner --network "$NET" --security-opt label=disable -v "$SOCK:/var/run/docker.sock" \
   -v run-runner-state:/var/lib/runner-local -v "$S:/run/secrets:ro" \
   -v "$ROOT/dev/compose/config/runner-local/runner-local.yaml:/etc/runner-local/runner-local.yaml:ro" \
   -e RUNNER_CONFIG=/etc/runner-local/runner-local.yaml -e RUNNER_ISSUER=http://run-runner:8480 \
@@ -106,11 +111,11 @@ podman run -d --name run-runner --network "$NET" --security-opt label=disable -v
   -e REPLICANT_ENV=local -e REPLICANT_ORG=local \
   localhost/replicant/runner-local:dev >/dev/null
 
-echo "stack up; following the smoke driver (podman logs -f run-driver)"
-podman logs -f run-driver &
+echo "stack up; following the smoke driver ($ENGINE logs -f run-driver)"
+"$ENGINE" logs -f run-driver &
 LOGPID=$!
-RC="$(podman wait run-driver)"
+RC="$("$ENGINE" wait run-driver)"
 sleep 1; kill $LOGPID 2>/dev/null || true
-podman cp run-driver:/tmp/smoke-results.json "$SMOKE_HOME/results.json" 2>/dev/null || true
+"$ENGINE" cp run-driver:/tmp/smoke-results.json "$SMOKE_HOME/results.json" 2>/dev/null || true
 echo "driver exit $RC (results: $SMOKE_HOME/results.json)"
 exit "$RC"

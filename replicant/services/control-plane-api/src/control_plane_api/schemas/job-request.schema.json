@@ -103,6 +103,39 @@
       "type": "string",
       "pattern": "^rb_[0-9a-hjkmnp-tv-z]{26}$"
     },
+    "repo_profile": {
+      "description": "ONBOARD-01 \u00a74: the repo's inventory profile pinned on the job by control-plane-api intake (never by the submitter; intake drops a submitted value). Absent: the old behaviour (go-service environment, repo instructions quoted as context). environment null: the profile found no supported toolchain.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile_id", "sha", "environment", "commands", "repo_config", "config_base_sha", "mcp_auto_allow", "readiness"],
+      "properties": {
+        "profile_id": {"type": "string", "pattern": "^rp_[0-9a-hjkmnp-tv-z]{26}$"},
+        "sha": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"},
+        "environment": {"type": ["string", "null"], "enum": ["go-service", "python-service", "node-service", null]},
+        "commands": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"install": {"type": ["string", "null"], "maxLength": 1000}, "build": {"type": ["string", "null"], "maxLength": 1000}, "test": {"type": ["string", "null"], "maxLength": 1000}, "lint": {"type": ["string", "null"], "maxLength": 1000}}
+        },
+        "repo_config": {"type": "string", "enum": ["use", "ignore"]},
+        "config_base_sha": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"},
+        "mcp_auto_allow": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "command", "args"],
+            "properties": {
+              "name": {"type": "string", "maxLength": 200},
+              "command": {"type": "string", "maxLength": 500},
+              "args": {"type": "array", "maxItems": 30, "items": {"type": "string", "maxLength": 1000}}
+            }
+          }
+        },
+        "readiness": {"type": "string", "enum": ["pending", "probing", "ready", "warnings", "blocked"]}
+      }
+    },
     "trace_context": {
       "$ref": "#/$defs/trace_context"
     },

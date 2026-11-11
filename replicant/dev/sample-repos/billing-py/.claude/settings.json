@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": ["Bash(uv run pytest:*)", "Bash(uv run ruff:*)"],
+    "deny": ["Read(./.env)"]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$(jq -r '.tool_input.file_path // empty')\"; echo \"replicant-hook PostToolUse ruff-format ${f#\"$CLAUDE_PROJECT_DIR\"/}\" >> \"$CLAUDE_PROJECT_DIR/.replicant-hook.log\"; case \"$f\" in *.py) cd \"$CLAUDE_PROJECT_DIR\" && uv run --quiet ruff format \"$f\" ;; esac",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}

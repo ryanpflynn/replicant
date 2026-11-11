@@ -13,6 +13,20 @@ type RunPlan struct {
 	Workspace        PlanWorkspace         `json:"workspace"`
 	Environment      PlanEnvironment       `json:"environment"`
 	RepoInstructions string                `json:"repo_instructions,omitempty"`
+	// Repo onboarding (design §8c, onboarding-interfaces.md §5). Absent means today's behaviour (repo_config ignore).
+	RepoConfig    string         `json:"repo_config,omitempty"`
+	ConfigBaseSHA string         `json:"config_base_sha,omitempty"`
+	MCPAutoAllow  []MCPAutoAllow `json:"mcp_auto_allow,omitempty"`
+}
+
+// RepoConfigUse reports whether the repo's own Claude Code configuration is loaded (repo_config: use).
+func (p *RunPlan) RepoConfigUse() bool { return p.RepoConfig == "use" }
+
+// MCPAutoAllow is a repo .mcp.json stdio server whose catalogue class is auto_allow (onboarding-interfaces.md §4).
+type MCPAutoAllow struct {
+	Name    string   `json:"name"`
+	Command string   `json:"command"`
+	Args    []string `json:"args,omitempty"`
 }
 
 type PromptText struct {
@@ -63,8 +77,9 @@ type Model struct {
 	Small      string   `json:"small,omitempty"`
 	Subagent   string   `json:"subagent,omitempty"`
 	Parameters struct {
-		MaxOutputTokens int `json:"maxOutputTokens,omitempty"`
-		ThinkingTokens  int `json:"thinkingTokens,omitempty"`
+		MaxOutputTokens int    `json:"maxOutputTokens,omitempty"`
+		ThinkingTokens  int    `json:"thinkingTokens,omitempty"`
+		ReasoningEffort string `json:"reasoningEffort,omitempty"`
 	} `json:"parameters"`
 }
 
@@ -178,6 +193,16 @@ type PlanEnvironment struct {
 	PackageMirrors []string          `json:"package_mirrors"`
 	Caches         []Cache           `json:"caches"`
 	Services       []json.RawMessage `json:"services"`
+	Commands       *EnvCommands      `json:"commands,omitempty"`
+}
+
+// EnvCommands are the repo's own install/build/test/lint commands (onboarding-interfaces.md §2, §5); replicant-qa
+// runs them when present. An empty string is a stage that is not configured.
+type EnvCommands struct {
+	Install string `json:"install,omitempty"`
+	Build   string `json:"build,omitempty"`
+	Test    string `json:"test,omitempty"`
+	Lint    string `json:"lint,omitempty"`
 }
 
 type Step struct {

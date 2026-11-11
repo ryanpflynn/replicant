@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from replicant_cli import compose
+from replicant_cli import compose, engine
 from replicant_cli.paths import Paths
 
 GO_IMAGE = "docker.io/library/golang:1.26"
@@ -35,13 +35,14 @@ PY_ROOTS = ("services", "workers", "libs/python", "cli", "tools/slack-mock")
 DB_SUITES = {"control-plane-api", "github-integration", "memory-service"}  # share the smoke Postgres: run one at a time
 WORKER = "replicant-worker"
 SMOKE_PG_PORT = 55432
-E2E_DRIVERS = ("e2e01", "e2e04", "e2e02", "e2e03", "e2e05", "e2e06", "e2e07")  # e2e04 reads the job e2e01 just finished
+E2E_DRIVERS = ("e2e01", "e2e04", "e2e02", "e2e03", "e2e05", "e2e06", "e2e07", "e2e08")  # e2e04 reads the job e2e01 just finished
 E2E_FILES = {"e2e01": "e2e01_v0.py", "e2e02": "e2e02_notify.py", "e2e03": "e2e03_slack.py",
              "e2e04": "e2e04_graph.py", "e2e05": "e2e05_config.py",
-             "e2e06": "e2e06_memory.py", "e2e07": "e2e07_pr_feedback.py"}
+             "e2e06": "e2e06_memory.py", "e2e07": "e2e07_pr_feedback.py",
+             "e2e08": "e2e08_onboarding.py"}
 PLAYWRIGHT_SPECS = ("e2e/01-screens.spec.ts", "e2e/02-live.spec.ts", "e2e/03-after.spec.ts",
                     "e2e/05-waiting.spec.ts", "e2e/07-simple-view.spec.ts", "e2e/08-project-settings.spec.ts",
-                    "e2e/09-memory.spec.ts")
+                    "e2e/09-memory.spec.ts", "e2e/10-onboarding.spec.ts")
 
 
 @dataclass
@@ -216,7 +217,7 @@ def _run_go(ctx: Ctx, s: Suite) -> list[Result]:
     vols = []
     for v, mnt in zip(GO_CACHE_VOLUMES, ("/go/pkg/mod", "/root/.cache")):
         vols += ["-v", f"{v}:{mnt}"]
-    cmd = ["podman", "run", "--rm", "-v", f"{ctx.p.root}:/src", "-w", "/src", *vols, "-e", "GOTOOLCHAIN=local",
+    cmd = [*engine.cli("run"), "--rm", "-v", f"{ctx.p.root}:/src", "-w", "/src", *vols, "-e", "GOTOOLCHAIN=local",
            "-e", "GOFLAGS=-buildvcs=false", GO_IMAGE, "sh", "-c", script]
     rc = _run_logged(cmd, log, timeout=1800)
     events: dict[str, list[dict]] = {m: [] for m in mods}
@@ -291,7 +292,7 @@ def _run_lint_go(ctx: Ctx, s: Suite) -> list[Result]:
     vols = []
     for v, mnt in zip(GO_CACHE_VOLUMES, ("/go/pkg/mod", "/root/.cache"), strict=True):
         vols += ["-v", f"{v}:{mnt}"]
-    rc = _run_logged(["podman", "run", "--rm", "-v", f"{ctx.p.root}:/src", "-w", "/src", *vols, "-e", "GOTOOLCHAIN=local",
+    rc = _run_logged([*engine.cli("run"), "--rm", "-v", f"{ctx.p.root}:/src", "-w", "/src", *vols, "-e", "GOTOOLCHAIN=local",
                       "-e", "GOFLAGS=-buildvcs=false", GO_IMAGE, "sh", "-c", script], log, timeout=1200)
     cases, out, cur = [], [], None
     for line in log.read_text(errors="replace").splitlines():
@@ -320,7 +321,7 @@ def _run_web(ctx: Ctx, s: Suite) -> list[Result]:
               'node_modules/.bin/vitest run --reporter=default --reporter=junit --outputFile.junit=/out/vitest.xml '
               '>/out/vitest.log 2>&1; echo "$? $s $(date +%s.%N)" >/out/vitest.rc')
     log = ctx.out / "web.log"
-    rc = _run_logged(["podman", "run", "--rm", "-v", f"{web}:/app", "-v", f"{wout}:/out", "-w", "/app", NODE_IMAGE,
+    rc = _run_logged([*engine.cli("run"), "--rm", "-v", f"{web}:/app", "-v", f"{wout}:/out", "-w", "/app", NODE_IMAGE,
                       "sh", "-c", script], log, timeout=1200)
     out = []
     for name, f in (("web:tsc", "tsc"), ("web:vitest", "vitest")):
@@ -350,11 +351,9 @@ MIGRATE_SOURCES = ("replicant_db", "bootstrap", "tools", "Dockerfile.migrate", "
 
 def migrate_image_stale(p: Paths) -> str | None:
     """Why localhost/replicant/migrate:dev is older than replicant-db's sources (None when current)."""
-    r = subprocess.run(["podman", "image", "inspect", "localhost/replicant/migrate:dev", "--format", "{{.Created.Unix}}"],
-                       capture_output=True, text=True)
-    if r.returncode != 0:
+    built = engine.image_created("localhost/replicant/migrate:dev")
+    if built is None:
         return "image missing"
-    built = int(r.stdout.strip() or 0)
     base = p.root / "libs" / "python" / "replicant-db"
     newest, which = 0.0, ""
     for src in MIGRATE_SOURCES:
@@ -369,7 +368,7 @@ def migrate_image_stale(p: Paths) -> str | None:
 def build_migrate(p: Paths, log: Callable[[str], None]) -> bool:
     svc = compose.load_services(p, "v0")["migrate"]
     ok = compose.build_image(p, svc, compose.env_values(p), log)
-    subprocess.run(["podman", "image", "prune", "-f"], capture_output=True)  # dangling layers of the old image
+    subprocess.run(engine.cli("image", "prune", "-f"), capture_output=True)  # dangling layers of the old image
     return ok
 
 
@@ -384,7 +383,7 @@ class SmokeDb:
         self.started = False
 
     def up(self) -> dict[str, str]:
-        pre = subprocess.run(["podman", "container", "exists", "ctl-pg"]).returncode == 0
+        pre = engine.exists("container", "ctl-pg")
         env = {**os.environ, "CTL_HOME": str(self.home)}
         t0 = time.monotonic()
         r = subprocess.run(["sh", str(self.script), "up"], env=env, capture_output=True, text=True, timeout=600)
@@ -593,7 +592,7 @@ def _run_playwright(ctx: Ctx, s: Suite) -> list[Result]:
         return [_status(r, mk.returncode or 1)]
     pw_out = ctx.out / "playwright"
     pw_out.mkdir(exist_ok=True)
-    cmd = ["podman", "run", "--rm", "--network", "host", "-v", f"{web}:/app", "-v", f"{pw_out}:/out", "-w", "/app",
+    cmd = [*engine.cli("run"), "--rm", "--network", "host", "-v", f"{web}:/app", "-v", f"{pw_out}:/out", "-w", "/app",
            "-e", f"JOB_ID={ids['job_id']}", "-e", f"GATE_ID={ids['gate_id']}",
            "-e", "PLAYWRIGHT_JUNIT_OUTPUT_NAME=/out/junit.xml", PLAYWRIGHT_IMAGE,
            "npx", "playwright", "test", "--reporter=list,junit", *PLAYWRIGHT_SPECS]

@@ -1,0 +1,19 @@
+{
+  "name": "web-console",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Billing web console helpers (sample repository for the local Replicant stack).",
+  "type": "module",
+  "packageManager": "pnpm@10.34.9",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "vips --version && vitest run",
+    "test:unit": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "3.2.7"
+  }
+}

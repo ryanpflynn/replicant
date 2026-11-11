@@ -90,8 +90,11 @@ def new_job_id(n: int) -> str:
 
 async def start_job(client: Client, job_id: str, *, workflow_type: str = "auto", priority: str = "normal",
                     versioning_override: Any = None, labels: list[str] | None = None,
-                    options: dict[str, Any] | None = None, related: dict[str, Any] | None = None) -> WorkflowHandle:
+                    options: dict[str, Any] | None = None, related: dict[str, Any] | None = None,
+                    repo_profile: dict[str, Any] | None = None) -> WorkflowHandle:
     jr = json.loads(json.dumps(JOB_REQUEST))
+    if repo_profile:  # design §8c: pinned at intake (onboarding-interfaces.md §4)
+        jr["repo_profile"] = repo_profile
     if options:
         jr["options"] = options
     if related:

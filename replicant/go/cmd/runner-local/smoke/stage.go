@@ -104,6 +104,9 @@ type runOpts struct {
 	extraObjects                    []extraObj
 	steering                        bool
 	agentRole                       string
+	// repo onboarding (§8c): run-plan repo_config, config_base_sha and mcp_auto_allow
+	repoConfig, configBaseSHA string
+	mcpAutoAllow              []map[string]any
 }
 
 type extraObj struct {
@@ -198,6 +201,15 @@ func (e *env) stage(ctx context.Context, o runOpts) (*staged, error) {
 		"environment": map[string]any{"codebase_type": "go_service", "bootstrap_steps": e.envSpec["bootstrap"].(map[string]any)["steps"], "env": map[string]string{"CGO_ENABLED": "0", "GOFLAGS": "-mod=readonly"},
 			"package_mirrors": []string{"goproxy"}, "caches": e.envSpec["caches"], "services": []any{}},
 		"repo_instructions": "quote_as_context",
+	}
+	if o.repoConfig != "" {
+		plan["repo_config"] = o.repoConfig
+		if o.configBaseSHA != "" {
+			plan["config_base_sha"] = o.configBaseSHA
+		}
+		if o.mcpAutoAllow != nil {
+			plan["mcp_auto_allow"] = o.mcpAutoAllow
+		}
 	}
 	planB, _ := json.MarshalIndent(plan, "", "  ")
 	if err := schemas.LocalRelaxed(schemas.Validate(schemas.RunPlan, planB)); err != nil {

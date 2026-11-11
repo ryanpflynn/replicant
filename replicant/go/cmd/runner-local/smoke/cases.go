@@ -33,7 +33,7 @@ type tcase struct {
 
 // isolatedOnly cases need the driver's contract fakes (the fake grants host revokes jobs for RC-GRANT-05);
 // v0Only cases need the live v0 stack (sbx network, egress proxy, mirrors, STS credentials, real run-grants).
-var isolatedOnly = map[string]bool{"RC-GRANT-05": true}
+var isolatedOnly = map[string]bool{"RC-GRANT-05": true, "RC-REPO-CFG": true}
 var v0Only = map[string]bool{"SEC-EGRESS": true}
 
 func (e *env) record(id, name string, pass bool, detail string) {
@@ -127,6 +127,7 @@ func baseCases() []tcase {
 		}},
 		{"SMOKE-IMPL", "implementer run: claude -p through the shim, run_result and outputs in S3", true, true, caseImplementer},
 		{"SMOKE-QA", "QA run: replicant-qa install/unit/build on base + the implementer's diff", true, true, caseQA},
+		{"RC-REPO-CFG", "repo_config use: repo hook runs, rules and nested CLAUDE.md load, .mcp.json skipped, managed deny wins", false, true, caseRepoConfig},
 		{"RC-GRANT-05", "grant of a revoked job", false, true, func(ctx context.Context, e *env) (string, error) {
 			st, err := e.stage(ctx, runOpts{})
 			if err != nil {

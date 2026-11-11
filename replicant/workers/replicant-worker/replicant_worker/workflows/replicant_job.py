@@ -99,6 +99,7 @@ class ReplicantJobBase(PrologueMixin, NodesMixin, WaitsMixin, CanMixin, Terminal
         self._proj: list[Any] = []
         self._bundle: dict[str, Any] = {}
         self._compose: dict[str, Any] = {}
+        self._repo_profile: dict[str, Any] | None = None  # design §8c, set in _drive (patch repo-profile-env-v1)
         self._spec: GraphSpec | None = None
         self._engine: Any = None
         self._guards: dict[str, Guard] = {}
@@ -185,11 +186,18 @@ class ReplicantJobBase(PrologueMixin, NodesMixin, WaitsMixin, CanMixin, Terminal
                     if isinstance(r, _Can):
                         return r
                     self._prologue_resume = r
-        self._compose = await self.call(
-            "graph.compose", {"release_bundle_id": self.s.release_bundle_id, "workflow_type": self.s.workflow_type,
-                              "repo": self.s.targets[0]["repo"] if self.s.targets else None,
-                              # MEM: label-selected graph variants (repo scan, DEVIATIONS MEM-D7)
-                              "labels": list(self.s.request_summary.get("labels") or [])})
+        compose_in: dict[str, Any] = {
+            "release_bundle_id": self.s.release_bundle_id, "workflow_type": self.s.workflow_type,
+            "repo": self.s.targets[0]["repo"] if self.s.targets else None,
+            # MEM: label-selected graph variants (repo scan, DEVIATIONS MEM-D7; readiness probe, design §8c)
+            "labels": list(self.s.request_summary.get("labels") or [])}
+        rp = self.s.request_summary.get("repo_profile")
+        if rp and workflow.patched("repo-profile-env-v1"):
+            # design §8c: the environment, commands and repo-config mode pinned at intake (onboarding-interfaces §4)
+            self._repo_profile = rp
+            compose_in["repo_profile"] = rp
+            compose_in["repo_ref"] = dict(self.s.targets[0]["repo_ref"]) if self.s.targets else None
+        self._compose = await self.call("graph.compose", compose_in)
         self._spec = GraphSpec.from_json(self._compose["spec"])
         if self.s.graph_spec_digest and self.s.graph_spec_digest != self._compose["composed_digest"] \
                 and self.inp.reason not in ("reroute", "migration"):

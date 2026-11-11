@@ -22,6 +22,7 @@ from replicant_worker import build_config, ids
 from replicant_worker.activities.options import CATALOG
 from replicant_worker.graphs.engines.base import BoundaryReached
 from replicant_worker.registry import NodeFailed
+from replicant_worker.workflows.job.common import READINESS_LABEL
 from replicant_worker.workflows.state import GateRecord, RunRecord
 
 if TYPE_CHECKING:
@@ -34,6 +35,15 @@ PRIORITY_KEY = {"urgent": 1, "high": 2, "normal": 3, "low": 4}
 # waits for the dependency's circuit breaker to close (platform.dependency_health), then restarts with jitter.
 # NodeLost counts as platform only while the exec node-pool breaker is open (a node-pool event).
 PLATFORM_DEPENDENCY = {"GatewayUnavailable": "ai-gateway", "RepoFetchFailed": "repo-mirror", "NodeLost": "exec-node-pool"}
+
+
+def tier_facts(s: Any, attempt: int) -> dict[str, Any]:
+    """Model-tier escalation facts (replicant_worker.tiers.select_tier): the repair cycle, the job's risk (the higher
+    of the classified level and QA's floor) and whether an earlier attempt of this work failed (a run retry, or a
+    QA-driven fix iteration)."""
+    order = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+    risk = max(str((s.risk or {}).get("level") or "low"), str(s.risk_floor or "low"), key=lambda v: order.get(v, 0))
+    return {"repair_cycle": int(s.cycle), "risk": risk, "failed_attempt": attempt > 1 or int(s.qa_fix_used) > 0}
 
 
 @dataclass
@@ -127,7 +137,7 @@ class NodeContext:
                 await h.hold_while(lambda: not (h.kill_engaged("starts") or h.kill_engaged("runs")),
                                    kind="kill_switch", node_key=self.node_key, detail="new runs held by operators")
             ev_case = (s.evaluation or {}).get("golden_task_id")
-            plan = await self.act("agents.build_run_plan", {  # WS-03 agent-definition.md §3 shape (R1V-016)
+            plan_in: dict[str, Any] = {  # WS-03 agent-definition.md §3 shape (R1V-016)
                 **base, "ordinal": ordinal, "workflow_type": s.workflow_type, "agent_ref": agent,
                 "environment_ref": environment, "workload_class": workload_class,
                 "resource_profile": resource_profile, "timeouts": timeouts, "network_profile": network_profile,
@@ -137,8 +147,21 @@ class NodeContext:
                 "received_at": s.request_summary.get("received_at"),
                 # replicant-worker v0 additions (deterministic, from state): run-plan workspace.base_sha and the job cap
                 # that bounds effective.budget_usd (= RunSpec.limits.max_cost_usd)
-                "base_sha": h.primary_repo().get("base_sha"), "job_cap_usd": h.remaining_budget_usd()},
-                effect=f"{p}plan", ordinal=ordinal)
+                "base_sha": h.primary_repo().get("base_sha"), "job_cap_usd": h.remaining_budget_usd()}
+            rp = h.repo_profile()
+            if rp:  # design §8c: the repo's commands and config mode, and the binding's repoInstructions
+                plan_in["repo_profile"] = rp
+                plan_in["repo"] = h.primary_repo()
+            if workflow.patched("model-tiers-v1"):  # design §8c model tiers: the escalation facts
+                plan_in["tier_facts"] = tier_facts(s, attempt)
+            plan_lid = self.lid(f"{p}plan", ordinal)
+            first_plan = plan_lid not in s.memo
+            plan = await self.act("agents.build_run_plan", plan_in, effect=f"{p}plan", ordinal=ordinal)
+            tier = plan.get("tier") or {}
+            if tier and first_plan:  # only results of tier-aware plans carry it (patched above)
+                why = f" (escalated: {tier['escalated']})" if tier.get("escalated") else ""
+                h.emit("run.model_selected", f"{role} run uses tier {tier.get('tier')}{why}: model {tier.get('model')}"
+                       f", effort {tier.get('reasoning_effort') or 'default'}", run_id=run_id, node_key=self.node_key)
             budget = await self.act("budget.allocate_run", {**base, "plan_budget_usd": plan.get("max_cost_usd"),
                                                             "job_cap_usd": h.remaining_budget_usd()},
                                     effect=f"{p}alloc", ordinal=ordinal)  # IDs per WS-03 (XD-FIX-R1-071)
@@ -257,6 +280,8 @@ class NodeContext:
                 outcome.role_exports = res.get("role_exports", {})
                 await self.act("cost.record_run", {**base, "usage": res.get("usage"), "plan": plan},
                                effect=f"{p}cost", ordinal=ordinal)
+                if rp:  # design §8c: what this run loaded, skipped and failed (best effort, never fails the job)
+                    await self._observe(base, plan, rp, final, effect=f"{p}observe", ordinal=ordinal)
             if final["phase"] == "Succeeded":
                 return outcome
             failure = final.get("failure") or {}
@@ -305,6 +330,21 @@ class NodeContext:
                 ordinal = s.next_ordinal(self.node_key)  # deliberate re-invocation => new key and run_id
                 continue
             raise NodeFailed(reason, failure.get("message", "")[:2000], retryable=outcome.retryable)
+
+    async def _observe(self, base: dict[str, Any], plan: dict[str, Any], rp: dict[str, Any], final: dict[str, Any],
+                       *, effect: str, ordinal: int) -> None:
+        s, h = self.s, self.host
+        try:
+            await self.act("inventory.record_observations", {
+                "job_id": s.job_id, "tenant_id": s.tenant_id, "run_id": base["run_id"], "role": base["role"],
+                "repo_id": h.primary_repo().get("repo_id"), "workflow_type": s.workflow_type,
+                "result_uri": final.get("result_uri"), "failure_reason": (final.get("failure") or {}).get("reason"),
+                "environment": h.binding_environment(), "mcp_auto_allow": list(rp.get("mcp_auto_allow") or []),
+                "tier": {k: (plan.get("tier") or {}).get(k) for k in ("tier", "model")} if plan.get("tier") else None,
+                "readiness": READINESS_LABEL in (s.request_summary.get("labels") or [])},
+                effect=effect, ordinal=ordinal, block=False)
+        except NodeFailed as e:
+            workflow.logger.warning("observations not recorded", extra={"error": str(e)[:200]})
 
     def _run_spec(self, *, lid: str, role: str, workload_class: str, plan: dict[str, Any], staged: dict[str, Any],
                   max_cost: float, steering: bool, resource_profile: str, network_profile: str) -> dict[str, Any]:

@@ -7,6 +7,7 @@
                                              which memory-service verifies and re-checks.
   GET  /v1/jobs/{job_id}/memory              job:read: the entries injected into the job (statement, type, scope; no
                                              author identity or scores)
+  POST /v1/projects/{p}/repos/{r}:recheck    readiness re-check (routes_inventory.recheck; same path pattern)
   POST /v1/projects/{p}/repos/{r}:scan       project admins (tenant:policy:edit on the project) or memory admins who
                                              may start jobs: a JobRequest (workflow_type docs, label
                                              `replicant-repo-scan`) that the router sends to the repo-scan graph
@@ -144,10 +145,16 @@ def scan_request(tenant_id: str, project_id: str, repo: dict[str, Any], requeste
 
 @router.post("/v1/projects/{project_id}/repos/{repo_ref}")
 async def scan_repo(project_id: str, repo_ref: str, request: Request,
-                    principal: Principal = require("job:create")) -> Response:
+                    principal: Principal = require("job:read")) -> Response:
+    # job:read only here: each verb checks its own permission below, and intake.submit enforces job:create for the
+    # job it starts (a fleet admin may re-check readiness without holding job:create; the probe then runs as the
+    # platform's probe principal)
     from control_plane_api import projects as P
     from control_plane_api.routes_projects import _can, _project
     repo_id, _, verb = repo_ref.partition(":")
+    if verb == "recheck":                        # ONBOARD readiness re-check shares this path (routes_inventory)
+        from control_plane_api.routes_inventory import recheck
+        return await recheck(project_id, repo_id, request, principal)
     if verb != "scan":
         raise ProblemError(404, "not_found")
     row = await _project(request, principal, project_id)

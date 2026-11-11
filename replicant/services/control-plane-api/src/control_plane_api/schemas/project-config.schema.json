@@ -17,7 +17,9 @@
                                    "items": {"enum": ["auto", "bugfix", "feature", "docs", "api_change"]}},
         "default_priority": {"enum": ["low", "normal", "high"]},
         "min_trigger_role": {"enum": ["engineer", "approver", "project_admin"],
-                             "description": "Least role on the project that may start a job (job:create is required too)."}
+                             "description": "Least role on the project that may start a job (job:create is required too)."},
+        "readiness_override": {"type": "boolean",
+                               "description": "Accept jobs for repos whose readiness probe is blocked (ONBOARD-01 \u00a74)."}
       }
     },
     "approvals": {
@@ -50,6 +52,23 @@
                             "description": "Globs; a change touching one is at least high risk."},
         "forbidden_paths": {"type": "array", "maxItems": 100, "items": {"type": "string", "minLength": 1, "maxLength": 200},
                             "description": "Globs; the verifier fails a change touching one."}
+      }
+    },
+    "repo_config": {
+      "enum": ["use", "ignore"],
+      "description": "Pinned (new jobs): use the repo's own Claude Code configuration from the base branch (hooks, rules, skills, nested CLAUDE.md) under the platform's managed settings, or ignore it (design \u00a78c)."
+    },
+    "models": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Pinned (new jobs): model tier per workflow type, from the platform's model_tiers catalogue (ONBOARD-01 \u00a78-9).",
+      "properties": {
+        "default_tier": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$"},
+        "workflows": {
+          "type": "object",
+          "propertyNames": {"enum": ["bugfix", "feature", "api_change", "docs", "hotfix", "maintenance", "pr_repair", "qa_only"]},
+          "additionalProperties": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$"}
+        }
       }
     },
     "workflows": {

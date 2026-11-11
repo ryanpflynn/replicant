@@ -18,6 +18,7 @@ from replicant_projector.activities import validate
 
 HERE = pathlib.Path(__file__).resolve().parent
 SPEC = pathlib.Path(os.environ.get("REPLICANT_SPEC_DIR", HERE.parents[3] / "spec"))
+ENGINE = os.environ.get("REPLICANT_CONTAINER_CLI", "podman")  # pg_fixture.sh reads the same variable
 
 
 def test_events_are_contract_valid() -> None:
@@ -56,8 +57,8 @@ def test_invalid_event_is_rejected() -> None:
 
 @pytest.fixture(scope="module")
 def pg():
-    if not shutil.which("podman") or not (SPEC / "10-data-platform").exists():
-        pytest.skip("podman or the spec directory is not available")
+    if not shutil.which(ENGINE) or not (SPEC / "10-data-platform").exists():
+        pytest.skip(f"{ENGINE} or the spec directory is not available")
     name = f"wrk-pg-proj-{os.getpid()}"
     port = subprocess.run([str(HERE / "pg_fixture.sh"), "up", name, str(SPEC)], check=True, capture_output=True,
                           text=True).stdout.strip().splitlines()[-1]

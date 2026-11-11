@@ -87,8 +87,12 @@ class Fakes:
         self.tokens: list[dict] = []
         self.signals: list[tuple] = []
         self.dedupe: dict[str, str] = {}
+        self.profiles: list[dict] = []
 
     def cp(self, req: httpx.Request) -> httpx.Response:
+        if req.method == "PUT" and req.url.path.endswith("/profile"):     # inventory scanner (ONBOARD-01 §1)
+            self.profiles.append(json.loads(req.content))
+            return httpx.Response(200, json={"profile_id": "rp_x", "environment": {}, "classified": []})
         jr = json.loads(req.content)
         self.jobs.append({"jr": jr, "auth": req.headers.get("authorization")})
         if jr["dedupe_key"] in self.dedupe:
@@ -231,3 +235,38 @@ async def test_pr_closed_merged_signals_pr_event(gi):
     wm = json.loads((SCHEMA.parent / "workflow-messages.schema.json").read_text())
     v = Draft202012Validator({"$defs": wm["$defs"], "$ref": "#/$defs/PrEventSignal"})
     assert list(v.iter_errors(sig)) == []
+
+
+def push_payload(org: str, rid: int, ref: str, paths: list[str]) -> dict:
+    p = org_payload({"ref": ref, "after": "c" * 40, "repository": repo(rid),
+                     "sender": {"id": GITEA_IDS["alice"], "login": "alice", "username": "alice"},
+                     "commits": [{"id": "c" * 40, "added": [], "removed": [], "modified": paths}],
+                     "total_commits": 1}, org, rid)
+    return p
+
+
+@pytestmark_db
+async def test_push_to_default_branch_queues_inventory_scan(gi):
+    c, f, app, hook, org, inst, _ = gi
+    sc = app.state.consumer.scanner
+    rid = int.from_bytes(secrets.token_bytes(3), "big")
+
+    async def deliver(ref: str, paths: list[str]) -> str:
+        guid = "guid-" + secrets.token_hex(6)
+        body, h = signed(hook, push_payload(org, rid, ref, paths), "push", "push", guid)
+        assert (await c.post("/webhooks/gitea", content=body, headers=h)).status_code == 202
+        await app.state.consumer.run_once()
+        from sqlalchemy import text
+        async with app.state.engine.begin() as conn:
+            return (await conn.execute(text("SELECT outcome FROM github_app.inbound_deliveries WHERE delivery_guid = :g"),
+                                       {"g": guid})).scalar()
+
+    assert await deliver("refs/heads/main", ["src/app.py"]) == "inventory_scan_queued"   # first sight: registered
+    assert str(rid) in sc.pending and sc.pending[str(rid)]["installation_id"] == inst
+    sc.pending.clear()
+    sc.profiled[str(rid)] = "b" * 40
+    assert await deliver("refs/heads/main", ["src/app.py"]) == "ignored_push_unwatched"
+    assert await deliver("refs/heads/feature", [".claude/settings.json"]) == "ignored_push_branch"
+    assert not sc.pending
+    assert await deliver("refs/heads/main", ["src/billing/CLAUDE.md"]) == "inventory_scan_queued"
+    assert sc.pending[str(rid)]["reason"] == "push"

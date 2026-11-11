@@ -120,7 +120,12 @@ def _summary(jr: dict[str, Any]) -> dict[str, Any]:
             "budget_usd_max": c.get("budget_usd_max"), "dry_run": bool(o.get("dry_run")),
             "draft_pr": bool(o.get("draft_pr")), "channel": jr["source"]["channel"],
             "labels": list(c.get("labels", [])), "paths": [p for t in jr.get("targets", []) for p in t.get("paths", [])][:50],
-            "received_at": jr.get("received_at")}  # build_run_plan input (XD-W2-11-01)
+            "received_at": jr.get("received_at"),  # build_run_plan input (XD-W2-11-01)
+            # design §8c: the repo profile pinned at intake (onboarding-interfaces.md §4); absent on older jobs
+            **({"repo_profile": dict(jr["repo_profile"])} if isinstance(jr.get("repo_profile"), dict) else {})}
+
+
+READINESS_LABEL = "replicant-readiness"  # local_bundle.READINESS_LABEL (design §8c readiness probe)
 
 
 def _evaluation(jr: dict[str, Any]) -> dict[str, Any] | None:

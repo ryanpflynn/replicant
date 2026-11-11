@@ -1,10 +1,9 @@
-"""podman / podman-compose wrapper for the local stack (stack.md §4: shells out to compose, project `replicant`)."""
+"""Compose wrapper for the local stack (stack.md §4: shells out to podman-compose or docker compose, project
+`replicant`; engine.py picks the engine)."""
 from __future__ import annotations
 
-import json
 import os
 import re
-import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -12,6 +11,7 @@ from pathlib import Path
 
 import yaml
 
+from replicant_cli import engine
 from replicant_cli.paths import Paths
 
 PROJECT = "replicant"
@@ -32,6 +32,8 @@ SANDBOX_IMAGES = (
     ("localhost/replicant/sandbox-sidecars:dev", "go/cmd/sandbox-sidecars/Dockerfile", "sidecars"),
     ("localhost/replicant/cli-claude-code:dev", "images/cli-claude-code/Dockerfile", None),
     ("localhost/replicant/env-go-service:dev", "images/env-go-service/Dockerfile", None),
+    ("localhost/replicant/env-python-service:dev", "images/env-python-service/Dockerfile", None),  # design §8c
+    ("localhost/replicant/env-node-service:dev", "images/env-node-service/Dockerfile", None),
 )
 _VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::?-([^}]*))?\}")
 
@@ -45,13 +47,6 @@ for _tag in ("!reset", "!override"):
         loader.construct_mapping(node) if isinstance(node, yaml.MappingNode)
         else loader.construct_sequence(node) if isinstance(node, yaml.SequenceNode)
         else loader.construct_scalar(node)))
-
-
-def podman_compose_bin() -> str:
-    for c in (os.environ.get("REPLICANT_COMPOSE_BIN"), shutil.which("podman-compose"), "/opt/homebrew/bin/podman-compose"):
-        if c and Path(c).exists():
-            return c
-    raise SystemExit("podman-compose not found (brew install podman-compose, or set REPLICANT_COMPOSE_BIN)")
 
 
 def env_values(p: Paths) -> dict[str, str]:
@@ -139,12 +134,12 @@ def load_services(p: Paths, profile: str) -> dict[str, Service]:
 
 
 def image_exists(image: str) -> bool:
-    return subprocess.run(["podman", "image", "exists", image], capture_output=True).returncode == 0
+    return engine.exists("image", image)
 
 
 def build_image(p: Paths, s: Service, env: dict[str, str], log) -> bool:  # noqa: ANN001
     assert s.build and s.dockerfile and s.context
-    cmd = ["podman", "build", "-t", s.image, "-f", str(s.dockerfile)]
+    cmd = engine.cli("build", "-t", s.image, "-f", str(s.dockerfile))
     if s.build.get("target"):
         cmd += ["--target", s.build["target"]]
     args = s.build.get("args") or {}
@@ -161,7 +156,7 @@ def build_image(p: Paths, s: Service, env: dict[str, str], log) -> bool:  # noqa
 
 
 def build_plain(p: Paths, image: str, dockerfile: str, target: str | None, env: dict[str, str], log) -> bool:  # noqa: ANN001
-    cmd = ["podman", "build", "-t", image, "-f", str(p.root / dockerfile)]
+    cmd = engine.cli("build", "-t", image, "-f", str(p.root / dockerfile))
     if target:
         cmd += ["--target", target]
     cmd += ["--build-arg", f"REPLICANT_GIT_SHA={env.get('REPLICANT_GIT_SHA', '000000000000')}", str(p.root)]
@@ -179,7 +174,7 @@ def compose_cmd(p: Paths, profile: str) -> list[str]:
     if "v0" in profs:
         files += ["-f", str(p.v0_file), "-f", str(p.compose_dir / "compose.v0.deps.yaml")]
     prof = [a for x in profs for a in ("--profile", x)]
-    return [podman_compose_bin(), "--project-name", PROJECT, *files, "--env-file", str(p.env_file), *prof]
+    return [*engine.compose_bin(), "--project-name", PROJECT, *files, "--env-file", str(p.env_file), *prof]
 
 
 def run_compose(p: Paths, profile: str, args: list[str], timeout: float | None = None,
@@ -198,19 +193,13 @@ class CState:
 
 
 def containers() -> dict[str, CState]:
-    r = subprocess.run(["podman", "ps", "-a", "-q", "--filter", f"label=io.podman.compose.project={PROJECT}"],
-                       capture_output=True, text=True)
-    ids = r.stdout.split()
-    if not ids:
-        return {}
-    r = subprocess.run(["podman", "inspect", *ids], capture_output=True, text=True)
     out: dict[str, CState] = {}
-    for c in json.loads(r.stdout or "[]"):
-        labels = (c.get("Config") or {}).get("Labels") or {}
-        svc = labels.get("com.docker.compose.service") or labels.get("io.podman.compose.service") or c["Name"]
+    for c in engine.inspect("container", engine.container_ids(f"label={engine.PROJECT_LABEL}={PROJECT}",
+                                                              f"label={engine.SERVICE_LABEL}")):
+        svc = ((c.get("Config") or {}).get("Labels") or {})[engine.SERVICE_LABEL]
         st = c.get("State") or {}
         health = ((st.get("Health") or st.get("Healthcheck") or {}).get("Status") or "")
-        out[svc] = CState(svc, c["Name"], st.get("Status", "?"), int(st.get("ExitCode") or 0), health)
+        out[svc] = CState(svc, str(c["Name"]).lstrip("/"), st.get("Status", "?"), int(st.get("ExitCode") or 0), health)
     return out
 
 
@@ -253,7 +242,7 @@ def wait_healthy(services: dict[str, Service], timeout_s: float, log) -> tuple[b
 
 
 def logs(container: str, tail: int | None = None, follow: bool = False) -> int:
-    cmd = ["podman", "logs"]
+    cmd = engine.cli("logs")
     if tail:
         cmd += ["--tail", str(tail)]
     if follow:

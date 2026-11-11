@@ -59,5 +59,6 @@ extend-immutable-calls = [
   "fastapi.Body", "fastapi.Depends", "fastapi.Header", "fastapi.Query", "fastapi.Path", "fastapi.Security",
   "typer.Argument", "typer.Option",
   "control_plane_api.auth.require", "control_plane_api.routes_memory.require_memory_admin",
+  "control_plane_api.routes_inventory.require_fleet_admin",
   "replicant_dev_auth.routes._require_seed",
 ]

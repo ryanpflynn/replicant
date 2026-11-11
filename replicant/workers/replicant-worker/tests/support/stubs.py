@@ -221,6 +221,7 @@ class FakeWorld:
 
         for n in ("memory.feedback_signals", "memory.record_outcome", "memory.write_episode", "cost.record_run",
                   "memory.ingest_gate_feedback", "memory.ingest_human_edits",
+                  "inventory.record_observations", "inventory.record_readiness",
                   "budget.apply_extension"):
             @act(n)
             async def _(a): return {"ok": True}
@@ -244,7 +245,12 @@ class FakeWorld:
                     "run_plan": {"name": "run_plan", "key": f"tenants/x/jobs/{a['job_id']}/runs/{a['run_id']}/inputs/run-plan.json",
                                  "sha256": "1" * 64, "size_bytes": 512},
                     "models": ["claude-sonnet-4-6"], "max_concurrency": 4,
-                    **({"compute_usd_per_job": w.compute_limit} if w.compute_limit is not None else {})}
+                    **({"compute_usd_per_job": w.compute_limit} if w.compute_limit is not None else {}),
+                    # design §8c model tiers: only tier-aware (patched) workflows send tier_facts
+                    **({"tier": {"tier": "standard", "role": a["role"], "escalated": None,
+                                 "model": "anthropic/claude-sonnet-5-5", "reasoning_effort": "medium",
+                                 "thinking_tokens": 8000}}
+                       if a.get("tier_facts") is not None and a["role"] != "qa" else {})}
 
         @act("budget.allocate_run")
         async def _(a): return {"budget_usd": 15.0, "extension_usd": 10.0}

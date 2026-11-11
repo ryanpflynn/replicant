@@ -216,6 +216,43 @@ class GiteaClient:
                 return None
             raise
 
+    # repository contents at a commit (inventory scanner, pr_inspect)
+    async def file_at(self, owner: str, name: str, sha: str, path: str, *, max_bytes: int = 65536) -> str | None:
+        """The file's text at `sha`; None when it is missing (404/422) or binary (a NUL byte in the first 4 KiB).
+        Capped at `max_bytes` characters."""
+        r = await self.request("GET", f"/repos/{owner}/{name}/raw/{quote(path)}", params={"ref": sha})
+        if r.status_code in (404, 422):
+            return None
+        if r.status_code >= 400:
+            raise GiteaError(r.status_code, r.text[:300])
+        if b"\x00" in r.content[:4096]:
+            return None
+        t = r.content.decode("utf-8", errors="replace")
+        return t[:max_bytes]
+
+    async def tree_entries(self, owner: str, name: str, sha: str, *,
+                           max_entries: int = 20000) -> list[dict[str, Any]]:
+        """Blobs of the tree at `sha` (recursive): [{path, size, sha (git blob id)}], at most `max_entries`. [] when
+        the commit is unknown."""
+        out: list[dict[str, Any]] = []
+        for page in range(1, 50):
+            r = await self.request("GET", f"/repos/{owner}/{name}/git/trees/{quote(sha, safe='')}",
+                                   params={"recursive": "true", "page": page, "per_page": 1000})
+            if r.status_code in (404, 422):
+                break
+            if r.status_code >= 400:
+                raise GiteaError(r.status_code, r.text[:300])
+            d = r.json() or {}
+            out += [{"path": e["path"], "size": int(e.get("size") or 0), "sha": e.get("sha")}
+                    for e in d.get("tree") or [] if e.get("type") == "blob" and e.get("path")]
+            if not d.get("truncated") or len(out) >= max_entries:
+                break
+        return out[:max_entries]
+
+    async def tree(self, owner: str, name: str, sha: str, *, max_entries: int = 20000) -> list[str]:
+        """Blob paths of the tree at `sha` (recursive)."""
+        return [e["path"] for e in await self.tree_entries(owner, name, sha, max_entries=max_entries)]
+
     async def list_pulls(self, owner: str, name: str, *, state: str = "all", page: int = 1,
                          limit: int = 50) -> list[dict[str, Any]]:
         return await self._req("GET", f"/repos/{owner}/{name}/pulls",

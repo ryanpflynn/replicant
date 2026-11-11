@@ -1267,6 +1267,45 @@ async def s_harness_task(env) -> str:
     return "2 harness steps"
 
 
+async def s_onboarding(env) -> str:
+    """Design §8c: a readiness job (label replicant-readiness, pinned repo_profile) composes with the profile, plans
+    with the repo's commands and the tier facts, records the QA run's observations and writes readiness back; a job
+    without a profile calls none of it."""
+    profile = {"profile_id": "rp_01", "sha": "a" * 40, "environment": "python-service",
+               "commands": {"install": "uv sync --frozen", "build": None, "test": "uv run pytest -q", "lint": None},
+               "repo_config": "use", "config_base_sha": "a" * 40, "mcp_auto_allow": [], "readiness": "unknown"}
+    c = env.client
+    w1 = FakeWorld()
+    j1 = new_job_id(77)
+    async with workers(c, w1):
+        r1 = await (await start_job(c, j1, workflow_type="qa_only", labels=["replicant-readiness"],
+                                    repo_profile=profile)).result()
+        check(r1["outcome"] == "qa_completed" and r1["status"] == "succeeded", f"readiness {r1}")
+        comp = w1.called("graph.compose")[0]
+        check(comp.get("repo_profile") == profile and comp["repo_ref"]["repo_id"], f"compose input {comp}")
+        plans = w1.called("agents.build_run_plan")
+        check(all(p.get("repo_profile") == profile and p.get("repo") and p.get("tier_facts") == {
+            "repair_cycle": 0, "risk": "low", "failed_attempt": False} for p in plans), f"plan inputs {plans[:1]}")
+        obs = w1.called("inventory.record_observations")
+        check(len(obs) == 1 and obs[0]["role"] == "qa" and obs[0]["readiness"] is True and obs[0]["result_uri"],
+              f"observations {obs}")
+        rd = w1.called("inventory.record_readiness")
+        check(len(rd) == 1 and rd[0]["verdict"] == "pass" and rd[0]["profile_id"] == "rp_01"
+              and rd[0]["outcome"] == "qa_completed" and rd[0]["qa_result_uri"], f"readiness {rd}")
+        await common_checks("onboarding_readiness", c, w1, j1)
+    w2 = FakeWorld()
+    j2 = new_job_id(76)
+    async with workers(c, w2):
+        r2 = await (await start_job(c, j2, workflow_type="qa_only")).result()
+        check(r2["outcome"] == "qa_completed", f"plain qa_only {r2}")
+        check("repo_profile" not in w2.called("graph.compose")[0], "no profile, no profile in compose")
+        check(not any("repo_profile" in p for p in w2.called("agents.build_run_plan")), "no profile in plans")
+        check(not w2.called("inventory.record_observations") and not w2.called("inventory.record_readiness"),
+              "no inventory calls without a profile")
+        await common_checks("onboarding_plain", c, w2, j2)
+    return "readiness recorded; no profile, no inventory calls"
+
+
 async def s_small_rules(env) -> str:
     """Cheap wave-2 rules in one scenario: XD-FIX-R2-064 compute dollars (budget_exceeded) and XD-FIX-R1-131 qa_only
     inconclusive -> end:qa_inconclusive (failed)."""
@@ -1425,7 +1464,7 @@ async def s_identity_outage(env) -> str:
     return "denied, then accepted"
 
 
-SCENARIOS = {f.__name__[2:]: f for f in [s_bugfix_full, s_feature_parallel, s_low_risk_rebase, s_cancel_during_run,
+SCENARIOS = {f.__name__[2:]: f for f in [s_onboarding, s_bugfix_full, s_feature_parallel, s_low_risk_rebase, s_cancel_during_run,
                                          s_gate_expiry, s_router_clarify, s_repair_budget, s_takeover, s_steer,
                                          s_eval_mode, s_budget_extension, s_qa_environment, s_security_violation,
                                          s_migration, s_maintenance_batch, s_tenant_codec,
@@ -1467,7 +1506,7 @@ if __name__ == "__main__":
 # A scenario that raises Skipped reports SKIP, never PASS.
 import pytest  # noqa: E402
 
-FAST = ("bugfix_full", "cancel_during_run", "eval_mode", "repair_budget", "migration")
+FAST = ("bugfix_full", "cancel_during_run", "eval_mode", "repair_budget", "migration", "onboarding")
 
 
 def _dev_servers() -> set[int]:

@@ -35,6 +35,7 @@ export function Rail() {
   const view = loc.search.get("view");
   const isAdmin = hasCap(me, "admin:platform") || hasCap(me, "identity:admin");
   const isMemoryAdmin = hasCap(me, "memory:admin");
+  const isFleetAdmin = hasCap(me, "fleet:admin");
   const mineOpen = mine ? mine.items.filter((j) => !["succeeded", "failed", "cancelled", "rejected", "expired", "taken_over"].includes(j.status)).length : null;
   const nInbox = inbox?.items.length ?? 0;
   const nWaiting = badgeCount(useWaiting().data);
@@ -66,9 +67,10 @@ export function Rail() {
             <NavItem to="/releases" icon="releases" label="Releases" active={p.startsWith("/releases")} />
           </>
         ) : null}
-        {isAdmin || isMemoryAdmin ? <div className="group caps">Replicant admin</div> : null}
+        {isAdmin || isMemoryAdmin || isFleetAdmin ? <div className="group caps">Replicant admin</div> : null}
         {isMemoryAdmin ? <NavItem to="/admin/memory" icon="memory" label="Memory" active={p.startsWith("/admin/memory")} /> : null}
-        {isAdmin ? <NavItem to="/admin" icon="admin" label="Admin" active={p === "/admin" || (p.startsWith("/admin/") && !p.startsWith("/admin/memory"))} /> : null}
+        {isFleetAdmin ? <NavItem to="/admin/fleet" icon="fleet" label="Fleet" active={p.startsWith("/admin/fleet")} /> : null}
+        {isAdmin ? <NavItem to="/admin" icon="admin" label="Admin" active={p === "/admin" || (p.startsWith("/admin/") && !p.startsWith("/admin/memory") && !p.startsWith("/admin/fleet"))} /> : null}
         {hasCap(me, "temporal:ui") ? (
           <>
             <div className="group caps">Operators</div>
@@ -166,6 +168,7 @@ export function Palette() {
       ["Waiting on you", "/waiting", true], ["Jobs", "/jobs", true], ["My jobs", "/jobs?view=mine", true], ["Needs a human", "/jobs?view=needs_human", true],
       ["Approvals", "/approvals", true], ["Releases", "/releases", hasCap(me, "release:read")],
       ["Admin", "/admin", hasCap(me, "admin:platform")], ["Memory", "/admin/memory", hasCap(me, "memory:admin")],
+      ["Fleet", "/admin/fleet", hasCap(me, "fleet:admin")],
     ];
     for (const [label, to, ok] of nav) if (ok) out.push({ group: "Navigation", key: "n" + to, label, text: label, run: go(to) });
     for (const g of inbox?.items ?? []) {

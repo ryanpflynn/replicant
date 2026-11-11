@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "schema": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@acme/schema-mcp@1.2.0"]
+    },
+    "jira": {
+      "type": "http",
+      "url": "https://jira.acme.internal/mcp",
+      "headers": {
+        "Authorization": "Bearer ${JIRA_TOKEN}"
+      }
+    }
+  }
+}

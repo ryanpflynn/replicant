@@ -69,6 +69,19 @@ type Consumed struct {
 	MessageIDs []string `json:"message_ids"`
 }
 
+// InstructionsReport is one InstructionsLoaded hook payload (the managed instructions-loaded hook posts it).
+type InstructionsReport struct {
+	FilePath        string `json:"file_path"`
+	MemoryType      string `json:"memory_type,omitempty"`
+	LoadReason      string `json:"load_reason,omitempty"`
+	TriggerFilePath string `json:"trigger_file_path,omitempty"`
+}
+
+// Instructions is the response of GET /v1/report/instructions: the reports kept by agentd, in arrival order.
+type Instructions struct {
+	Reports []InstructionsReport `json:"reports"`
+}
+
 // HeartbeatNow is the response of POST /v1/heartbeat:now.
 type HeartbeatNow struct {
 	CancelReason *string `json:"cancel_reason"`

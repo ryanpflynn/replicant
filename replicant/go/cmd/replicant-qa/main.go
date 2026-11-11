@@ -1,5 +1,6 @@
 // Command replicant-qa is the minimal v0 QA harness (WS-05 stage-design, reduced to the stages install, unit
-// and build for Go services): `replicant-qa run --inputs /replicant/inputs --out /replicant/out/qa --plan
+// and build for Go services, or the repo's own install/build/test/lint commands when the run plan carries
+// environment.commands, design §8c): `replicant-qa run --inputs /replicant/inputs --out /replicant/out/qa --plan
 // /replicant/inputs/run-plan.json`. It writes result.json ({verdict, exit_class, role_result}) and
 // outputs.entries.json (entries with producer replicant-qa), plus checkpoints under /replicant/out/qa-checkpoints.
 package main
@@ -49,7 +50,11 @@ type stageResult struct {
 	Stage    string  `json:"stage"`
 	Status   string  `json:"status"`
 	Duration float64 `json:"duration_seconds"`
+	Cause    string  `json:"cause,omitempty"`
+	Detail   string  `json:"detail,omitempty"`
+	Command  string  `json:"command,omitempty"`
 	exitCode int
+	timedOut bool
 	log      []byte
 }
 
@@ -96,8 +101,12 @@ func run(inputs, out, planPath, repo string) int {
 	var stages []stageResult
 	verdict, reason, exitClass := "pass", "all_passed", "pass"
 	counts := map[string]int{"total": 0, "passed": 0, "failed": 0, "flaky": 0, "skipped": 0, "blocking": 0}
+	envFailures := 0
 	var failures []map[string]any
-	if !goRepo {
+	if cmds := plan.Environment.Commands; cmds != nil && (cmds.Install != "" || cmds.Build != "" || cmds.Test != "" || cmds.Lint != "") {
+		// The repo's own commands (onboarding-interfaces.md §5); the Go stages below are the fallback.
+		stages, failures, envFailures, verdict, reason, exitClass = h.commandStages(cmds, counts)
+	} else if !goRepo {
 		verdict, reason, exitClass = "not_applicable", "qa_disabled", "not_applicable"
 	} else {
 		// install
@@ -148,12 +157,22 @@ func run(inputs, out, planPath, repo string) int {
 	}
 	stageOut := make([]map[string]any, 0, len(stages))
 	for _, s := range stages {
-		stageOut = append(stageOut, map[string]any{"stage": s.Stage, "status": s.Status, "duration_seconds": round1(s.Duration)})
+		so := map[string]any{"stage": s.Stage, "status": s.Status, "duration_seconds": round1(s.Duration)}
+		if s.Cause != "" {
+			so["cause"] = s.Cause
+		}
+		if s.Detail != "" {
+			so["detail"] = s.Detail
+		}
+		if s.Command != "" {
+			so["command"] = trunc(s.Command, 4096)
+		}
+		stageOut = append(stageOut, so)
 	}
 	rr := map[string]any{
 		"schema": "replicant.role-result.qa/v1", "verdict": verdict, "reason_code": reason,
 		"counts":   counts,
-		"by_cause": map[string]int{"code": counts["failed"], "flaky_new": 0, "flaky_known": 0, "pre_existing": 0, "environment": 0, "test_defect": 0, "unknown": 0},
+		"by_cause": map[string]int{"code": counts["failed"] - envFailures, "flaky_new": 0, "flaky_known": 0, "pre_existing": 0, "environment": envFailures, "test_defect": 0, "unknown": 0},
 		"stages":   stageOut, "subject": subject, "base_pass_performed": false, "budget_exhausted": false,
 		"agentrun_exit_class": exitClass,
 		"test_inventory_delta": map[string]any{"method": "listed", "tests_removed": 0, "tests_skipped_added": 0, "deleted_test_files": 0,
@@ -197,6 +216,7 @@ func (h *harness) stage(name string, timeoutS int, argv ...string) stageResult {
 		if ee, ok := err.(*exec.ExitError); ok {
 			st.exitCode = ee.ExitCode()
 		}
+		st.timedOut = ctx.Err() == context.DeadlineExceeded
 	}
 	h.finishStage(st)
 	return st

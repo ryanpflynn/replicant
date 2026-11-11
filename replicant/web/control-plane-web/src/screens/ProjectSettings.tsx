@@ -12,16 +12,22 @@ import { GraphSvg } from "./JobGraph";
 import { Forbidden } from "./Admin";
 import { Link } from "../router";
 import type { GraphDoc } from "../lib/graph";
+import { Readiness } from "./Readiness";
+import { TIERS, tierFor, withWorkflowTier, type ModelsCfg } from "../lib/onboarding";
 
 // ------------------------------------------------------------------------------------------------ types
 type Section = "triggers" | "approvals" | "gates" | "risk" | "workflows";
+type TopKey = "repo_config" | "models";
 interface WorkflowCfg { params?: { max_review_rounds?: number }; max_visits?: Record<string, number>; graph_yaml?: string | null }
 export interface ProjectConfig {
-  triggers?: { enabled?: boolean; label?: string; modes?: string[]; allowed_workflow_types?: string[]; default_priority?: string; min_trigger_role?: string };
+  triggers?: { enabled?: boolean; label?: string; modes?: string[]; allowed_workflow_types?: string[]; default_priority?: string; min_trigger_role?: string; readiness_override?: boolean };
   approvals?: { approver_groups?: string[]; slack_channel?: string | null };
   gates?: { plan?: string; publish?: string; requester_may_decide?: boolean };
   risk?: { large_change_files?: number; sensitive_paths?: string[]; forbidden_paths?: string[] };
   workflows?: Record<string, WorkflowCfg>;
+  // ONBOARD (§8c, onboarding-interfaces.md §8): pinned
+  repo_config?: "use" | "ignore";
+  models?: ModelsCfg;
 }
 type Effective = Required<{ [K in keyof ProjectConfig]-?: NonNullable<ProjectConfig[K]> }>;
 interface Version { version: number; config: ProjectConfig; is_current: boolean; actor: string; reason: string; rolled_back_from?: number | null; created_at: string }
@@ -37,7 +43,7 @@ interface AccessDoc { version: number; bindings: Array<{ group: string; role: st
 interface ProjectRow { project_id: string; tenant_id: string; name: string; repo_count: number; permissions: string[] }
 
 const WF_TYPES = ["bugfix", "feature", "api_change", "docs", "hotfix"];
-const TABS = [["overview", "Overview"], ["triggers", "Triggers"], ["approvals", "Approvals & risk"], ["workflow", "Workflow"], ["access", "Access"], ["history", "History"]] as const;
+const TABS = [["overview", "Overview"], ["readiness", "Readiness"], ["triggers", "Triggers"], ["approvals", "Approvals & risk"], ["workflow", "Workflow"], ["access", "Access"], ["history", "History"]] as const;
 
 export function Applies({ live }: { live: boolean }) {
   return <span className={"applies " + (live ? "live" : "newjobs")} title={live ? "Read when the next event or notification happens" : "Compiled into the release bundle of jobs started after the change; running jobs keep theirs"}>
@@ -118,6 +124,10 @@ export function ProjectSettings({ projectId, tab }: { projectId: string; tab?: s
     setSaved(null);
     setDraft({ ...cur, workflows: wf });
   };
+  const setTop = <K extends TopKey>(k: K, v: ProjectConfig[K]) => {
+    setSaved(null);
+    setDraft({ ...cur, [k]: v });
+  };
   if (proj.isError && proj.error instanceof ApiError && proj.error.status === 404) {
     return <><TopBar><b>Projects</b></TopBar><main className="main"><Forbidden what="this project" perm="job:read" error={proj.error} /></main></>;
   }
@@ -153,9 +163,10 @@ export function ProjectSettings({ projectId, tab }: { projectId: string; tab?: s
         {!cfg.data || !proj.data ? <div className="section"><div className="skel-line w40" /><div className="skel-line w70" /></div> : (
           <div className="section cfg">
             {t === "overview" ? <Overview p={proj.data} c={cfg.data} /> : null}
+            {t === "readiness" ? <Readiness projectId={projectId} canRecheck={canRecheck(proj.data.permissions, me?.capabilities)} canRequest={proj.data.permissions.includes("tenant:policy:edit")} /> : null}
             {t === "triggers" ? <Triggers eff={eff} can={canLive} edit={edit} /> : null}
             {t === "approvals" ? <Approvals eff={eff} canLive={canLive} canPinned={canPinned} edit={edit} /> : null}
-            {t === "workflow" ? <Workflow projectId={projectId} eff={eff} cur={cur} can={canPinned} setWorkflow={setWorkflow} /> : null}
+            {t === "workflow" ? <Workflow projectId={projectId} eff={eff} cur={cur} can={canPinned} setWorkflow={setWorkflow} setTop={setTop} /> : null}
             {t === "access" ? <Access projectId={projectId} /> : null}
             {t === "history" ? <History projectId={projectId} c={cfg.data} /> : null}
             {["triggers", "approvals", "workflow"].includes(t) && (canLive || canPinned) ? (
@@ -173,11 +184,18 @@ export function ProjectSettings({ projectId, tab }: { projectId: string; tab?: s
   );
 }
 
-function effectiveOf(defaults: Effective | undefined, cfg: ProjectConfig): Effective {
-  const d = defaults ?? ({ triggers: {}, approvals: {}, gates: {}, risk: {}, workflows: {} } as Effective);
+// Re-check needs tenant:policy:edit on the project or memory admin (onboarding-interfaces.md §10).
+const canRecheck = (perms: string[], caps?: string[]) =>
+  perms.includes("tenant:policy:edit") || perms.includes("memory:admin") || !!caps?.includes("memory:admin");
+
+export function effectiveOf(defaults: Partial<Effective> | undefined, cfg: ProjectConfig): Effective {
+  const d = defaults ?? {};
   return {
-    triggers: { ...d.triggers, ...cfg.triggers }, approvals: { ...d.approvals, ...cfg.approvals },
+    triggers: { readiness_override: false, ...d.triggers, ...cfg.triggers }, approvals: { ...d.approvals, ...cfg.approvals },
     gates: { ...d.gates, ...cfg.gates }, risk: { ...d.risk, ...cfg.risk }, workflows: { ...d.workflows, ...cfg.workflows },
+    // ONBOARD: defaults "use" and {standard, {}} when an older API does not send them
+    repo_config: cfg.repo_config ?? d.repo_config ?? "use",
+    models: { default_tier: "standard", ...d.models, ...cfg.models, workflows: { ...d.models?.workflows, ...cfg.models?.workflows } },
   };
 }
 
@@ -245,6 +263,8 @@ function Triggers({ eff, can, edit }: { eff: Effective; can: boolean; edit: (s: 
       <Field label="Default priority" live><select className="field" aria-label="Default priority" disabled={!can} value={t.default_priority} onChange={(e) => edit("triggers", { default_priority: e.target.value })}>{["low", "normal", "high"].map((p) => <option key={p}>{p}</option>)}</select></Field>
       <Field label="Who can trigger" live hint="Least role on the project that may start a job."><select className="field" aria-label="Who can trigger" disabled={!can} value={t.min_trigger_role} onChange={(e) => edit("triggers", { min_trigger_role: e.target.value })}>
         <option value="engineer">Engineers and above</option><option value="approver">Approvers and above</option><option value="project_admin">Project admins only</option></select></Field>
+      <Field label="Repos that aren't ready" live hint={<>Normally a job is refused when its repo's readiness check says it's blocked (see <b>Readiness</b>). Turn this on to let jobs try anyway; they will probably fail at the same step.</>}>
+        <label className="row g1"><input type="checkbox" aria-label="Let jobs run on repos that aren't ready" disabled={!can} checked={!!t.readiness_override} onChange={(e) => edit("triggers", { readiness_override: e.target.checked })} /> Let jobs run on repos that aren't ready</label></Field>
     </div>
   );
 }
@@ -272,7 +292,8 @@ function Approvals({ eff, canLive, canPinned, edit }: { eff: Effective; canLive:
   );
 }
 
-function Workflow({ projectId, eff, cur, can, setWorkflow }: { projectId: string; eff: Effective; cur: ProjectConfig; can: boolean; setWorkflow: (wt: string, w: WorkflowCfg | null) => void }) {
+function Workflow({ projectId, eff, cur, can, setWorkflow, setTop }: { projectId: string; eff: Effective; cur: ProjectConfig; can: boolean;
+  setWorkflow: (wt: string, w: WorkflowCfg | null) => void; setTop: <K extends TopKey>(k: K, v: ProjectConfig[K]) => void }) {
   const [wt, setWt] = useState("bugfix");
   const [preview, setPreview] = useState<ValidateDoc | null>(null);
   const [perr, setPerr] = useState<unknown>(null);
@@ -300,7 +321,39 @@ function Workflow({ projectId, eff, cur, can, setWorkflow }: { projectId: string
       {preview && !preview.valid ? <Banner kind="danger" glyph="cross" lead="Not valid.">{preview.errors.map((e) => <div key={e.path + e.message} className="small"><span className="mono">{e.path}</span> {e.message}</div>)}</Banner> : null}
       {preview?.valid && !g ? <p className="t3 small">No tuned graph for {wt}: new jobs use the default definition.</p> : null}
       {g ? <div className="cfgpreview"><div className="small t3 mono">{g.definition.ref} · {g.graph.nodes.length} nodes</div><div className="gwrap"><GraphSvg doc={g.graph} onSelect={() => undefined} /></div></div> : null}
+      <Models eff={eff} cur={cur} can={can} setTop={setTop} />
+      <h3 className="cfgh">Repository configuration</h3>
+      <Field label="Repo's Claude Code setup" live={false} hint="When on, agents follow the repo's own CLAUDE.md files, rules, skills and hooks. Replicant's safety limits still apply on top.">
+        <label className="row g1"><input type="checkbox" aria-label="Use the repo's Claude Code configuration" disabled={!can} checked={eff.repo_config !== "ignore"}
+          onChange={(e) => setTop("repo_config", e.target.checked ? "use" : "ignore")} /> Use the repo's Claude Code configuration</label></Field>
     </div>
+  );
+}
+
+const TIER_WORDS: Record<string, string> = { standard: "Standard", thorough: "Thorough (slower, more careful, costs more)" };
+
+// ONBOARD/TIER (§8c, onboarding-interfaces.md §8-9): a default model tier and an optional tier per workflow type.
+function Models({ eff, cur, can, setTop }: { eff: Effective; cur: ProjectConfig; can: boolean; setTop: <K extends TopKey>(k: K, v: ProjectConfig[K]) => void }) {
+  const m = eff.models;
+  const base: ModelsCfg = { default_tier: cur.models?.default_tier ?? m.default_tier, workflows: { ...(cur.models?.workflows ?? {}) } };
+  return (
+    <>
+      <h3 className="cfgh">Models</h3>
+      <Field label="Default tier" live={false} hint="Which models and how much thinking each agent gets. Thorough uses a stronger model for writing code; the reviewer is always a different model from the one that wrote the change.">
+        <select className="field" aria-label="Default model tier" disabled={!can} value={m.default_tier ?? "standard"}
+          onChange={(e) => setTop("models", { ...base, default_tier: e.target.value })}>{TIERS.map((x) => <option key={x} value={x}>{TIER_WORDS[x]}</option>)}</select></Field>
+      <Field label="Per workflow" live={false} hint="Override the default for one kind of job.">
+        <table className="t compact" aria-label="Model tier per workflow">
+          <thead><tr><th>Workflow</th><th>Tier</th></tr></thead>
+          <tbody>{WF_TYPES.map((wt) => (
+            <tr key={wt}><td>{wt}</td><td>
+              <select className="field" aria-label={`Model tier for ${wt}`} disabled={!can} value={m.workflows?.[wt] ?? ""}
+                onChange={(e) => setTop("models", withWorkflowTier(base, wt, e.target.value || null))}>
+                <option value="">Default ({tierFor({ default_tier: m.default_tier }, wt)})</option>
+                {TIERS.map((x) => <option key={x} value={x}>{x}</option>)}
+              </select></td></tr>))}</tbody>
+        </table></Field>
+    </>
   );
 }
 

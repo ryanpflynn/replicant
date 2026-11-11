@@ -35,7 +35,9 @@ SERVICE_CHANNELS = {
     "svc_scheduler": ("schedule", "service"),
     "svc_eval-worker": ("eval", "service"),
     "svc_release-controller": ("eval", "service"),
+    "svc_replicant-readiness": ("schedule", "service"),   # ONBOARD: in-process readiness probes (routes_inventory)
 }
+READINESS_LABEL = "replicant-readiness"
 INTAKE_RETRIER_LOCK = 0x46414354  # 'FACT'
 INTAKE_RETRIER_LOCK2 = 1
 
@@ -64,6 +66,8 @@ class Intake:
         return f"{self.web_origin}/jobs/{job_id}"
 
     async def submit(self, principal: Principal, jr: dict[str, Any]) -> IntakeResult:
+        # ONBOARD-01 §4: repo_profile is attached here from the inventory, never taken from the submitter
+        jr = {k: v for k, v in jr.items() if k != "repo_profile"}
         # 1. contract validation
         errs = contracts.errors("job-request", jr)
         if errs:
@@ -101,6 +105,18 @@ class Intake:
                 proj[2]["triggers"].get("min_trigger_role", "engineer"))
             if need and not check(self.auth, subject, need, tenant_id=tenant, repo_ids=repo_ids):
                 raise ProblemError(403, "missing_permission", detail="the project requires a higher role to start jobs")
+        # ONBOARD-01 §4: pin the repo's profile (environment, commands, repo config mode) on the job; a `blocked` repo
+        # takes no jobs unless the project overrides it live, except its own readiness probe
+        if repo_ids:
+            rp = await self._repo_profile(repo_ids[0], proj[2] if proj is not None else None)
+            labels = ((jr.get("constraints") or {}).get("labels")) or []
+            if rp is not None and rp.get("readiness") == "blocked" and READINESS_LABEL not in labels and \
+                    not ((proj[2] if proj is not None else {}).get("triggers") or {}).get("readiness_override"):
+                raise ProblemError(409, "repo_not_ready", detail="the repo's readiness probe is blocked; see the "
+                                   "project's Readiness tab, or set triggers.readiness_override",
+                                   repo_id=repo_ids[0], profile_id=rp.get("profile_id"))
+            if rp is not None:
+                jr["repo_profile"] = rp
         may_pin = check(self.auth, subject, "release:pin")
         if jr["priority"] == "urgent" and jr["workflow_type"] != "hotfix":
             raise ProblemError(422, "urgent_requires_hotfix")
@@ -157,7 +173,9 @@ class Intake:
                     "CAST(:doc AS jsonb), :rb, :ar, :rc, :av, :recv) "
                     "ON CONFLICT (tenant_id, dedupe_key) WHERE NOT dedupe_pruned DO NOTHING RETURNING job_id"),
                     {"job": job_id, "t": tenant, "rq": jr["request_id"], "k": jr["dedupe_key"], "ch": channel,
-                     "req": req["principal_id"], "obo": req.get("on_behalf_of"), "by": principal.principal_id,
+                     "req": req["principal_id"], "by": principal.principal_id,
+                     # a service acting for itself (automatic readiness probes) has no human on_behalf_of
+                     "obo": req.get("on_behalf_of") if str(req.get("on_behalf_of") or "").startswith("usr_") else None,
                      "wt": jr["workflow_type"], "wts": wf_type, "ev": evaluation_mode, "prr": pr_repo_id,
                      "prn": pr_number, "doc": json.dumps(jr), "rb": res.release_bundle_id,
                      "ar": res.assignment_reason, "rc": cohort, "av": res.assignment_version,
@@ -169,7 +187,9 @@ class Intake:
                     return await self._duplicate(ex.job_id, ex.release_bundle_id, ex.start_status, tenant)
                 await audit.emit(conn, self.db, {"event_type": "job.requested", "outcome": "success", "tenant_id": tenant,
                                                  "actor_principal_id": req["principal_id"],
-                                                 "on_behalf_of": req.get("on_behalf_of"), "channel": channel,
+                                                 "on_behalf_of": req.get("on_behalf_of") if str(
+                                                     req.get("on_behalf_of") or "").startswith("usr_") else None,
+                                                 "channel": channel,
                                                  "job_id": job_id, "release_bundle_id": res.release_bundle_id,
                                                  "details": {"workflow_type": jr["workflow_type"],
                                                              "assignment_reason": res.assignment_reason}})
@@ -255,6 +275,14 @@ class Intake:
         async with self.db.tx(tenant=tenant) as conn:
             v = await projects.effective_for_repo_conn(conn, repo_ids[0])
         return v if v is not None and v[1] == tenant else None
+
+    async def _repo_profile(self, repo_id: str, eff: dict[str, Any] | None) -> dict[str, Any] | None:
+        from control_plane_api.routes_inventory import repo_profile_for_job
+        try:
+            return await repo_profile_for_job(self.db, repo_id, eff)
+        except Exception as e:  # noqa: BLE001 - inventory trouble never blocks intake: old behaviour (no profile)
+            log.warning("repo profile of %s unavailable: %s", repo_id, f"{type(e).__name__}: {str(e)[:200]}")
+            return None
 
     async def _check_tenant(self, tenant: str) -> None:
         async with self.db.tx(tenant=tenant) as conn:

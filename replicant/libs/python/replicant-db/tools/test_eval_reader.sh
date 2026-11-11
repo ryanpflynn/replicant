@@ -5,8 +5,9 @@
 # the function returns both tenants, no free-text column is reachable, direct table access is denied, every
 # call writes exactly one audit event, an over-long window is refused, and the caller's scope is unchanged after.
 set -euo pipefail
+ENGINE="${REPLICANT_CONTAINER_CLI:-podman}"
 C=${1:?container}; DB=${2:-replicant}
-q() { podman exec -i "$C" psql -U postgres -d "$DB" -v ON_ERROR_STOP=1 -qAtX "$@"; }
+q() { "$ENGINE" exec -i "$C" psql -U postgres -d "$DB" -v ON_ERROR_STOP=1 -qAtX "$@"; }
 had_grant=$(q -c "SELECT has_function_privilege('r_audit_emit', 'audit.emit(jsonb)', 'EXECUTE')")
 q <<'SQL'
 INSERT INTO audit.event_types (event_type, category, description)

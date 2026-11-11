@@ -20,6 +20,7 @@ from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
 HERE = pathlib.Path(__file__).resolve().parent
+ENGINE = os.environ.get("REPLICANT_CONTAINER_CLI", "podman")  # gitea_fixture.sh reads the same variable
 JOB = "job_01m5p7x7r0bt69j0h0fbxepw90"
 T = "payments"
 
@@ -38,8 +39,8 @@ class FakeS3:
 
 @pytest.fixture(scope="module")
 def gitea():
-    if not shutil.which("podman"):
-        pytest.skip("podman not available")
+    if not shutil.which(ENGINE):
+        pytest.skip(f"{ENGINE} not available")
     name = f"wrk-gitea-{os.getpid()}"
     out = subprocess.run([str(HERE / "gitea_fixture.sh"), "up", name], check=True, capture_output=True, text=True).stdout
     port, tok = out.strip().split()[-2:]
