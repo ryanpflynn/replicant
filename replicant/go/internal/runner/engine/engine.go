@@ -13,15 +13,39 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 // Client talks to unix:///path or tcp://host:port.
 type Client struct {
-	hc   *http.Client
-	base string
-	ver  string
+	hc      *http.Client
+	base    string
+	ver     string
+	verOnce sync.Once
+}
+
+// apiVersion: v1.45 when the engine supports it (Docker rejects volume Subpath mounts below 1.45), else v1.41.
+// Podman's compat API reports 1.41 and accepts Subpath there; asked once, on the first request.
+func (c *Client) apiVersion(ctx context.Context) string {
+	c.verOnce.Do(func() {
+		if v, err := c.Version(ctx); err == nil && apiAtLeast(v.APIVersion, 1, 45) {
+			c.ver = "v1.45"
+		}
+	})
+	return c.ver
+}
+
+func apiAtLeast(v string, major, minor int) bool {
+	a, b, ok := strings.Cut(v, ".")
+	ma, err1 := strconv.Atoi(a)
+	mi, err2 := strconv.Atoi(b)
+	if !ok || err1 != nil || err2 != nil {
+		return false
+	}
+	return ma > major || (ma == major && mi >= minor)
 }
 
 // New creates a client for host (RUNNER_CONTAINER_HOST).
@@ -96,7 +120,7 @@ func (c *Client) raw(ctx context.Context, method, path string, q url.Values, bod
 			ctype = "application/json"
 		}
 	}
-	u := c.base + "/" + c.ver + path
+	u := c.base + "/" + c.apiVersion(ctx) + path
 	if len(q) > 0 {
 		u += "?" + q.Encode()
 	}

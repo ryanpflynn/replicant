@@ -51,6 +51,19 @@ services:
   s3:
     environment:
       WEED_S3_SSE_KEY: ${REPLICANT_S3_SSE_KEY:?run replicant dev up to generate dev/compose/.env}
+    # A fixed volume slot count instead of -volume.max=0 (auto), which derives it from the free disk at start: on a
+    # laptop with little free space that is fewer slots than the collections need (each grows several volumes), and
+    # writes fail with "no free volumes left". Volumes are created on demand and sparse, so this reserves no space.
+    command:
+      - server
+      - -dir=/data
+      - -volume.max=128
+      - -master.volumeSizeLimitMB=1024
+      - -s3
+      - -s3.port=8333
+      - -s3.config=/etc/seaweedfs/s3.json
+      - -s3.iam.config=/etc/seaweedfs/iam.json
+      - -s3.allowDeleteBucketNotEmpty=false
 
   # PLATFORM-D2: dex and temporal-codec-server are not in v0, so the UI runs without OIDC and without the codec.
   temporal-ui:

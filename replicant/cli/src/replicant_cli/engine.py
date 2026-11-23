@@ -169,8 +169,14 @@ def rm_containers(ids: list[str], *, force: bool = False, volumes_too: bool = Fa
 
 
 def trim() -> str:
-    """Give freed blocks back to the host. Podman: fstrim in the machine; Docker Desktop reclaims on its own."""
-    if not is_podman():
-        return "not needed (Docker reclaims disk space itself)"
-    t = subprocess.run(["podman", "machine", "ssh", "sudo fstrim -a"], capture_output=True, text=True, timeout=600)
+    """Give freed blocks back to the host: fstrim in the Podman machine or the Colima VM. Docker Desktop reclaims
+    space on its own."""
+    if is_podman():
+        cmd = ["podman", "machine", "ssh", "sudo fstrim -a"]
+    elif subprocess.run(["docker", "context", "show"], capture_output=True, text=True).stdout.strip().startswith("colima") \
+            and shutil.which("colima"):
+        cmd = ["colima", "ssh", "--", "sudo", "fstrim", "-a"]
+    else:
+        return "not needed (Docker Desktop reclaims disk space itself)"
+    t = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     return "done" if t.returncode == 0 else f"failed ({t.stderr.strip()[-200:]})"

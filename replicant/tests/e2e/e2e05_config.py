@@ -274,9 +274,21 @@ def main() -> None:
     log("E2E-05 config: PASS")
 
 
+def restore_baseline() -> None:
+    """A failed or interrupted run must not leave prj_ledger on the new trigger label: every later suite opens issues
+    with `replicant` and would be ignored as ignored_no_trigger."""
+    try:
+        put_config(BASELINE, "e2e05: restore the baseline after the run")
+    except Exception as err:  # noqa: BLE001 - best effort; the run's own failure is the one to report
+        log(f"could not restore the baseline: {err}")
+
+
 def test_e2e05_config() -> None:
-    main()
+    try:
+        main()
+    finally:
+        restore_baseline()
 
 
 if __name__ == "__main__":
-    main()
+    test_e2e05_config()

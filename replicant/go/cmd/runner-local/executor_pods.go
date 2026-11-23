@@ -217,7 +217,8 @@ func (s *Server) containerSpec(r *Record, c string) (string, engine.ContainerCon
 			vol(r, "tools", "/replicant/tools", false), vol(r, "inputs", sandbox.InputsDir, false),
 			vol(r, "managed", "/replicant/managed", false), vol(r, "home", sandbox.HomeDir, false),
 			vol(r, "workspace", sandbox.WorkspaceDir, false), ipc, cfgMount})
-		cc.HostConfig.Tmpfs = map[string]string{"/tmp": "rw,size=512m,mode=1777"}
+		// exec: build tools run test binaries from /tmp (go test); Docker mounts tmpfs noexec by default, Podman does not
+		cc.HostConfig.Tmpfs = map[string]string{"/tmp": "rw,exec,size=512m,mode=1777"}
 	case cAgent:
 		cc.Image = r.Local.AgentImage
 		cc.User = "10001:10001"
@@ -238,7 +239,7 @@ func (s *Server) containerSpec(r *Record, c string) (string, engine.ContainerCon
 			vol(r, "spool", sandbox.SpoolDir, false), ipc,
 		})
 		// prompt: agent-only memory-backed volume (cli-invocation.md §1.1), never uploaded
-		cc.HostConfig.Tmpfs = map[string]string{"/tmp": "rw,size=1g,mode=1777", sandbox.PromptDir: "rw,size=4m,mode=1777"}
+		cc.HostConfig.Tmpfs = map[string]string{"/tmp": "rw,exec,size=1g,mode=1777", sandbox.PromptDir: "rw,size=4m,mode=1777"}
 		cc.HostConfig.Memory = r.Local.MemoryBytes
 		cc.HostConfig.NanoCpus = int64(r.Local.CPUs * 1e9)
 		cc.StopSignal = "SIGTERM"
@@ -353,11 +354,27 @@ func (s *Server) inspect(ctx context.Context, r *Record, c string) *engine.Inspe
 	return ins
 }
 
+// isPodman: whether the engine is Podman, asked once. Docker's local volume driver treats any option as a mount
+// (it then requires type and device), so plain volumes get no options there.
+func (s *Server) isPodman(ctx context.Context) bool {
+	s.engOnce.Do(func() {
+		if v, err := s.Engine.Version(ctx); err == nil {
+			s.podman = v.Engine() == "podman"
+		}
+	})
+	return s.podman
+}
+
 func (s *Server) createPodGroup(ctx context.Context, r *Record) error {
 	lbl := s.labels(r)
+	var owner map[string]string
+	if s.isPodman(ctx) {
+		// explicit ownership: podman otherwise chowns an unowned volume to whichever container mounts it first; on
+		// Docker the volume-init helper below sets it
+		owner = map[string]string{"o": "uid=10001,gid=10002"}
+	}
 	for _, v := range volumeNames {
-		// explicit ownership: podman otherwise chowns an unowned volume to whichever container mounts it first
-		if err := s.Engine.VolumeCreate(ctx, r.AgentRun.Name+"-"+v, lbl, map[string]string{"o": "uid=10001,gid=10002"}); err != nil {
+		if err := s.Engine.VolumeCreate(ctx, r.AgentRun.Name+"-"+v, lbl, owner); err != nil {
 			return fmt.Errorf("volume %s: %w", v, err)
 		}
 	}

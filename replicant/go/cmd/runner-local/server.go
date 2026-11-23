@@ -57,6 +57,8 @@ type Server struct {
 	pageKey []byte
 
 	createMu sync.Mutex
+	engOnce  sync.Once
+	podman   bool // the engine is Podman (volume options differ, executor_pods.go)
 	wake     chan string
 }
 

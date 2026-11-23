@@ -42,3 +42,11 @@ func TestRemoveIgnoresNotFound(t *testing.T) {
 		t.Fatalf("404 must be nil, got %v", err)
 	}
 }
+
+func TestAPIAtLeast(t *testing.T) {
+	for v, want := range map[string]bool{"1.41": false, "1.45": true, "1.52": true, "2.0": true, "": false, "x.y": false} {
+		if apiAtLeast(v, 1, 45) != want {
+			t.Errorf("apiAtLeast(%q) != %v", v, want)
+		}
+	}
+}
