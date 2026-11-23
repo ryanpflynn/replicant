@@ -1,0 +1,15 @@
+# replicant.gateway-script/v1: the canned billing-py reviewer for E2E-08 (approves the implementer's fix). Selected for
+# billing-py jobs by REPLICANT_GATEWAY_SCRIPT_SETS; stub key review.c<cycle>.n<ordinal> (falls back to "reviewer").
+schema: replicant.gateway-script/v1
+name: walkthrough-billing-py-reviewer
+protocol: anthropic_messages
+finish: "Review complete: approve."
+turns:
+  - respond:
+      text: "I'll read the changed method."
+      tool_use: {name: Read, input: {file_path: "${cwd}/src/billing/invoice.py"}}
+      usage: {input_tokens: 8000, output_tokens: 40}
+  - respond:
+      text: "Tax is now computed on the taxable amount and the new test covers the issue's example."
+      structured_output_from: reviewer.agent_report.json
+      usage: {input_tokens: 9000, output_tokens: 220}

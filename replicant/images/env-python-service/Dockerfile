@@ -5,8 +5,19 @@
 # sample repo pins (dev/sample-repos/billing-py/uv.lock); other packages fail at install as cause `network`.
 FROM ghcr.io/astral-sh/uv:0.12.5 AS uv
 
+# MCP shelf (design §8c, ONBOARD-D14): the MCP server packages the platform approved, installed under /opt/mcp so an
+# auto-allowed repo server (`npx -y <pkg>@<version>`) starts without a registry; the entrypoint runs the shelf copy.
+FROM docker.io/library/node:22-bookworm-slim AS mcp
+COPY dev/mcp-packages /tmp/mcp-src
+RUN mkdir -p /opt/mcp && cd /tmp/mcp-src \
+ && for d in */; do (cd "$d" && npm pack --silent --pack-destination /tmp); done \
+ && npm install --prefix /opt/mcp --no-audit --no-fund --omit=dev /tmp/*.tgz \
+ && ls /opt/mcp/node_modules/.bin
+
 FROM docker.io/library/python:3.12-slim-bookworm
 COPY --from=uv /uv /uvx /usr/local/bin/
+COPY --from=mcp /usr/local/bin/node /usr/local/bin/node
+COPY --from=mcp /opt/mcp /opt/mcp
 RUN apt-get update && apt-get install -y --no-install-recommends git jq zstd make ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd -g 10002 replicant-io && groupadd -g 10001 agent \

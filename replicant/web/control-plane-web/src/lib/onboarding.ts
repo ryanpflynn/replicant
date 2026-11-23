@@ -202,6 +202,7 @@ export function sourceWord(src?: string | null): string {
 
 const MCP_SKIP: Record<string, string> = {
   not_allowed: "not approved for Replicant yet",
+  not_installed: "approved, but not installed in the environment image",
   denied: "blocked by an admin",
   needs_credentials: "needs credentials the sandbox doesn't have",
   needs_egress: "needs network access the sandbox doesn't have",

@@ -364,8 +364,9 @@ func mcpIdentity(s mcpServerSpec) string {
 	return "stdio:" + s.Command + ":" + pkg
 }
 
-// mcpSkipped lists the repo's .mcp.json servers that this run does not start (all but the auto-allowed ones).
-func mcpSkipped(repo string, allowed []sandbox.MCPAutoAllow) []map[string]any {
+// mcpSkipped lists the repo's .mcp.json servers that this run does not start: not_allowed (not auto-allowed), or
+// not_installed (auto-allowed, but its package is not on the environment's MCP shelf).
+func mcpSkipped(repo string, allowed, missing []sandbox.MCPAutoAllow) []map[string]any {
 	out := []map[string]any{}
 	b, err := os.ReadFile(filepath.Join(repo, ".mcp.json"))
 	if err != nil {
@@ -388,8 +389,14 @@ func mcpSkipped(repo string, allowed []sandbox.MCPAutoAllow) []map[string]any {
 		for _, a := range allowed {
 			ok = ok || (a.Name == n && a.Command == s.Command && slicesEqual(a.Args, s.Args) && s.URL == "")
 		}
+		reason := "not_allowed"
+		for _, a := range missing {
+			if a.Name == n && a.Command == s.Command && slicesEqual(a.Args, s.Args) && s.URL == "" {
+				reason = "not_installed"
+			}
+		}
 		if !ok && len(out) < 32 {
-			out = append(out, map[string]any{"name": truncate(n, 128), "identity": truncate(mcpIdentity(s), 512), "reason": "not_allowed"})
+			out = append(out, map[string]any{"name": truncate(n, 128), "identity": truncate(mcpIdentity(s), 512), "reason": reason})
 		}
 	}
 	return out
@@ -458,7 +465,11 @@ func (rc *runCtx) repoConfigSection() map[string]any {
 	}
 	raw, ps := readProjectSettings(repo)
 	platform := mcpServers(p, rc.bs)
-	allowed := autoAllowedMCP(p, platform)
+	auto, missing := autoAllowedMCP(p, platform)
+	allowed := make([]sandbox.MCPAutoAllow, 0, len(auto))
+	for _, a := range auto {
+		allowed = append(allowed, a.orig)
+	}
 	rc.mu.Lock()
 	instr := append([]string{}, rc.instructions...)
 	initSkills := rc.initSkills
@@ -510,7 +521,7 @@ func (rc *runCtx) repoConfigSection() map[string]any {
 		"rules":                    nonNil(capStrings(rules, 100)),
 		"skills":                   capStrings(skills, 100),
 		"claude_md":                nonNil(capStrings(claudeMD, 100)),
-		"mcp_skipped":              mcpSkipped(repo, allowed),
+		"mcp_skipped":              mcpSkipped(repo, allowed, missing),
 		"mcp_allowed":              mcpAllowed,
 		"permission_rules_ignored": permIgnored,
 		"hook_events_available":    true, // 2.1.310 emits hook_started/hook_response with --include-hook-events

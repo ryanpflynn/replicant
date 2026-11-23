@@ -982,8 +982,17 @@ Interfaces: `docs/design/onboarding-interfaces.md` (ONBOARD-01).
   `.claude/rules` file and the nested CLAUDE.md, which load only on Read. Now, with `repo_config=use`, a role that
   can both read and edit gets a short tool guidance appended to its system prompt. The managed settings also deny
   `Bash(sed -i:*)`, `Bash(perl -i:*)` and `Bash(perl -pi:*)`. On the rerun the implementer used Read and Edit, the
-  hook ran on both edits, and the rule and nested CLAUDE.md loaded. Read-only roles (planner, reviewer) get no
-  guidance and still read with Bash.
+  hook ran on both edits, and the rule and nested CLAUDE.md loaded. Read-only roles (planner, reviewer) get a
+  read-only variant: use Read rather than `cat`, so path-scoped rules and nested CLAUDE.md files load for them too.
+- **ONBOARD-D14 Auto-allowed MCP servers run from a pre-installed shelf.** Sandboxes have no package registry, so a
+  repo server such as `npx -y @acme/schema-mcp@1.2.0` failed to start in every real run (the Python image had no
+  Node either). Environment images now carry the approved packages under `/opt/mcp`: npm packages in
+  `/opt/mcp/node_modules`, Python tools as `/opt/mcp/bin/<name>`. The Python image also gets the `node` binary. The
+  entrypoint runs the shelf copy when the pinned version matches. A server whose package isn't on the shelf isn't
+  started; it is recorded as skipped with reason `not_installed`, so it reaches the fleet queue as "approved, but
+  not installed in the environment image" instead of failing at run time. In v0 the shelf holds one fixture,
+  `dev/mcp-packages/acme-schema-mcp`, which stands in for the sample repo's package. A real platform would build the
+  shelf from the catalogue's approved packages. The Go environment image has no shelf yet.
 - **TIER-D1 Model tiers are a platform policy.** `model_tiers` (the catalogue) and `model_tier_selection` (a
   project's choice, emitted in the derived bundle only when it differs from the default) are added as C-DEF policy
   types.

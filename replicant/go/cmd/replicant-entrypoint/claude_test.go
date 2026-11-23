@@ -121,8 +121,9 @@ func TestRepoConfigSteersEditsToEditTools(t *testing.T) {
 	if !strings.Contains(repoGuidance(p), "change them with Edit or Write") || !has(deny(), "Bash(sed -i:*)") {
 		t.Fatalf("use mode: guidance and in-place edit denies expected: %v", deny())
 	}
-	p.Agent.Tools.Edit = false // a read-only role (planner, reviewer) gets neither
-	if repoGuidance(p) != "" || has(deny(), "Bash(sed -i:*)") {
-		t.Fatal("read-only role: no edit guidance")
+	p.Agent.Tools.Edit = false // a read-only role (planner, reviewer): read guidance only, no edit denies
+	if g := repoGuidance(p); !strings.Contains(g, "Read source files with the Read tool") || strings.Contains(g, "Edit") ||
+		has(deny(), "Bash(sed -i:*)") {
+		t.Fatalf("read-only role: read guidance only: %q", g)
 	}
 }

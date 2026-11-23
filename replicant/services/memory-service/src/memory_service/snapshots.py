@@ -51,10 +51,13 @@ async def create_snapshot(db: Database, s3: Any, req: dict[str, Any]) -> dict[st
             created = (await c.execute(text("""
               INSERT INTO memory.snapshots (snapshot_id, tenant_id, policy_ref, policy_digest, spec_digest, item_count,
                                             export_key, export_sha256, renderer_version, first_job_id)
-              VALUES (:s, :t, :p, :pd, :sd, :n, :k, :sha, :rv, :j) RETURNING created_at"""),
+              VALUES (:s, :t, :p, :pd, :sd, :n, :k, :sha, :rv, :j)
+              ON CONFLICT (snapshot_id) DO NOTHING RETURNING created_at"""),
                 {"s": sid, "t": tenant, "p": policy, "pd": pdigest, "sd": spec, "n": len(items), "k": key, "sha": sha,
-                 "rv": core.RENDERER_VERSION, "j": _ok("job", job)})).scalar_one()
-            for n, i in enumerate(items):
+                 "rv": core.RENDERER_VERSION, "j": _ok("job", job)})).scalar()
+            # The id is content-addressed: a job starting at the same moment may have created this very snapshot
+            # (the insert waits for its transaction). Its items are then already there.
+            for n, i in enumerate(items if created is not None else []):
                 await c.execute(text("""
                   INSERT INTO memory.snapshot_items (snapshot_id, entry_id, version, tenant_id, section, precedence_rank,
                                                      scope_specificity, base_score, created_at)

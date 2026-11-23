@@ -17,6 +17,7 @@ import (
 const cliExecutionSchema = "https://schemas.replicant.example.com/kinds/common/v1.json#/$defs/cli_execution"
 
 func TestRepoConfigUseVsIgnore(t *testing.T) {
+	fakeShelf(t)
 	for _, mode := range []string{"", "ignore", "use"} {
 		t.Run("mode="+mode, func(t *testing.T) {
 			use := mode == "use"
@@ -50,7 +51,7 @@ func TestRepoConfigUseVsIgnore(t *testing.T) {
 			allowed, _ := json.Marshal(ms["allowedMcpServers"])
 			wantAllowed := `[{"serverUrl":"http://127.0.0.1:7801/*"}]`
 			if use {
-				wantAllowed = `[{"serverUrl":"http://127.0.0.1:7801/*"},{"serverCommand":["npx","-y","@acme/schema-mcp@1.2.0"]}]`
+				wantAllowed = `[{"serverUrl":"http://127.0.0.1:7801/*"},{"serverCommand":["` + mcpShelf + `/node_modules/.bin/schema-mcp"]}]`
 			}
 			if string(allowed) != wantAllowed {
 				t.Errorf("allowedMcpServers %s", allowed)
@@ -68,24 +69,46 @@ func TestRepoConfigUseVsIgnore(t *testing.T) {
 				t.Fatal(err)
 			}
 			b, _ := os.ReadFile(filepath.Join(dir, "claude-code", "managed-mcp.json"))
-			if strings.Contains(string(b), `"command": "npx"`) != use {
+			if strings.Contains(string(b), `"command": "`+mcpShelf+`/node_modules/.bin/schema-mcp"`) != use || strings.Contains(string(b), "npx") {
 				t.Errorf("managed-mcp.json: %s", b)
 			}
 		})
 	}
 }
 
+// fakeShelf installs @acme/schema-mcp@1.2.0 (npm) and fmt-mcp (Python tool) on a temporary MCP shelf.
+func fakeShelf(t *testing.T) string {
+	t.Helper()
+	old := mcpShelf
+	mcpShelf = t.TempDir()
+	t.Cleanup(func() { mcpShelf = old })
+	writeFiles(t, mcpShelf, map[string]string{
+		"node_modules/@acme/schema-mcp/package.json": `{"name":"@acme/schema-mcp","version":"1.2.0","bin":{"schema-mcp":"server.js"}}`,
+		"node_modules/.bin/schema-mcp":               "#!/usr/bin/env node\n",
+		"bin/fmt-mcp":                                "#!/bin/sh\n",
+	})
+	return mcpShelf
+}
+
 func TestAutoAllowedMCPFiltering(t *testing.T) {
+	shelf := fakeShelf(t)
 	p := plan(t)
 	p.RepoConfig = "use"
 	p.MCPAutoAllow = []sandbox.MCPAutoAllow{{Name: "memory", Command: "x"}, {Name: "bad name", Command: "x"}, {Name: "fmt", Command: ""},
-		{Name: "ok", Command: "uvx", Args: []string{"fmt-mcp==1.0"}}, {Name: "ok", Command: "other"}}
-	got := autoAllowedMCP(p, []mcpEntry{{name: "memory"}})
-	if len(got) != 1 || got[0].Name != "ok" || got[0].Command != "uvx" {
+		{Name: "ok", Command: "uvx", Args: []string{"fmt-mcp==1.0", "--stdio"}}, {Name: "ok", Command: "other"},
+		{Name: "schema", Command: "npx", Args: []string{"-y", "@acme/schema-mcp@1.2.0"}},
+		{Name: "old", Command: "npx", Args: []string{"-y", "@acme/schema-mcp@1.1.0"}},
+		{Name: "gone", Command: "npx", Args: []string{"-y", "@acme/other-mcp@1.0.0"}}}
+	got, missing := autoAllowedMCP(p, []mcpEntry{{name: "memory"}})
+	if len(got) != 2 || got[0].orig.Command != "uvx" || got[0].run.Command != shelf+"/bin/fmt-mcp" ||
+		!slices.Equal(got[0].run.Args, []string{"--stdio"}) || got[1].run.Command != shelf+"/node_modules/.bin/schema-mcp" {
 		t.Fatalf("%+v", got)
 	}
+	if len(missing) != 2 || missing[0].Name != "old" || missing[1].Name != "gone" {
+		t.Fatalf("a wrong version or a package not on the shelf is not_installed: %+v", missing)
+	}
 	p.RepoConfig = "ignore"
-	if autoAllowedMCP(p, nil) != nil {
+	if s, m := autoAllowedMCP(p, nil); s != nil || m != nil {
 		t.Fatal("ignore mode must not allow repo servers")
 	}
 }
@@ -270,6 +293,7 @@ func TestHookTrackerAttribution(t *testing.T) {
 }
 
 func TestRepoConfigReportSection(t *testing.T) {
+	fakeShelf(t)
 	repo := t.TempDir()
 	writeFiles(t, repo, map[string]string{
 		".claude/settings.json":              `{"hooks":{"PostToolUse":[{"matcher":"Write|Edit","hooks":[{"type":"command","command":"touch /tmp/marker"},{"type":"prompt","prompt":"x"}]}]},"permissions":{"allow":["Bash(curl:*)"],"deny":["Read(.env)"],"ask":["Bash"]}}`,

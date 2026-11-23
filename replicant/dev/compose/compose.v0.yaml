@@ -69,7 +69,7 @@ services:
       GITEA_WEBHOOK_SECRET_FILE: /run/secrets/gitea_webhook_secret
       GITEA_WEBHOOK_URL: http://github-integration:8080/webhooks/gitea
       GITEA_ORG: acme-payments
-      GITEA_SAMPLE_REPOS: ledger-api
+      GITEA_SAMPLE_REPOS: ledger-api billing-py web-console   # dev/sample-repos/<name>
     secrets: [gitea_webhook_secret]          # merged with the base service's two secrets
     volumes:
       - ./config/gitea/bootstrap-v0.sh:/scripts/bootstrap-v0.sh:ro
@@ -162,6 +162,8 @@ services:
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://alloy:4318/v1/traces
       REPLICANT_CONTROL_PLANE_TOKEN_FILE: /run/secrets/replicant_worker_cp_token
       REPLICANT_GATEWAY_SCRIPT_SET: ${REPLICANT_GATEWAY_SCRIPT_SET:-walkthrough-ledger-api}
+      # per-repo script sets (repo=set,...): billing-py jobs replay tests/fixtures/gateway-scripts/walkthrough-billing-py
+      REPLICANT_GATEWAY_SCRIPT_SETS: ${REPLICANT_GATEWAY_SCRIPT_SETS:-billing-py=walkthrough-billing-py}
       REPLICANT_METRICS_BIND: "off"
       # MEM-D20: read-only Gitea access through the broker (activities/pr_inspect.py)
       REPLICANT_TOKEN_BROKER_TOKEN_FILE: /run/secrets/broker_worker_token

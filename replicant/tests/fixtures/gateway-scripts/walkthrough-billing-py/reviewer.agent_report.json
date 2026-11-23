@@ -1,0 +1,7 @@
+{
+  "outcome": "completed",
+  "verdict": "approve",
+  "summary": "The fix is minimal and correct: Invoice.tax_cents now rounds Decimal(self.taxable_cents()) * self.tax_rate with round_cents (half-even), so the discount is no longer taxed. Invoices without a discount are unchanged (taxable == subtotal), and test_tax_on_discounted_amount covers the issue's example (tax 1800, total 10800).",
+  "findings": [],
+  "scope_ok": true
+}

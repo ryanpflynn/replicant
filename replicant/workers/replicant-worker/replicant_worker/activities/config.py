@@ -32,6 +32,7 @@ class Settings:
     cassette_set: str | None
     script_set: str | None
     script_key: str
+    script_sets: dict[str, str]  # repo name -> script set (REPLICANT_GATEWAY_SCRIPT_SETS)
     kill_switch_mirror: str | None
     deterministic: bool
     registry_publish: bool
@@ -46,6 +47,17 @@ class Settings:
     @property
     def buckets(self) -> set[str]:
         return {self.bucket(c) for c in ("artifacts", "transcripts", "session", "audit", "memory", "eval", "registry", "ops")}
+
+
+def script_sets(v: str | None) -> dict[str, str]:
+    """`billing-py=walkthrough-billing-py,...`: the script set for jobs on that repo instead of
+    REPLICANT_GATEWAY_SCRIPT_SET (local scripted gateway)."""
+    out = {}
+    for part in (v or "").split(","):
+        repo, sep, name = part.strip().partition("=")
+        if sep and repo.strip() and name.strip():
+            out[repo.strip()] = name.strip()
+    return out
 
 
 @lru_cache(maxsize=1)
@@ -64,6 +76,7 @@ def settings() -> Settings:
         grant_issuer=env("REPLICANT_RUN_GRANT_ISSUER", f"replicant-{fenv}-core") or f"replicant-{fenv}-core",
         cassette_set=env("REPLICANT_GATEWAY_CASSETTE_SET"), script_set=env("REPLICANT_GATEWAY_SCRIPT_SET"),
         script_key=env("REPLICANT_GATEWAY_SCRIPT_KEY", "{node_key}.c{cycle}.n{ordinal}") or "{node_key}.c{cycle}.n{ordinal}",
+        script_sets=script_sets(env("REPLICANT_GATEWAY_SCRIPT_SETS")),
         kill_switch_mirror=env("REPLICANT_KILL_SWITCH_MIRROR"),
         deterministic=env("REPLICANT_DETERMINISTIC_RUNS", "false") == "true",
         registry_publish=env("REPLICANT_LOCAL_REGISTRY_PUBLISH", "true" if fenv == "local" else "false") == "true",

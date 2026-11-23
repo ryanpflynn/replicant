@@ -43,7 +43,9 @@ shim replies with `finish` text. Strings may use `${cwd}` (the CLI's "Primary wo
 `599 cassette_miss`. `X-Replicant-Stub-Fault: <status>[;retry_after=N][;budget_level=L][;code=C]` injects faults
 (ignored by the enterprise backend).
 
-Fixtures: `tests/fixtures/gateway-scripts/walkthrough-ledger-api/{implementer,reviewer}.yaml`.
+Fixtures: `tests/fixtures/gateway-scripts/walkthrough-ledger-api/{implementer,reviewer}.yaml`, and
+`walkthrough-billing-py/` for billing-py jobs (the worker picks the set per repo: `REPLICANT_GATEWAY_SCRIPT_SETS`,
+`billing-py=walkthrough-billing-py` in compose.v0.yaml).
 
 ## Build, test, smoke
 

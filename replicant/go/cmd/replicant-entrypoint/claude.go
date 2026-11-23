@@ -34,12 +34,23 @@ const repoToolGuidance = "## Tools and this repository's configuration\n\n" +
 	"them with Edit or Write. Do not read source files with cat/head/sed, and do not create or change files with " +
 	"shell redirection, heredocs, sed or perl. Use Bash to run commands (tests, linters, builds, git), not to edit.\n"
 
-// repoGuidance: the platform's tool guidance for this run, or "" (repo config ignored, or no Read/Edit tools).
+// repoReadGuidance is the read-only variant for roles without Edit (planner, reviewer): the team's path-scoped rules
+// and nested CLAUDE.md files still load only on Read.
+const repoReadGuidance = "## Tools and this repository's configuration\n\n" +
+	"This repository's own Claude Code configuration is active: its path-scoped rules and nested CLAUDE.md files load " +
+	"when you Read a file. Read source files with the Read tool, not with cat/head/sed. Use Bash to run commands " +
+	"(tests, linters, builds, git).\n"
+
+// repoGuidance: the platform's tool guidance for this run, or "" (repo config ignored, or no Read tool).
 func repoGuidance(p *sandbox.RunPlan) string {
-	if p == nil || !p.RepoConfigUse() || !p.Agent.Tools.Read || !p.Agent.Tools.Edit {
+	switch {
+	case p == nil || !p.RepoConfigUse() || !p.Agent.Tools.Read:
 		return ""
+	case p.Agent.Tools.Edit:
+		return repoToolGuidance
+	default:
+		return repoReadGuidance
 	}
-	return repoToolGuidance
 }
 
 // skillsAllowed: with the repo's configuration in use, the Skill tool is on unless the agent definition denies it.
@@ -110,7 +121,7 @@ func managedSettings(p *sandbox.RunPlan, mcp []mcpEntry) map[string]any {
 		for _, d := range t.Shell.Deny {
 			deny = append(deny, "Bash("+d+")")
 		}
-		if repoGuidance(p) != "" {
+		if repoGuidance(p) == repoToolGuidance {
 			for _, d := range inPlaceShellEdits {
 				deny = append(deny, "Bash("+d+")")
 			}
@@ -131,7 +142,7 @@ func managedSettings(p *sandbox.RunPlan, mcp []mcpEntry) map[string]any {
 	if skillsAllowed(p) {
 		allow = append(allow, "Skill")
 	}
-	auto := autoAllowedMCP(p, mcp)
+	auto, _ := autoAllowedMCP(p, mcp)
 	for _, m := range mcp {
 		if len(m.allow) == 0 {
 			allow = append(allow, "mcp__"+m.name+"__*")
@@ -144,7 +155,7 @@ func managedSettings(p *sandbox.RunPlan, mcp []mcpEntry) map[string]any {
 		}
 	}
 	for _, a := range auto {
-		allow = append(allow, "mcp__"+a.Name+"__*")
+		allow = append(allow, "mcp__"+a.run.Name+"__*")
 	}
 	for _, d := range t.DenyTools {
 		if !slices.Contains(deny, d) {
@@ -157,7 +168,7 @@ func managedSettings(p *sandbox.RunPlan, mcp []mcpEntry) map[string]any {
 	}
 	allowedMCP := []map[string]any{{"serverUrl": "http://127.0.0.1:7801/*"}}
 	for _, a := range auto {
-		allowedMCP = append(allowedMCP, map[string]any{"serverCommand": append([]string{a.Command}, a.Args...)})
+		allowedMCP = append(allowedMCP, map[string]any{"serverCommand": append([]string{a.run.Command}, a.run.Args...)})
 	}
 	use := p.RepoConfigUse()
 	// repo_config use (§8c): project settings load under these managed settings. Repo hooks run (the managed ones stay),
@@ -196,24 +207,28 @@ func managedSettings(p *sandbox.RunPlan, mcp []mcpEntry) map[string]any {
 }
 
 // autoAllowedMCP is the plan's mcp_auto_allow list (repo .mcp.json stdio servers of catalogue class auto_allow, §8c)
-// when repo_config is use; names that are invalid, repeated or taken by a platform server are dropped.
-func autoAllowedMCP(p *sandbox.RunPlan, platform []mcpEntry) []sandbox.MCPAutoAllow {
+// when repo_config is use; names that are invalid, repeated or taken by a platform server are dropped. Servers whose
+// package is not on this environment's MCP shelf come back as missing (not_installed): they are not started.
+func autoAllowedMCP(p *sandbox.RunPlan, platform []mcpEntry) (start []autoMCP, missing []sandbox.MCPAutoAllow) {
 	if !p.RepoConfigUse() {
-		return nil
+		return nil, nil
 	}
 	seen := map[string]bool{}
 	for _, m := range platform {
 		seen[m.name] = true
 	}
-	var out []sandbox.MCPAutoAllow
 	for _, a := range p.MCPAutoAllow {
 		if !mcpNameRe.MatchString(a.Name) || a.Command == "" || seen[a.Name] {
 			continue
 		}
 		seen[a.Name] = true
-		out = append(out, a)
+		if run, ok := resolveMCP(a); ok {
+			start = append(start, autoMCP{orig: a, run: run})
+		} else {
+			missing = append(missing, a)
+		}
 	}
-	return out
+	return start, missing
 }
 
 var mcpNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
@@ -258,12 +273,13 @@ func renderManaged(dir string, p *sandbox.RunPlan, bs *sandbox.Bootstrap) error 
 	for _, m := range mcp {
 		servers[m.name] = map[string]string{"type": "http", "url": m.url}
 	}
-	for _, a := range autoAllowedMCP(p, mcp) {
-		args := a.Args
+	auto, _ := autoAllowedMCP(p, mcp)
+	for _, a := range auto {
+		args := a.run.Args
 		if args == nil {
 			args = []string{}
 		}
-		servers[a.Name] = map[string]any{"type": "stdio", "command": a.Command, "args": args}
+		servers[a.run.Name] = map[string]any{"type": "stdio", "command": a.run.Command, "args": args}
 	}
 	if err := writeJSONFile(filepath.Join(cc, "managed-settings.json"), managedSettings(p, mcp), 0o444); err != nil {
 		return err

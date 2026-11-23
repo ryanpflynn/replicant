@@ -453,3 +453,16 @@ async def test_lifecycle_review_dates_flags_and_fields(env):  # noqa: ANN001
     assert d["documented_in"] == ["CONTRIBUTING.md"] and d["verification"]["matched"] == 3
     assert d["verification"]["pattern"] == "make lint" and d["verification"]["commit_sha"] == "abc123"
     assert d["label"] == "Inferred convention (seen in 3 of 4 files)"
+
+
+async def test_concurrent_jobs_share_one_snapshot(env):  # noqa: ANN001
+    """Jobs that start together select the same entries, so they get the same content-addressed snapshot ID: the
+    second insert must not fail (it used to raise UniqueViolation on snapshots_pkey)."""
+    c, tenant, _, _ = env
+    r = await c.post("/internal/v1/admin/entries", headers=admin(), json={
+        "tenant_id": tenant, "memory_type": "rule", "scope_level": "repo", "repo": REPO,
+        "statement": "Round minor units half-even with the money helper; never round floats."})
+    assert r.status_code == 201, r.text
+    import asyncio
+    snaps = await asyncio.gather(*(snap(c, tenant, ulid("job")) for _ in range(4)))
+    assert len({s["memory_snapshot_id"] for s in snaps}) == 1 and all(s["entries"] == 1 for s in snaps)

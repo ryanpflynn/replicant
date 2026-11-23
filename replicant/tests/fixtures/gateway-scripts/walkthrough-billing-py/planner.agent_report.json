@@ -1,0 +1,18 @@
+{
+  "outcome": "completed",
+  "summary": "Invoice.tax_cents taxes the gross subtotal, so discounted invoices are over-charged tax. Tax Decimal(self.taxable_cents()) (subtotal minus discount) instead, still rounded half-even with billing.money.round_cents, and add a test for a discounted, taxed invoice. One line in src/billing/invoice.py plus a test.",
+  "steps": [
+    {"id": "s1", "title": "Compute tax_cents on taxable_cents() instead of subtotal_cents()", "files": ["src/billing/invoice.py"], "rationale": "taxable_cents() already subtracts the discount; round_cents keeps half-even rounding and no floats."},
+    {"id": "s2", "title": "Add a test for a discounted, taxed invoice", "files": ["tests/test_invoice.py"], "rationale": "The issue's example: EUR 100.00, 10 % discount, 20 % tax -> tax 1800, total 10800."},
+    {"id": "s3", "title": "Run uv run pytest -q and uv run ruff check .", "files": [], "rationale": "The repo's CI commands."}
+  ],
+  "acceptance_criteria": [
+    {"id": "ac1", "text": "A EUR 100.00 invoice with a 10 % discount and 20 % tax has tax 1800 and total 10800.", "verifiable_by": "unit_test"},
+    {"id": "ac2", "text": "An invoice without a discount keeps its totals.", "verifiable_by": "unit_test"},
+    {"id": "ac3", "text": "uv run pytest -q and uv run ruff check . pass.", "verifiable_by": "unit_test"}
+  ],
+  "risks": ["Rounding order: the discount is rounded before tax is applied, as the issue's example expects."],
+  "estimated_scope": {"files": 2, "lines": 8},
+  "touches_services": ["billing-py"],
+  "expected_ui_changes": []
+}

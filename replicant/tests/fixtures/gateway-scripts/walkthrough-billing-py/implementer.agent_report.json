@@ -1,0 +1,10 @@
+{
+  "outcome": "completed",
+  "summary": "Invoice.tax_cents computed tax on the gross subtotal, so discounted invoices were over-charged tax. It now rounds Decimal(self.taxable_cents()) * self.tax_rate with billing.money.round_cents (half-even); invoices without a discount keep their totals. Added test_tax_on_discounted_amount (EUR 100.00, 10 % discount, 20 % tax: tax 1800, total 10800). Changed src/billing/invoice.py (one line) and tests/test_invoice.py.",
+  "tests_run": [
+    {"command": "uv run pytest -q && uv run ruff check .", "exit_code": 0, "summary": "all tests pass, including test_tax_on_discounted_amount; ruff check is clean"}
+  ],
+  "confidence": "high",
+  "follow_ups": [],
+  "handoff_written": false
+}

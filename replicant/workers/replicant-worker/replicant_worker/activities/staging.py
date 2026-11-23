@@ -226,6 +226,8 @@ async def agents_build_run_plan(a: dict[str, Any]) -> dict[str, Any]:
            "resource_profile": (env_doc["spec"].get("profileByRole") or {}).get(a["role"], a.get("resource_profile") or "default"),
            "timeouts": t, "max_cost_usd": max_cost, "steering_live": doc["effective"]["steering_live"],
            "models": doc["effective"]["models"], "max_turns": doc["effective"]["max_turns"], "max_concurrency": 4}
+    if (a.get("repo") or {}).get("name"):  # local scripted gateway: per-repo script sets (stub_for)
+        out["repo_name"] = a["repo"]["name"]
     if tier:  # recorded by the workflow (run.model_selected) and in the run's observations
         p = (doc["agent"].get("model") or {})
         out["tier"] = {"tier": tier["tier"], "role": tier["role"], "escalated": tier["escalated"],
@@ -415,8 +417,9 @@ def stub_for(a: dict[str, Any]) -> dict[str, Any] | None:
     node, cycle, ordinal = (lid[0], lid[1], lid[2]) if lid else (a.get("node_key", "run"), a.get("cycle", 0), 1)
     if s.cassette_set:
         return {"root": "tests", "set": s.cassette_set, "key": f"{node}.c{cycle}.n{ordinal}"}
-    if s.script_set:
-        return {"root": "scripts", "set": s.script_set,
+    script_set = s.script_sets.get(str((a.get("plan") or {}).get("repo_name") or ""), s.script_set)
+    if script_set:
+        return {"root": "scripts", "set": script_set,
                 "key": s.script_key.format(node_key=node, cycle=cycle, ordinal=ordinal, role=a.get("role", ""),
                                            agent=(a.get("plan") or {}).get("agent_ref", {}).get("name", ""))}
     return None

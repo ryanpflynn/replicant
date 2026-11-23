@@ -1,0 +1,8 @@
+{
+  "name": "@acme/schema-mcp",
+  "version": "1.2.0",
+  "description": "Fixture MCP server for the billing-py sample repo's .mcp.json (design §8c MCP shelf). Not a real package.",
+  "license": "UNLICENSED",
+  "bin": { "schema-mcp": "server.js" },
+  "files": ["server.js"]
+}

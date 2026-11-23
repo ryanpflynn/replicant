@@ -13,8 +13,12 @@ Projects: prj_ledger (ledger-api, Go) and prj_payments-web (billing-py, Python/u
      the planted failing test, so the probe verdict is fail). A job for web-console is refused with 409 repo_not_ready.
   3. Repo config: a bugfix job on billing-py (issue ISSUES/001.md) runs with the repo's configuration: its run
      observations reach the fleet queue (/admin/fleet) ranked: the PostToolUse hook loaded and the credentialed jira
-     MCP server skipped (not_allowed).
-  4. Opting out: with `repo_config: ignore` on prj_payments-web the next job's observations carry no repo hook.
+     MCP server skipped (not_allowed). The scripted implementer (tests/fixtures/gateway-scripts/walkthrough-billing-py,
+     selected by the worker's REPLICANT_GATEWAY_SCRIPT_SETS) Reads src/billing/invoice.py and Edits it and the tests,
+     so the run report's cli.repo_config shows the hook ran (runs >= 1, failures 0) and the nested
+     src/billing/CLAUDE.md and the path-scoped rule python-style.md loaded.
+  4. Opting out: with `repo_config: ignore` on prj_payments-web the next job's observations carry no repo hook and its
+     run report no repo_config.
   5. Tiers: models.workflows.bugfix = thorough on the project: the next job's implementer run selects the Opus model
      (timeline event run.model_selected).
 Every job is cancelled once its evidence is in; the project config is restored at the end.
@@ -97,9 +101,34 @@ def cancel(job_id: str) -> None:
     log(f"job {job_id} cancel -> HTTP {r.status_code}")
 
 
-def run_until_implemented(repo: str) -> str:
+def find_key(doc: object, key: str) -> dict | None:
+    """The first object under `key` anywhere in a JSON document (depth first), or None."""
+    if isinstance(doc, dict):
+        if isinstance(doc.get(key), dict):
+            return doc[key]
+        doc = list(doc.values())
+    if isinstance(doc, list):
+        for v in doc:
+            if (found := find_key(v, key)) is not None:
+                return found
+    return None
+
+
+def run_activity(job_id: str, run_id: str) -> dict:
+    """GET /v1/jobs/{job}/runs/{run}/activity once the run's report is in (it carries cli.repo_config)."""
+    def done() -> dict | None:
+        with e.api(ADMIN) as c:
+            r = c.get(f"/v1/jobs/{job_id}/runs/{run_id}/activity")
+        if r.status_code != 200:
+            return None
+        act = r.json()
+        return act if act.get("result") else None
+    return e.wait_for(done, f"run report of {run_id}", 120, every=3)
+
+
+def run_until_implemented(repo: str) -> tuple[str, str]:
     """Reset the repo, open its issue, wait until the implementer run has finished (its observations are posted after
-    each run), then cancel the job."""
+    each run), then cancel the job. Returns (job_id, implementer run_id)."""
     log(f"{repo} reset to its initial commit {reset_repo(repo)[:12]}")
     number, t0 = e.open_issue("e2e08", repo)
     job_id = e.wait_ack(number, t0, repo)
@@ -110,10 +139,12 @@ def run_until_implemented(repo: str) -> str:
     def implemented(s: dict) -> bool:
         return any(r.get("role") in ("implementer", "repair") and r.get("phase") in ("Succeeded", "Failed")
                    for r in s.get("runs", []))
-    e.wait_until(reader, job_id, implemented, "implementer run finished", deadline)
+    s = e.snapshot(e.wait_until(reader, job_id, implemented, "implementer run finished", deadline))
+    run_id = next(r["run_id"] for r in s["runs"]
+                  if r.get("role") in ("implementer", "repair") and r.get("phase") in ("Succeeded", "Failed"))
     time.sleep(5)  # the observations activity runs right after the run's result is read
     cancel(job_id)
-    return job_id
+    return job_id, run_id
 
 
 # ------------------------------------------------------------------------------------------------ steps
@@ -190,7 +221,7 @@ def step_readiness(profiles: dict[str, dict]) -> None:
 
 
 def step_repo_config() -> None:
-    job = run_until_implemented("billing-py")
+    job, run = run_until_implemented("billing-py")
     hooks = [i for i in fleet_items("hook") if "PostToolUse" in i["identity"]]
     mcp = {i["identity"]: i for i in fleet_items("mcp_server")}
     log(f"job {job}: hooks {[(i['identity'][:40], i['jobs']) for i in hooks]} mcp {sorted(mcp)}")
@@ -202,23 +233,36 @@ def step_repo_config() -> None:
     assert any(j["job_id"] == job for j in item.get("recent_jobs") or []), item.get("recent_jobs")
     ranked = fleet_items("mcp_server")
     assert ranked == sorted(ranked, key=lambda i: -float((i.get("impact") or {}).get("score") or 0)), "impact order"
-    log("billing-py job: hook loaded, jira skipped, ranked in /admin/fleet")
+    # the hook actually ran on the implementer's Edits (not just loaded), and Read-triggered instructions loaded
+    act = run_activity(job, run)
+    rc = find_key(act, "repo_config")
+    assert rc and rc.get("mode") == "use", rc
+    post = [h for h in rc.get("hooks") or [] if h.get("event") == "PostToolUse"]
+    log(f"run {run}: repo_config hooks {post} rules {rc.get('rules')} claude_md {rc.get('claude_md')}")
+    assert post and post[0]["runs"] >= 1 and post[0]["failures"] == 0, rc.get("hooks")
+    assert "python-style.md" in (rc.get("rules") or []), rc
+    assert "src/billing/CLAUDE.md" in (rc.get("claude_md") or []), rc
+    edits = [i for i in act.get("items") or [] if i.get("kind") == "tool_call" and i.get("tool") == "Edit"]
+    assert {"src/billing/invoice.py", "tests/test_invoice.py"} <= {i.get("path") for i in edits}, edits
+    log("billing-py job: hook loaded and ran, jira skipped, ranked in /admin/fleet")
 
 
 def step_opt_out(base: dict) -> None:
     put_config(WEB, {**base, "repo_config": "ignore"}, "repo_config ignore")
     before = {i["identity"]: i["jobs"] for i in fleet_items("hook")}
-    job = run_until_implemented("billing-py")
+    job, run = run_until_implemented("billing-py")
     after = {i["identity"]: i["jobs"] for i in fleet_items("hook")}
     grew = [k for k in after if after[k] > before.get(k, 0)]
     assert not grew, f"job {job} with repo_config ignore still observed hooks: {grew}"
+    rc = find_key(run_activity(job, run), "repo_config")
+    assert not (rc and rc.get("hooks")), f"run {run} with repo_config ignore reported {rc}"
     log(f"job {job}: repo_config ignore -> no repo hook observed")
 
 
 def step_tiers(base: dict) -> None:
     put_config(WEB, {**base, "models": {"default_tier": "standard", "workflows": {"bugfix": "thorough"}}},
                "bugfix on the thorough tier")
-    job = run_until_implemented("billing-py")
+    job, _ = run_until_implemented("billing-py")
     ev = [t for t in timeline(job) if t["type"] == "run.model_selected"]
     log(f"job {job}: {[t['summary'] for t in ev]}")
     assert any(t["summary"].startswith("implementer run uses tier thorough") and OPUS in t["summary"] for t in ev), ev

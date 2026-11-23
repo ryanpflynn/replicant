@@ -1,0 +1,53 @@
+# replicant.gateway-script/v1: the canned billing-py planner for E2E-08 (bugfix graph node `plan`, role planner,
+# agent planner-claude: read-only, tools.edit false). Selected for billing-py jobs by REPLICANT_GATEWAY_SCRIPT_SETS;
+# WORKER sends stub key plan.c<cycle>.n<ordinal>; the shim falls back through "plan" to the role, i.e. this file. It
+# writes /replicant/out/plan.md with Bash (the planner has no Edit/Write) and ends with the StructuredOutput call of
+# replicant.role-result.planner/v1 (planner.agent_report.json).
+schema: replicant.gateway-script/v1
+name: walkthrough-billing-py-planner
+protocol: anthropic_messages
+finish: "Plan written to /replicant/out/plan.md."
+turns:
+  - expect: {tools: [Read, Bash]}
+    respond:
+      text: "I'll read Invoice and the money helpers."
+      tool_use: {name: Read, input: {file_path: "${cwd}/src/billing/invoice.py"}}
+      usage: {input_tokens: 8000, output_tokens: 50}
+  - respond:
+      tool_use: {name: Read, input: {file_path: "${cwd}/src/billing/money.py"}}
+      usage: {input_tokens: 9500, output_tokens: 40}
+  - respond:
+      text: "tax_cents taxes subtotal_cents(); taxable_cents() already subtracts the discount. Writing the plan."
+      tool_use:
+        name: Bash
+        input:
+          description: "Write the plan to /replicant/out/plan.md"
+          command: |
+            OUT="${REPLICANT_OUT_DIR:-/replicant/out}"; mkdir -p "$OUT" && cat > "$OUT/plan.md" <<'PLAN'
+            # Plan: tax the taxable amount, not the gross subtotal
+
+            ## Cause
+            `Invoice.tax_cents` (src/billing/invoice.py) rounds `Decimal(self.subtotal_cents()) * self.tax_rate`, so
+            the tax ignores the discount.
+
+            ## Steps
+            - s1. In `tax_cents`, use `Decimal(self.taxable_cents())` (subtotal minus discount); keep
+              `billing.money.round_cents` (half-even). No floats.
+            - s2. Add a pytest test for a discounted, taxed invoice: one EUR 100.00 line, 10 % discount, 20 % tax
+              -> discount 1000, tax 1800, total 10800.
+            - s3. Run `uv run pytest -q` and `uv run ruff check .`.
+
+            ## Acceptance criteria
+            - ac1. A EUR 100.00 invoice with a 10 % discount and 20 % tax has tax 1800 and total 10800 (unit test).
+            - ac2. An invoice without a discount keeps its totals (existing unit test).
+            - ac3. `uv run pytest -q` and `uv run ruff check .` pass.
+
+            ## Risks
+            - Rounding order: the discount is rounded (percent_of) before tax is applied; this matches the issue.
+            PLAN
+            echo "wrote $OUT/plan.md"
+      usage: {input_tokens: 10500, output_tokens: 400}
+  - respond:
+      text: "The plan is a one-line change in tax_cents plus a test."
+      structured_output_from: planner.agent_report.json
+      usage: {input_tokens: 11000, output_tokens: 350}

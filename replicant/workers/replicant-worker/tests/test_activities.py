@@ -313,6 +313,19 @@ def _sequence(env, role: str = "implementer", agent: str = "implementer-claude",
                       "tenant_id": T, "job_id": JOB, "run_spec": spec, "grant": grant}}
 
 
+def test_stub_script_set_per_repo(env, monkeypatch) -> None:
+    """REPLICANT_GATEWAY_SCRIPT_SETS picks the script set by the plan's repo_name; other repos keep the default set."""
+    monkeypatch.setenv("REPLICANT_GATEWAY_SCRIPT_SETS", "billing-py=walkthrough-billing-py, bad, =x")
+    config.settings.cache_clear()
+    assert config.settings().script_sets == {"billing-py": "walkthrough-billing-py"}
+
+    def stub(repo: str | None) -> dict:
+        plan = {"repo_name": repo} if repo else {}
+        return staging.stub_for({"role": "implementer", "node_key": "implement", "cycle": 0, "plan": plan})
+    assert stub("billing-py") == {"root": "scripts", "set": "walkthrough-billing-py", "key": "implement.c0.n1"}
+    assert stub("ledger-api")["set"] == stub(None)["set"] == "ledger-api-v0"
+
+
 def test_runner_call_sequence_end_to_end(env) -> None:
     gw_seen, runner_seen = _gateway(env), _runner(env)
     s = _sequence(env)

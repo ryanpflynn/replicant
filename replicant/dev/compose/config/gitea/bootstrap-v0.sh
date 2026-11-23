@@ -3,7 +3,7 @@
 #  1. the spec bootstrap.sh: site admin `gitea-admin` and the `replicant-bot` user (CLI)
 #  2. human user `alice` (random password; the E2E driver acts as her through the admin `Sudo` header)
 #  3. org acme-payments, team payments-maintainers (write) with replicant-bot and alice
-#  4. repo acme-payments/<name> for each GITEA_SAMPLE_REPOS entry plus billing-py and web-console, initial commit
+#  4. repo acme-payments/<name> for each GITEA_SAMPLE_REPOS entry, initial commit
 #     pushed as replicant-bot
 #  5. repo label `replicant`
 #  6. org webhook -> github-integration /webhooks/gitea (type gitea, json, secret = gitea_webhook_secret)
@@ -49,9 +49,7 @@ fi
 for u in replicant-bot alice; do api PUT "/teams/$team_id/members/$u" >/dev/null; need "add $u to team"; done
 echo "team payments-maintainers ($team_id) ready"
 
-# Design §8c: the onboarding samples (Python, Node) are always added, whatever GITEA_SAMPLE_REPOS lists.
-REPOS="${GITEA_SAMPLE_REPOS:-ledger-api}"
-for extra in billing-py web-console; do case " $REPOS " in *" $extra "*) ;; *) REPOS="$REPOS $extra";; esac; done
+REPOS="${GITEA_SAMPLE_REPOS:-ledger-api billing-py web-console}"
 for name in $REPOS; do
   api GET "/repos/$ORG/$name" >/dev/null
   if [ "$(code)" = 404 ]; then
