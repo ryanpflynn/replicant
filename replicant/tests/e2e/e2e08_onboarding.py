@@ -95,10 +95,24 @@ def timeline(job_id: str) -> list[dict]:
 
 
 def cancel(job_id: str) -> None:
+    """End the job once its evidence is in. A job already at its publish gate cannot be cancelled (422), so its gate
+    is rejected instead: an open job would block later suites (the browser tests wait for no open jobs)."""
     with e.api(e.REQUESTER) as c:
         r = c.post(f"/v1/jobs/{job_id}:cancel", json={"reason": "e2e08: evidence collected"},
                    headers={"Idempotency-Key": f'"{uuid.uuid4().hex}"'})
     log(f"job {job_id} cancel -> HTTP {r.status_code}")
+    if r.status_code != 422:
+        return
+    with e.api(ADMIN) as c:
+        s = e.wait_until(c, job_id, lambda s: e.open_publish_gate(s) is not None or s.get("status") in e.TERMINAL,
+                         "publish gate or end", time.monotonic() + JOB_TIMEOUT_S)
+    g = e.open_publish_gate(e.snapshot(s))
+    if g:
+        with e.api(e.APPROVER) as c:
+            r = c.post(f"/v1/gates/{g['gate_id']}/decisions", headers={"Idempotency-Key": f'"{uuid.uuid4().hex}"'},
+                       json={"decision": "reject", "presented_digest": g["presented_digest"],
+                             "comment": "e2e08: evidence collected"})
+        log(f"job {job_id} at the publish gate: reject -> HTTP {r.status_code}")
 
 
 def find_key(doc: object, key: str) -> dict | None:

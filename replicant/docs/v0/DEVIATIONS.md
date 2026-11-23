@@ -1001,3 +1001,23 @@ Interfaces: `docs/design/onboarding-interfaces.md` (ONBOARD-01).
   - **Escalation:** the implementer and repair move to `thorough` on repair cycle 2 or later, at risk high or above,
     or after a failed attempt. Each run records a `run.model_selected` event.
   - **Effort** is passed to Claude Code as `--effort`.
+
+## DOCKER (the local stack on Docker as well as Podman, 2026-11-23)
+
+- **DOCKER-D1 `replicant dev` supports both engines.** `REPLICANT_CONTAINER_ENGINE=podman|docker` picks the engine;
+  unset, the CLI uses whichever daemon answers, trying Podman first. The CLI uses `podman-compose` or `docker compose`
+  (falling back to `docker-compose`), and exports `REPLICANT_CONTAINER_CLI` to the test scripts and fixtures it starts.
+- **DOCKER-D2 Verified on Docker Engine 29.5 under Colima, not Docker Desktop.** Every e2e suite and the browser tests
+  passed on Docker. Getting there needed five fixes that Podman had hidden:
+  - plain run volumes get no driver options;
+  - the engine client negotiates API v1.45 for volume subpath mounts;
+  - the sandbox `/tmp` is mounted `exec`;
+  - squid logs to files;
+  - SeaweedFS uses a fixed `-volume.max`.
+
+  Docker Desktop itself is untested. One known caveat: the browser tests use `--network host`, which Docker Desktop
+  supports only with its host-networking setting turned on.
+- **DOCKER-D3 VM disks grow and barely shrink.** A full e2e run grew Colima's sparse data disk to about 53 GB on the
+  host; `fstrim` inside the VM gave back only part of it. Give the VM a disk cap the host can afford. When freeing
+  space, delete `~/.colima/_lima/_disks/colima` as well: `colima delete` keeps that data disk. Podman behaves the
+  same, and `replicant dev prune` trims both.
