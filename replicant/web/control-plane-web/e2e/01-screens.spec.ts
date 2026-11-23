@@ -57,7 +57,7 @@ for (const theme of ["light", "dark"] as const) {
     test(`memory views ${theme}`, async ({ page, browser }) => {
       await as(page, "carol", theme);
       await page.goto("/admin/memory");
-      await page.getByText("Memory service is not running in v0").waitFor();
+      await page.getByRole("heading", { name: "Candidates waiting for review" }).waitFor();
       await shot(page, `memory-admin-1440-${theme}`);
       const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
       const p2 = await ctx.newPage();

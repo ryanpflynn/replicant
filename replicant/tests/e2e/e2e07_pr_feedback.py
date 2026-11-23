@@ -1,8 +1,8 @@
 """E2E-07: PR review comments and the repair loop (D-15), plus quoted repo instruction files, on the scripted gateway.
 
   1. main is reset to the planted bug and gets a CLAUDE.md; alice opens the issue; bob approves; replicant-bot opens
-     the PR (as in E2E-01). The implementer run's first message quotes CLAUDE.md as
-     <untrusted_input source="repo_instructions" path="CLAUDE.md"> (read from the run's transcript in S3).
+     the PR (as in E2E-01). With repo_config=use Claude Code loads CLAUDE.md itself, so the implementer run's first
+     message does not also quote it (read from the run's transcript in S3).
   2. Noise changes nothing: a comment by replicant-bot and a review by an unlinked user (`zed`, write access) start no
      triage and no run; zed gets one link-your-account reply.
   3. carol (linked, write) submits a review with a body and a line comment. The job triages it (feedback.triage,
@@ -144,16 +144,17 @@ def run() -> str:
     job = wait_until(reader, job_id, lambda s: open_publish_gate(s) is not None, "publish gate", deadline)
     s = snapshot(job)
     impl = next(r for r in s["runs"] if r.get("role") == "implementer")
-    # (1) the quoted repo instruction file is in the implementer's first message
+    # (1) with the project's default repo_config=use, Claude Code loads CLAUDE.md natively (design §8c), so the
+    # platform must not also quote it into the implementer's first message
     tr = ""
     for ln in run_transcript_text(job_id, impl["run_id"]).splitlines():
         try:
             tr += str(json.loads(ln).get("input_preview") or "") + "\n"
         except ValueError:
             continue
-    assert '<untrusted_input source="repo_instructions" path="CLAUDE.md">' in tr, tr[:1500]
-    assert "Money is integer minor units" in tr, "CLAUDE.md text not quoted"
-    log(f"implementer run {impl['run_id']}: first message quotes CLAUDE.md as repo_instructions")
+    assert tr.startswith("Task:"), tr[:1500]
+    assert '<untrusted_input source="repo_instructions" path="CLAUDE.md">' not in tr, "CLAUDE.md quoted and loaded"
+    log(f"implementer run {impl['run_id']}: CLAUDE.md left to Claude Code (repo_config=use), not quoted")
     approve(open_publish_gate(s))
     pr = wait_pr(job_id, deadline)
     n = pr["number"]
