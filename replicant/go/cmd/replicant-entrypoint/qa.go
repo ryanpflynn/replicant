@@ -25,7 +25,7 @@ var qaTypes = map[string]bool{"qa_report": true, "junit_xml": true, "build_log":
 func (rc *runCtx) runQA(ctx context.Context, term chan os.Signal) int {
 	schemaJSON, _, _ := agentReportSchema(rc.plan)
 	_ = renderHome(rc.plan, schemaJSON) // the harness may launch the CLI for agent tasks
-	if _, err := joinPrompt(rc.manifest); err != nil {
+	if _, err := joinPrompt(nil, rc.manifest); err != nil {
 		log.Warn("joined prompt", "err", err)
 	}
 	outDir := filepath.Join(sandbox.OutDir, "qa")

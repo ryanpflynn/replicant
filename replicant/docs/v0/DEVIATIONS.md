@@ -976,6 +976,14 @@ Interfaces: `docs/design/onboarding-interfaces.md` (ONBOARD-01).
   already profiled in memory, so after a restart the first push to each repo triggers a scan.
 - **ONBOARD-D12 github-integration may read repo contents.** It now requests `contents:read` from the token broker,
   whose allowlist is updated to match.
+- **ONBOARD-D13 Agents are steered to Read/Edit/Write when the repo's configuration is in use.** In a real-Claude
+  bugfix on billing-py, the implementer read files with `cat` and changed them with `sed -i` and heredocs. That
+  bypassed the team's `Edit|Write` PostToolUse hook, which ran 0 times. It also skipped the path-scoped
+  `.claude/rules` file and the nested CLAUDE.md, which load only on Read. Now, with `repo_config=use`, a role that
+  can both read and edit gets a short tool guidance appended to its system prompt. The managed settings also deny
+  `Bash(sed -i:*)`, `Bash(perl -i:*)` and `Bash(perl -pi:*)`. On the rerun the implementer used Read and Edit, the
+  hook ran on both edits, and the rule and nested CLAUDE.md loaded. Read-only roles (planner, reviewer) get no
+  guidance and still read with Bash.
 - **TIER-D1 Model tiers are a platform policy.** `model_tiers` (the catalogue) and `model_tier_selection` (a
   project's choice, emitted in the derived bundle only when it differs from the default) are added as C-DEF policy
   types.

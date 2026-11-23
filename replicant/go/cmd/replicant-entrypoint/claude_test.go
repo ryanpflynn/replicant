@@ -108,3 +108,21 @@ func TestSkillOnlyWithRepoConfig(t *testing.T) {
 		t.Fatalf("an explicit deny wins: %v", dis)
 	}
 }
+
+func TestRepoConfigSteersEditsToEditTools(t *testing.T) {
+	p := plan(t)
+	p.Agent.Tools.Read, p.Agent.Tools.Edit, p.Agent.Tools.Shell.Mode = true, true, "any"
+	deny := func() []string { return managedSettings(p, nil)["permissions"].(map[string]any)["deny"].([]string) }
+	has := slices.Contains[[]string]
+	if repoGuidance(p) != "" || has(deny(), "Bash(sed -i:*)") {
+		t.Fatal("ignore mode: no guidance and no extra Bash denies")
+	}
+	p.RepoConfig = "use"
+	if !strings.Contains(repoGuidance(p), "change them with Edit or Write") || !has(deny(), "Bash(sed -i:*)") {
+		t.Fatalf("use mode: guidance and in-place edit denies expected: %v", deny())
+	}
+	p.Agent.Tools.Edit = false // a read-only role (planner, reviewer) gets neither
+	if repoGuidance(p) != "" || has(deny(), "Bash(sed -i:*)") {
+		t.Fatal("read-only role: no edit guidance")
+	}
+}

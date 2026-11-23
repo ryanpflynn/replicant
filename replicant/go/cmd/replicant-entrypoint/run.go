@@ -146,7 +146,7 @@ func runMain() int {
 	if err := renderHome(plan, schemaJSON); err != nil {
 		log.Error("render home", "err", err)
 	}
-	promptFile, err := joinPrompt(man)
+	promptFile, err := joinPrompt(plan, man)
 	if err != nil {
 		writeTermination(exitResultInvalid, "", err.Error())
 		return rc.finish(exitResultInvalid, nil)

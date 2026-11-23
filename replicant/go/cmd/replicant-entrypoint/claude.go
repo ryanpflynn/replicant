@@ -22,6 +22,26 @@ var alwaysDenied = []string{"WebFetch", "WebSearch", "NotebookEdit", "EnterWorkt
 
 var taskTools = []string{"TaskCreate", "TaskGet", "TaskList", "TaskUpdate"}
 
+// inPlaceShellEdits: shell commands that rewrite files in place. With the repo's configuration in use they are denied,
+// so file changes go through Edit/Write, where the team's PostToolUse hooks fire (design §8c, ONBOARD-D13).
+var inPlaceShellEdits = []string{"sed -i:*", "perl -i:*", "perl -pi:*"}
+
+// repoToolGuidance is appended to the system prompt when the team's configuration is in use: the repo's hooks match
+// Edit/Write and its path-scoped rules and nested CLAUDE.md files load on Read, so shell reads and writes bypass them.
+const repoToolGuidance = "## Tools and this repository's configuration\n\n" +
+	"This repository's own Claude Code configuration is active: its hooks run after Edit and Write, and its " +
+	"path-scoped rules and nested CLAUDE.md files load when you Read a file. Read files with the Read tool and change " +
+	"them with Edit or Write. Do not read source files with cat/head/sed, and do not create or change files with " +
+	"shell redirection, heredocs, sed or perl. Use Bash to run commands (tests, linters, builds, git), not to edit.\n"
+
+// repoGuidance: the platform's tool guidance for this run, or "" (repo config ignored, or no Read/Edit tools).
+func repoGuidance(p *sandbox.RunPlan) string {
+	if p == nil || !p.RepoConfigUse() || !p.Agent.Tools.Read || !p.Agent.Tools.Edit {
+		return ""
+	}
+	return repoToolGuidance
+}
+
 // skillsAllowed: with the repo's configuration in use, the Skill tool is on unless the agent definition denies it.
 func skillsAllowed(p *sandbox.RunPlan) bool {
 	return p.RepoConfigUse() && !slices.Contains(p.Agent.Tools.DenyTools, "Skill")
@@ -89,6 +109,11 @@ func managedSettings(p *sandbox.RunPlan, mcp []mcpEntry) map[string]any {
 		allow = append(allow, "Bash")
 		for _, d := range t.Shell.Deny {
 			deny = append(deny, "Bash("+d+")")
+		}
+		if repoGuidance(p) != "" {
+			for _, d := range inPlaceShellEdits {
+				deny = append(deny, "Bash("+d+")")
+			}
 		}
 	case "allowlist":
 		for _, a := range t.Shell.Allow {
@@ -501,10 +526,12 @@ func renderHome(p *sandbox.RunPlan, schemaJSON string) error {
 	return os.WriteFile(filepath.Join(h, ".gitconfig"), []byte(gitcfg), 0o644)
 }
 
-// joinPrompt writes /run/replicant/prompt/system-append.md (§1.4): system-append.md + "\n\n" + memory .rendered.
-func joinPrompt(m *sandbox.InputsManifest) (string, error) {
+// joinPrompt writes /run/replicant/prompt/system-append.md (§1.4): system-append.md + "\n\n" + memory .rendered, then
+// the repo tool guidance when the team's configuration is in use.
+func joinPrompt(p *sandbox.RunPlan, m *sandbox.InputsManifest) (string, error) {
+	guide := repoGuidance(p)
 	sys, err := os.ReadFile(filepath.Join(sandbox.InputsDir, "system-append.md"))
-	if err != nil {
+	if err != nil && guide == "" {
 		return "", nil // no system append staged
 	}
 	for _, o := range m.Objects {
@@ -526,11 +553,17 @@ func joinPrompt(m *sandbox.InputsManifest) (string, error) {
 			out = append(append(out, []byte("\n\n")...), []byte(mi.Rendered)...)
 		}
 	}
+	if guide != "" {
+		if len(out) > 0 {
+			out = append(out, []byte("\n\n")...)
+		}
+		out = append(out, []byte(guide)...)
+	}
 	_ = os.MkdirAll(sandbox.PromptDir, 0o755)
-	p := filepath.Join(sandbox.PromptDir, "system-append.md")
-	_ = os.Remove(p)
-	if err := os.WriteFile(p, out, 0o444); err != nil {
+	f := filepath.Join(sandbox.PromptDir, "system-append.md")
+	_ = os.Remove(f)
+	if err := os.WriteFile(f, out, 0o444); err != nil {
 		return "", err
 	}
-	return p, nil
+	return f, nil
 }
