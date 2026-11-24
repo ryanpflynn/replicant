@@ -1,7 +1,7 @@
 """`replicant dev seed` for v0 (stack.md §5, reduced to M1). Every write goes through control-plane-api's admin/seed
 API with the dev_seed_token (principal svc_dev-seeder, permission dev:seed); no SQL. Steps are idempotent and
 recorded with PUT /v1/admin/dev/seed-status/{step} so a partial seed resumes. Gitea is only *read* here (repo id,
-webhook check); gitea-bootstrap created it.
+webhook check); the init one-shot created it.
 
 Operations used (spec/07-control-plane-and-ux/api/control-plane-api.openapi.yaml and
 spec/06-releases-and-evals/api/releases.openapi.yaml):
@@ -49,7 +49,7 @@ ORG, REPO, TENANT = "acme-payments", "ledger-api", "payments"  # REPO: the defau
 # Design §8c onboarding samples (Python, Node): bound like ledger-api, in project prj_payments-web
 ONBOARDING_REPOS = ("billing-py", "web-console")
 SAMPLE_REPOS = (REPO, *ONBOARDING_REPOS)
-WEBHOOK_URL = "http://github-integration:8080/webhooks/gitea"
+WEBHOOK_URL = "http://control-plane-api:8401/webhooks/gitea"   # core's github-integration module
 WEBHOOK_EVENTS = {"issues", "issue_comment", "pull_request"}
 
 
@@ -104,19 +104,19 @@ def _present(c: Ctx, repo: str) -> bool:
 
 
 def step_scm_installation(c: Ctx) -> str:
-    """github-integration POST /v1/admin/scm-installations, run inside its container (it has no host port).
-    The token travels on stdin, never in argv or the environment of the exec."""
+    """POST /v1/admin/scm-installations (core's github-integration module), run inside the control-plane-api
+    container. The token travels on stdin, never in argv or the environment of the exec."""
     import subprocess
 
     from replicant_cli import compose
-    cont = compose.containers().get("github-integration")
+    cont = compose.containers().get("control-plane-api")
     if not cont or cont.status != "running":
-        raise SeedError("github-integration is not running")
+        raise SeedError("control-plane-api is not running")
     body = json.dumps({"provider": "gitea", "host": GITEA_HOST, "org": ORG, "tenant_id": TENANT})
     script = (
         "import sys,json,urllib.request as u\n"
         "tok=sys.stdin.readline().strip()\n"
-        f"r=u.Request('http://127.0.0.1:8080/v1/admin/scm-installations',data={body!r}.encode(),method='POST',"
+        f"r=u.Request('http://127.0.0.1:8401/v1/admin/scm-installations',data={body!r}.encode(),method='POST',"
         "headers={'Authorization':'Bearer '+tok,'Content-Type':'application/json','Idempotency-Key':'\"seed-scm-1\"'})\n"
         "try:\n r=u.urlopen(r,timeout=20); print(r.status, r.read()[:300].decode())\n"
         "except u.HTTPError as e: print(e.code, e.read()[:300].decode()); sys.exit(1)\n")
@@ -232,7 +232,7 @@ def step_gitea_webhook(c: Ctx) -> str:
     r = _check(c.gitea.get(f"/api/v1/orgs/{ORG}/hooks"), "Gitea GET org hooks")
     hooks = [h for h in r.json() if (h.get("config") or {}).get("url") == WEBHOOK_URL]
     if not hooks:
-        raise SeedError(f"no org webhook to {WEBHOOK_URL} (gitea-bootstrap did not run?)")
+        raise SeedError(f"no org webhook to {WEBHOOK_URL} (the init one-shot did not run?)")
     h = hooks[0]
     missing = WEBHOOK_EVENTS - set(h.get("events") or [])
     if not h.get("active") or missing or (h.get("config") or {}).get("content_type") != "json":

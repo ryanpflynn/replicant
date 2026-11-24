@@ -1,6 +1,9 @@
 # ADR-09-001: Confirm ADR-007 (separate exec cluster) and place it in a separate AWS account
 
-- **Status:** Accepted; CCR-09-07 applied (C-ARCH 1.1.0; four exec roles in C-ARCH 1.4.0). Confirms ADR-007; the account split was
+> **Superseded** by [ADR-015: Single cluster, hardened sandbox pool](../../00-contracts/adr/015-single-cluster-hardened-sandbox-pool.md) (SIMPLIFY Phase 6, 2026-11-23;
+> C-RUNNER 4.0.0, C-CRD 4.0.0). Kept for the record; do not implement.
+
+- **Status:** Superseded by ADR-015 (2026-11-23). Was: Accepted; CCR-09-07 applied (C-ARCH 1.1.0; four exec roles in C-ARCH 1.4.0). Confirms ADR-007; the account split was
   because C-ARCH §4 draws one account.
 - **Constraints:** D-06, D-21, D-22
 

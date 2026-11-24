@@ -208,11 +208,12 @@ loki.process "sandbox" {
     template = `{{ if and (eq (default "" .stream) "transcript") (eq .container "uploader") }}transcript{{ else }}app{{ end }}`
   }
 
-  // Containers of the AgentRun pod (WS-02 controller.md s.4.2, 18:40Z): init workspace-guard and prepare; sidecars
-  // replicant-agentd, watchdog, builder (qa_build only) and QA services; main agent and uploader.
+  // Containers of the AgentRun pod (WS-02 controller.md s.4.2, 18:40Z; SIMPLIFY Phase 3): init sandbox-init and
+  // prepare; sidecars replicant-agentd, builder (qa_build only) and QA services; main agent and uploader (which runs
+  // the watchdog).
   stage.template {
     source   = "service"
-    template = `{{ if eq .container "agent" }}replicant-sandbox{{ else if eq .container "uploader" }}replicant-sandbox-uploader{{ else if eq .container "watchdog" }}replicant-sandbox-watchdog{{ else if eq .container "replicant-agentd" }}replicant-sandbox-agentd{{ else if eq .container "builder" }}replicant-sandbox-builder{{ else if or (eq .container "workspace-guard") (eq .container "prepare") }}replicant-sandbox-init{{ else }}replicant-sandbox-svc{{ end }}`
+    template = `{{ if eq .container "agent" }}replicant-sandbox{{ else if eq .container "uploader" }}replicant-sandbox-uploader{{ else if eq .container "replicant-agentd" }}replicant-sandbox-agentd{{ else if eq .container "builder" }}replicant-sandbox-builder{{ else if or (eq .container "sandbox-init") (eq .container "prepare") }}replicant-sandbox-init{{ else }}replicant-sandbox-svc{{ end }}`
   }
 
   stage.template {

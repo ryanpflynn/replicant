@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -25,7 +26,7 @@ type Record struct {
 type Local struct {
 	SpecDigest     string                      `json:"spec_digest"`
 	IdempotencyKey string                      `json:"idempotency_key"`
-	Grant          api.RunGrantClaims          `json:"grant"`
+	Scope          api.RunAuthz                `json:"scope"` // admitted run scope (SIMPLIFY-D50)
 	Isolation      string                      `json:"isolation"`
 	Runtime        string                      `json:"runtime"`
 	AgentImage     string                      `json:"agent_image"`
@@ -147,7 +148,7 @@ func (s *Store) Get(runID string) (*Record, error) {
 		return nil, err
 	}
 	var r Record
-	if err := json.Unmarshal(b, &r); err != nil {
+	if err := json.Unmarshal(migrateLegacy(b), &r); err != nil {
 		return nil, err
 	}
 	s.mu.Lock()
@@ -228,4 +229,41 @@ func clone(r *Record) *Record {
 	var c Record
 	_ = json.Unmarshal(b, &c)
 	return &c
+}
+
+// migrateLegacy reads a record written before SIMPLIFY-D50: spec.runGrant (a JWS string) is dropped and
+// local.grant (the grant claims, the same field names as api.RunAuthz) becomes local.scope.
+func migrateLegacy(b []byte) []byte {
+	if !bytes.Contains(b, []byte(`"runGrant"`)) && !bytes.Contains(b, []byte(`"grant"`)) {
+		return b
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(b, &m) != nil {
+		return b
+	}
+	var ar, loc map[string]json.RawMessage
+	if json.Unmarshal(m["agentrun"], &ar) == nil {
+		var spec map[string]json.RawMessage
+		if json.Unmarshal(ar["spec"], &spec) == nil {
+			if _, ok := spec["runGrant"]; ok {
+				delete(spec, "runGrant")
+				ar["spec"], _ = json.Marshal(spec)
+				m["agentrun"], _ = json.Marshal(ar)
+			}
+		}
+	}
+	if json.Unmarshal(m["local"], &loc) == nil {
+		if g, ok := loc["grant"]; ok {
+			if _, has := loc["scope"]; !has {
+				loc["scope"] = g
+			}
+			delete(loc, "grant")
+			m["local"], _ = json.Marshal(loc)
+		}
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return b
+	}
+	return out
 }

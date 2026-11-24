@@ -1,5 +1,5 @@
 """Contract fakes for activity unit tests: in-memory S3 (boto3 subset with If-None-Match), and peers built from their
-contracts (C-RUNNER RunSpec / RunGrantClaims, gateway RunPolicy, control-plane notifications)."""
+contracts (C-RUNNER RunSpec, gateway RunPolicy, control-plane notifications)."""
 from __future__ import annotations
 
 import base64
@@ -25,6 +25,7 @@ class FakeS3:
     def __init__(self) -> None:
         self.objs: dict[tuple[str, str], bytes] = {}
         self.puts: list[tuple[str, str]] = []
+        self.meta: dict[tuple[str, str], dict[str, str]] = {}
 
     def get_object(self, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803
         if (Bucket, Key) not in self.objs:
@@ -34,12 +35,14 @@ class FakeS3:
     def head_object(self, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803
         if (Bucket, Key) not in self.objs:
             raise S3Error("404")
-        return {"ContentLength": len(self.objs[(Bucket, Key)])}
+        return {"ContentLength": len(self.objs[(Bucket, Key)]), "Metadata": dict(self.meta.get((Bucket, Key), {}))}
 
-    def put_object(self, Bucket: str, Key: str, Body: bytes, IfNoneMatch: str | None = None, **kw: Any) -> dict[str, Any]:  # noqa: N803
+    def put_object(self, Bucket: str, Key: str, Body: Any, IfNoneMatch: str | None = None,  # noqa: N803
+                   Metadata: dict[str, str] | None = None, **kw: Any) -> dict[str, Any]:  # noqa: N803
         if IfNoneMatch == "*" and (Bucket, Key) in self.objs:
             raise S3Error("PreconditionFailed")
-        self.objs[(Bucket, Key)] = bytes(Body)
+        self.objs[(Bucket, Key)] = Body.read() if hasattr(Body, "read") else bytes(Body)
+        self.meta[(Bucket, Key)] = dict(Metadata or {})
         self.puts.append((Bucket, Key))
         return {}
 
@@ -49,6 +52,7 @@ class FakeS3:
 
     def copy_object(self, Bucket: str, Key: str, CopySource: dict[str, str]) -> dict[str, Any]:  # noqa: N803
         self.objs[(Bucket, Key)] = self.objs[(CopySource["Bucket"], CopySource["Key"])]
+        self.meta[(Bucket, Key)] = dict(self.meta.get((CopySource["Bucket"], CopySource["Key"]), {}))
         return {}
 
     def json(self, bucket: str, key: str) -> Any:

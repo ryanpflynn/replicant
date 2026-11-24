@@ -110,7 +110,7 @@ func serve(args []string) int {
 		_ = hs.Shutdown(sctx)
 	}()
 	log.Info("replicant-gateway-shim listening", "listen", cfg.File.Listen, "backend", cfg.Backend, "state", cfg.StateMode,
-		"run_token_issuers", len(cfg.RunTokenIssuers), "grant_jwks", cfg.GrantJWKSURL != "", "usage_log", describeUsage(cfg),
+		"run_token_issuers", len(cfg.RunTokenIssuers), "usage_log", describeUsage(cfg),
 		"script_roots", strings.Join(keys(cfg.CassetteRoots), ","), "quota_source", quotaSource(cfg))
 	if err := hs.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("listen", "err", err.Error())

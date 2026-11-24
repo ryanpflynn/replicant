@@ -100,6 +100,15 @@ tables. "DDL owner" is the workstream that writes the table DDL.
 | `slack_app` | Slack message refs per gate (channel, ts), pending decision outbox, interaction dedupe | slack-integration | WS-07 | control-plane-api |
 | `jira_app` | Jira webhook dedupe, issue ↔ job links, comment refs | jira-integration | WS-07 | control-plane-api |
 
+**Note (SIMPLIFY Phase 2, 2026-11-23).** control-plane-api, github-integration, slack-integration
+(when Slack is enabled) and replicant-projector now run as modules of one `core` process. The
+"Writer (deployment)" column still names the module whose **login** holds the writes: each module opens
+its own connection pool with its own login (`svc_control_plane_api`, `svc_github_integration`,
+`svc_slack_integration`, `svc_replicant_projector`), so the grants are unchanged and no role gained a
+privilege. The projector remains the only writer of `jobs_read`, `approvals` and `qa`. The database
+enforces this, and a core unit test checks that no other module's code writes those schemas
+(replicant/docs/v0/DEVIATIONS.md SIMPLIFY-D11).
+
 Not in Postgres: workflow state (Temporal), AgentRun state (etcd), artifact bodies (S3), traces
 (Langfuse, Tempo), logs (Loki), the publisher's state (stateless; idempotency via GitHub plus
 Temporal), Runner and controller state (etcd).
@@ -189,6 +198,8 @@ Temporal), Runner and controller state (etcd).
 
 - control-plane-api writes four schemas: a large blast radius for that role. Mitigation: per-schema
   DB roles inside one service (separate connection pools per module), which WS-10 may adopt.
+  The `core` process (SIMPLIFY Phase 2) applies this pattern to the merged services: one pool per
+  module, each with the module's existing login.
 - The `audit.emit()` exception must not become a pattern. Any other cross-schema write is a contract
   change request.
 

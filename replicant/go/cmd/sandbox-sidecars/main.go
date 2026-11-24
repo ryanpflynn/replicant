@@ -1,9 +1,11 @@
 // Command sandbox-sidecars is the WS-02 local sidecar image (local-runner.md §1.1 `sandbox-sidecars`):
-// `uploader` (also ships spool chunks; no separate shipper), `watchdog`, `workspace-guard`, plus the
-// local-only `volume-init` (fsGroup emulation) and `pause` (the pod-group network namespace holder).
+// `uploader` (also ships spool chunks and runs the workspace disk watchdog; no separate shipper or watchdog
+// container), the local-only `sandbox-init` (fsGroup emulation, then the workspace-guard check) and `pause`
+// (the pod-group network namespace holder).
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -24,7 +26,7 @@ func main() {
 	args := os.Args[1:]
 	if cmd == "sandbox-sidecars" || cmd == "main" {
 		if len(args) == 0 {
-			fmt.Fprintln(os.Stderr, "usage: sandbox-sidecars uploader|watchdog|workspace-guard|volume-init|pause|version")
+			fmt.Fprintln(os.Stderr, "usage: sandbox-sidecars uploader|sandbox-init|pause|version")
 			os.Exit(2)
 		}
 		cmd, args = args[0], args[1:]
@@ -32,12 +34,9 @@ func main() {
 	switch cmd {
 	case "uploader":
 		os.Exit(uploaderMain())
-	case "watchdog":
-		os.Exit(watchdogMain())
-	case "workspace-guard":
-		os.Exit(guardMain())
-	case "volume-init":
-		os.Exit(volumeInit())
+	case "sandbox-init":
+		limit, _ := strconv.ParseInt(os.Getenv("REPLICANT_WORKSPACE_LIMIT_BYTES"), 10, 64)
+		os.Exit(sandboxInit("/v", httpx.Env("REPLICANT_WORKSPACE_ENFORCEMENT", "watchdog"), limit))
 	case "pause":
 		pause()
 	case "version":
@@ -55,11 +54,23 @@ func pause() {
 	<-ch
 }
 
+var chown = os.Chown // replaced in tests
+
+// sandboxInit is the one-shot sandbox-init container (no network; CHOWN, FOWNER, DAC_OVERRIDE): it gives the run's
+// volumes (mounted at root/<name>) their ownership, then runs the workspace-guard check. Exit 1: ownership could
+// not be set; exit 84: the workspace hard limit is not enforced as declared.
+func sandboxInit(root, enforcement string, limit int64) int {
+	if rc := volumeInit(root); rc != 0 {
+		return rc
+	}
+	return guard(filepath.Join(root, "workspace"), enforcement, limit)
+}
+
 // volumeInit gives the run's volumes the ownership kubelet's fsGroup 10002 would (local only).
-func volumeInit() int {
+func volumeInit(root string) int {
 	type spec struct {
 		uid, gid int
-		mode     os.FileMode
+		mode     uint32 // Unix permission bits, setgid included (sandbox.FileMode)
 	}
 	m := map[string]spec{
 		"workspace": {10001, 10002, 0o2775}, "home": {10001, 10002, 0o2770}, "tools": {10001, 10002, 0o2755},
@@ -68,47 +79,45 @@ func volumeInit() int {
 	}
 	rc := 0
 	for name, s := range m {
-		p := "/v/" + name
+		p := filepath.Join(root, name)
 		if _, err := os.Stat(p); err != nil {
 			continue
 		}
-		if err := os.Chown(p, s.uid, s.gid); err != nil {
+		if err := chown(p, s.uid, s.gid); err != nil {
 			fmt.Fprintln(os.Stderr, "chown", p, err)
 			rc = 1
 		}
-		if err := os.Chmod(p, s.mode); err != nil {
+		if err := os.Chmod(p, sandbox.FileMode(s.mode)); err != nil {
 			fmt.Fprintln(os.Stderr, "chmod", p, err)
 			rc = 1
 		}
 	}
-	for _, d := range []string{"/v/managed/claude-code", "/v/managed/replicant"} {
-		if _, err := os.Stat("/v/managed"); err != nil {
-			break
+	managed := filepath.Join(root, "managed")
+	if _, err := os.Stat(managed); err == nil {
+		for _, d := range []string{"claude-code", "replicant"} {
+			_ = os.MkdirAll(filepath.Join(managed, d), 0o755)
+			_ = chown(filepath.Join(managed, d), 10001, 10002)
 		}
-		_ = os.MkdirAll(d, 0o755)
-		_ = os.Chown(d, 10001, 10002)
 	}
 	return rc
 }
 
-// guardMain is workspace-guard: fail closed (exit 84) when the hard limit is not enforced as declared.
-func guardMain() int {
-	enf := httpx.Env("REPLICANT_WORKSPACE_ENFORCEMENT", "watchdog")
-	limit, _ := strconv.ParseInt(os.Getenv("REPLICANT_WORKSPACE_LIMIT_BYTES"), 10, 64)
-	p := sandbox.WorkspaceDir
-	probe := filepath.Join(p, ".guard-probe")
+// guard is the workspace-guard check: fail closed (exit 84) when the hard limit is not enforced as declared.
+// Under watchdog enforcement only writability is checked (the uploader's watchdog stops the agent at 98 %).
+func guard(ws, enforcement string, limit int64) int {
+	probe := filepath.Join(ws, ".guard-probe")
 	if err := os.WriteFile(probe, []byte("ok"), 0o600); err != nil {
 		fmt.Fprintln(os.Stderr, "workspace not writable:", err)
 		return 84
 	}
 	_ = os.Remove(probe)
-	if enf == "watchdog" {
+	if enforcement == "watchdog" {
 		// macOS / runc: the watchdog stops the agent at 98 % (local-runner.md §1.3); nothing to check here.
 		fmt.Printf(`{"msg":"workspace-guard ok","enforcement":"watchdog","limit_bytes":%d}`+"\n", limit)
 		return 0
 	}
 	var st unix.Statfs_t
-	if err := unix.Statfs(p, &st); err != nil {
+	if err := unix.Statfs(ws, &st); err != nil {
 		return 84
 	}
 	total := int64(st.Blocks) * int64(st.Bsize)
@@ -119,64 +128,39 @@ func guardMain() int {
 	return 0
 }
 
-// watchdogMain samples workspace usage every few seconds and writes the status files (controller.md §4.2).
-func watchdogMain() int {
-	limit, _ := strconv.ParseInt(os.Getenv("REPLICANT_WORKSPACE_LIMIT_BYTES"), 10, 64)
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
-	_ = os.MkdirAll(sandbox.StatusDir, 0o777)
-	_ = os.Chmod(sandbox.StatusDir, 0o1777) // watchdog, entrypoint and agentd all write status files
+// watchdog samples workspace usage every interval and writes the status files (controller.md §4.2) until ctx ends.
+// It runs inside the uploader (same uid 10003; the workspace is mounted read-only there).
+func watchdog(ctx context.Context, ws, statusDir string, limit int64, interval time.Duration) {
+	_ = os.MkdirAll(statusDir, 0o777)
+	_ = os.Chmod(statusDir, sandbox.FileMode(0o1777)) // uploader, entrypoint and agentd all write status files
 	var peak int64
-	interval := time.Duration(httpx.EnvInt("REPLICANT_WATCHDOG_INTERVAL_SECONDS", 3)) * time.Second
 	for {
-		used := du(sandbox.WorkspaceDir)
-		if used > peak {
-			peak = used
-		}
-		state := "ok"
-		if limit > 0 {
-			switch {
-			case used*100 >= limit*98:
-				state = "exceeded"
-				touchFile(sandbox.MarkerDiskExceeded)
-			case used*100 >= limit*85:
-				state = "warn"
-				touchFile(sandbox.MarkerDiskWarn)
-			}
-		}
-		writeAtomic(sandbox.DiskState, state)
-		writeAtomic(sandbox.DiskUsed, strconv.FormatInt(used, 10))
-		writeAtomic(sandbox.DiskLimit, strconv.FormatInt(limit, 10))
-		writeAtomic(sandbox.DiskPeak, strconv.FormatInt(peak, 10))
+		peak = watchdogSample(ws, statusDir, limit, peak)
 		select {
-		case <-stop:
-			return 0
+		case <-ctx.Done():
+			return
 		case <-time.After(interval):
 		}
 	}
 }
 
-func du(root string) int64 {
-	var total int64
-	seen := map[uint64]bool{}
-	_ = filepath.Walk(root, func(p string, fi os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
-			if st.Nlink > 1 {
-				if seen[st.Ino] {
-					return nil
-				}
-				seen[st.Ino] = true
-			}
-			total += st.Blocks * 512
-		} else {
-			total += fi.Size()
-		}
-		return nil
-	})
-	return total
+// watchdogSample takes one sample, writes disk-state/-used/-limit/-peak and the warn/exceeded markers, and returns
+// the new peak.
+func watchdogSample(ws, statusDir string, limit, peak int64) int64 {
+	used := sandbox.DiskUsage(ws)
+	peak = max(peak, used)
+	state := sandbox.DiskLevel(used, limit)
+	switch state {
+	case "exceeded":
+		touchFile(filepath.Join(statusDir, filepath.Base(sandbox.MarkerDiskExceeded)))
+	case "warn":
+		touchFile(filepath.Join(statusDir, filepath.Base(sandbox.MarkerDiskWarn)))
+	}
+	for p, v := range map[string]string{sandbox.DiskState: state, sandbox.DiskUsed: strconv.FormatInt(used, 10),
+		sandbox.DiskLimit: strconv.FormatInt(limit, 10), sandbox.DiskPeak: strconv.FormatInt(peak, 10)} {
+		writeAtomic(filepath.Join(statusDir, filepath.Base(p)), v)
+	}
+	return peak
 }
 
 func touchFile(p string) {

@@ -268,10 +268,11 @@ async def put_repo_settings(tenant_id: str, repo_id: str, request: Request, body
     host = request.headers.get("x-replicant-scm-host", "git.replicant.localhost:3300")
     if provider != "gitea":
         raise ProblemError(422, "unsupported_provider")
-    import os
-    url = os.environ.get("REPLICANT_GITHUB_INTEGRATION_URL", "http://github-integration:8080")
+    from control_plane_api import in_process
+    url = request.app.state.notify.ns.github_integration_url   # REPLICANT_GITHUB_INTEGRATION_URL
     try:
-        async with httpx.AsyncClient(base_url=url, timeout=15) as c:
+        async with in_process.client(getattr(request.app.state, "in_process", None), url, base_url=url,
+                                     timeout=15) as c:
             r = await c.put("/internal/v1/repo-settings", json={"provider": provider, "host": host, "repo_id": repo_id,
                                                                 "tenant_id": tenant_id, "settings": body},
                             headers={"Authorization": request.headers.get("authorization", "")})

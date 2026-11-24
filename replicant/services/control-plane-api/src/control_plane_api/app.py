@@ -21,6 +21,7 @@ from control_plane_api import (
     routes_notify,
     routes_projects,
     routes_registry,
+    routes_runner,
     routes_ui_prefs,
     routes_web,
 )
@@ -39,6 +40,10 @@ from control_plane_api.temporal_client import TemporalGateway
 
 log = logging.getLogger(__name__)
 PUBLIC_PATHS = {"/healthz", "/readyz"}
+# Ingress routes of the modules mounted in core (core.py, SIMPLIFY-D10) authenticate the request themselves: the Gitea
+# webhook HMAC (and the GitHub App route, 503 until registered), Slack request signatures, the dev seed token.
+SELF_AUTHENTICATED_PATHS = {"/webhooks/gitea", "/github/webhook", "/v1/admin/scm-installations",
+                            "/slack/events", "/slack/interactions", "/slack/commands"}
 
 
 def _permission_of(route: Route) -> str | None:
@@ -70,7 +75,7 @@ def check_route_permissions(app: FastAPI) -> None:
     missing = []
     for r in iter_routes(list(app.routes)):
         path = getattr(r, "path", "")
-        if path in PUBLIC_PATHS or not hasattr(r, "dependant") or path.startswith(("/docs", "/openapi", "/redoc")):
+        if path in PUBLIC_PATHS or path in SELF_AUTHENTICATED_PATHS or not hasattr(r, "dependant") or path.startswith(("/docs", "/openapi", "/redoc")):
             continue
         if _permission_of(r) is None:
             missing.append(path)
@@ -123,6 +128,7 @@ def create_app(settings: Settings | None = None, *, db: Database | None = None,
     app.state.notify = NotifyService(db, app.state.auth, NotifySettings.from_env(settings.web_origin))
     app.state.notify.live_config = app.state.live_config
     app.state.notify_loops = NotifyLoops(app.state.notify)
+    app.state.in_process = {}                  # core.py: module apps of this process by host (in_process.client)
     app.add_exception_handler(ProblemError, problem_handler)  # type: ignore[arg-type]
     app.add_exception_handler(RequestValidationError, validation_handler)  # type: ignore[arg-type]
 
@@ -144,6 +150,7 @@ def create_app(settings: Settings | None = None, *, db: Database | None = None,
     app.include_router(routes_ui_prefs.router)  # WEB-UIPREF: /v1/me/ui-preferences
     app.include_router(routes_memory.router)  # MEM: /v1/admin/memory/**, /v1/jobs/{id}/memory, repo scan
     app.include_router(routes_inventory.router)  # ONBOARD: inventory, readiness, /v1/admin/fleet/**
+    app.include_router(routes_runner.router)  # SIMPLIFY-D50: run scope and job revocations for the Runner
 
     try:
         import replicant_dev_auth

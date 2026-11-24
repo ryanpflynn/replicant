@@ -14,17 +14,22 @@ import (
 	v1 "example.com/replicant/internal/runner/v1alpha1"
 )
 
-// Container names (C-IDS §8) in pod-group order (local-runner.md §1.2).
+// Container names (C-IDS §8) in pod-group order (local-runner.md §1.2): six per run. sandbox-init is the local
+// one-shot that replaces volume-init and workspace-guard; the uploader runs the disk watchdog (DEVIATIONS SIMPLIFY).
 const (
-	cPause      = "pause"
-	cVolumeInit = "volume-init" // local-only fsGroup emulation, removed after it exits (DEVIATIONS)
-	cGuard      = controller.CWorkspaceGuard
-	cAgentd     = controller.CAgentd
-	cWatchdog   = controller.CWatchdog
-	cPrepare    = controller.CPrepare
-	cAgent      = controller.CAgent
-	cUploader   = controller.CUploader
+	cSandboxInit = controller.CSandboxInit
+	cPause       = "pause"
+	cAgentd      = controller.CAgentd
+	cPrepare     = controller.CPrepare
+	cAgent       = controller.CAgent
+	cUploader    = controller.CUploader
 )
+
+// podContainers is the pod group in start order.
+var podContainers = []string{cSandboxInit, cPause, cAgentd, cPrepare, cAgent, cUploader}
+
+// Pre-simplification container names, still removed by GC so records created before the change clean up fully.
+var legacyContainers = []string{"volume-init", "workspace-guard", "watchdog"}
 
 var volumeNames = []string{"workspace", "home", "tools", "managed", "inputs", "out", "spool"}
 var tmpfsVolumes = map[string]string{"ipc": "size=1m,mode=1777", "uploader-ipc": "size=64k,mode=1777", "agentd-state": "size=1m,mode=1777"}
@@ -171,7 +176,7 @@ func (s *Server) reconcile(ctx context.Context, runID string) (bool, error) {
 // prepareRunState mints the per-audience tokens and renders bootstrap.json into the state directory.
 func (s *Server) prepareRunState(r *Record) error {
 	runID := r.AgentRun.Spec.RunID
-	set, err := signSet(s.Signer, s.Cfg.Issuer, r.AgentRun.Spec.RunGrant, &r.Local.Grant, r.Local.SteeringLive, time.Now(), nil)
+	set, err := signSet(s.Signer, s.Cfg.Issuer, &r.Local.Scope, r.Local.SteeringLive, time.Now(), nil)
 	if err != nil {
 		return err
 	}

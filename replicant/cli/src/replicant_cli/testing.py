@@ -40,6 +40,9 @@ E2E_FILES = {"e2e01": "e2e01_v0.py", "e2e02": "e2e02_notify.py", "e2e03": "e2e03
              "e2e04": "e2e04_graph.py", "e2e05": "e2e05_config.py",
              "e2e06": "e2e06_memory.py", "e2e07": "e2e07_pr_feedback.py",
              "e2e08": "e2e08_onboarding.py"}
+# Drivers that assert Slack DMs or Slack interactions: they run only when the opt-in `slack` profile is up (slack-mock
+# running and core's Slack module on, REPLICANT_SLACK_ENABLED=true in dev/compose/.env).
+SLACK_DRIVERS = frozenset({"e2e02", "e2e03"})
 PLAYWRIGHT_SPECS = ("e2e/01-screens.spec.ts", "e2e/02-live.spec.ts", "e2e/03-after.spec.ts",
                     "e2e/05-waiting.spec.ts", "e2e/07-simple-view.spec.ts", "e2e/08-project-settings.spec.ts",
                     "e2e/09-memory.spec.ts", "e2e/10-onboarding.spec.ts")
@@ -346,18 +349,21 @@ def _run_web(ctx: Ctx, s: Suite) -> list[Result]:
 
 
 # ---------------------------------------------------------------------------------------------------------- DB env
-MIGRATE_SOURCES = ("replicant_db", "bootstrap", "tools", "Dockerfile.migrate", "pyproject.toml")
+# What the smoke DB's migration run depends on: replicant-db's sources, the image definition and the lockfile.
+MIGRATE_SOURCES = ("libs/python/replicant-db/replicant_db", "libs/python/replicant-db/bootstrap",
+                   "libs/python/replicant-db/tools", "libs/python/replicant-db/pyproject.toml", "images/replicant-py",
+                   "uv.lock")
 
 
 def migrate_image_stale(p: Paths) -> str | None:
-    """Why localhost/replicant/migrate:dev is older than replicant-db's sources (None when current)."""
-    built = engine.image_created("localhost/replicant/migrate:dev")
+    """Why the replicant-py image (which runs `replicant-db migrate`) is older than the migration sources (None when
+    current)."""
+    built = engine.image_created(compose.PY_IMAGE)
     if built is None:
         return "image missing"
-    base = p.root / "libs" / "python" / "replicant-db"
     newest, which = 0.0, ""
     for src in MIGRATE_SOURCES:
-        q = base / src
+        q = p.root / src
         files = [q] if q.is_file() else [f for f in q.rglob("*") if f.is_file() and "__pycache__" not in f.parts]
         for f in files:
             if f.stat().st_mtime > newest:
@@ -366,7 +372,8 @@ def migrate_image_stale(p: Paths) -> str | None:
 
 
 def build_migrate(p: Paths, log: Callable[[str], None]) -> bool:
-    svc = compose.load_services(p, "v0")["migrate"]
+    """Build the replicant-py image (the `init` service's build) for the smoke DB's migration run."""
+    svc = compose.load_services(p, "v0")["init"]
     ok = compose.build_image(p, svc, compose.env_values(p), log)
     subprocess.run(engine.cli("image", "prune", "-f"), capture_output=True)  # dangling layers of the old image
     return ok
@@ -384,7 +391,7 @@ class SmokeDb:
 
     def up(self) -> dict[str, str]:
         pre = engine.exists("container", "ctl-pg")
-        env = {**os.environ, "CTL_HOME": str(self.home)}
+        env = {**os.environ, "CTL_HOME": str(self.home), "MIGRATE_IMAGE": compose.PY_IMAGE}
         t0 = time.monotonic()
         r = subprocess.run(["sh", str(self.script), "up"], env=env, capture_output=True, text=True, timeout=600)
         if r.returncode != 0:
@@ -533,7 +540,7 @@ def unit(p: Paths, *, only: list[str], fail_fast: bool, junit: str | None, slow:
     if db and any(s.name in DB_SUITES for s in suites):
         why = migrate_image_stale(p)
         if build or why:
-            log(f"building localhost/replicant/migrate:dev ({'--build' if build else why})")
+            log(f"building {compose.PY_IMAGE} ({'--build' if build else why})")
             if not build_migrate(p, log):
                 return 1
         smoke = SmokeDb(p, keep_db, log)
@@ -568,6 +575,10 @@ def _run_driver(ctx: Ctx, s: Suite) -> list[Result]:
     if xml.is_file():
         r.passed, r.failed, r.skipped = _junit_counts(xml)
     return [_status(r, rc)]
+
+
+def _skip_no_slack(ctx: Ctx, s: Suite) -> list[Result]:
+    return [Result(s.name, status="SKIP", skipped=1, note="needs profile slack (replicant dev up --profile v0,slack)")]
 
 
 def _run_playwright(ctx: Ctx, s: Suite) -> list[Result]:
@@ -619,6 +630,11 @@ def gateway_mode(p: Paths) -> str:
     return "script"
 
 
+def slack_enabled(p: Paths) -> bool:
+    """REPLICANT_SLACK_ENABLED as written in dev/compose/.env (what core runs with); off when unset."""
+    return compose.env_values(p).get("REPLICANT_SLACK_ENABLED", "false").lower() == "true"
+
+
 def set_gateway_mode(p: Paths, mode: str, log: Callable[[str], None]) -> bool:
     """Set REPLICANT_GATEWAY_MODE and recreate only gateway-shim, then wait until it is healthy again."""
     from replicant_cli import secrets
@@ -639,12 +655,17 @@ def set_gateway_mode(p: Paths, mode: str, log: Callable[[str], None]) -> bool:
 def e2e(p: Paths, *, only: list[str], fail_fast: bool, junit: str | None, log: Callable[[str], None]) -> int:
     t0 = time.monotonic()
     cs = compose.containers()
-    need = ("control-plane-api", "gitea", "replicant-worker", "runner-local", "control-plane-web", "slack-mock")
+    need = ("control-plane-api", "gitea", "replicant-worker", "runner-local", "control-plane-web")
     down = [n for n in need if not (cs.get(n) and cs[n].status == "running")]
     if down:
         log(f"the stack is not up ({', '.join(down)} not running): replicant dev up && replicant dev seed")
         return 1
-    suites = [Suite(n, _run_driver, cwd=p.root / "tests" / "e2e") for n in E2E_DRIVERS]
+    slack = bool(cs.get("slack-mock") and cs["slack-mock"].status == "running" and slack_enabled(p))
+    if not slack:
+        log(f"profile `slack` is not up: {', '.join(sorted(SLACK_DRIVERS))} report SKIP "
+            "(run them with `replicant dev up --profile v0,slack`)")
+    suites = [Suite(n, _run_driver if slack or n not in SLACK_DRIVERS else _skip_no_slack,
+                    cwd=p.root / "tests" / "e2e") for n in E2E_DRIVERS]
     suites.append(Suite("playwright", _run_playwright))
     suites = _selected(suites, only)
     out = out_dir(p)

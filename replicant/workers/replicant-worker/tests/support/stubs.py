@@ -239,9 +239,9 @@ class FakeWorld:
                                                        "finalize_seconds": 300},
                     "max_cost_usd": 15, "steering_live": a["role"] in ("implementer", "repair"),
                     "network_profile": a.get("network_profile") or "coding-default",
-                    "audiences": ["ai-gateway", "memory-mcp", "context-mcp", "repo-mirror", "runner-sandbox"],
+                    "audiences": ["ai-gateway", "memory-mcp", "context-mcp", "runner-sandbox"],
                     "scopes": ["gateway:invoke", "memory:read", "memory:search", "context:read", "code_search:read",
-                               "repo:fetch", "inbox:read"],
+                               "inbox:read"],
                     "run_plan": {"name": "run_plan", "key": f"tenants/x/jobs/{a['job_id']}/runs/{a['run_id']}/inputs/run-plan.json",
                                  "sha256": "1" * 64, "size_bytes": 512},
                     "models": ["claude-sonnet-4-6"], "max_concurrency": 4,
@@ -355,7 +355,7 @@ class FakeWorld:
         async def _(a):
             key = a["idempotency_key"]
             spec = json.loads(json.dumps(a["run_spec"]))
-            spec["run_grant"] = "eyJ0.eyJ0.c2ln"  # the real activity signs RunGrantClaims here (CCR-09-02)
+            spec["run_scope"] = {"repo_ids": ["1"], "audiences": ["ai-gateway"], "scopes": [], "acting_for": "svc_stub-worker"}  # C-RUNNER 4.0.0
             if spec["callback"]["namespace"] == "default":  # the dev server's namespace
                 spec["callback"]["namespace"] = "replicant-local"
             if w.capacity:  # XD-FIX-R2-020 typed capacity error (non-retryable for the activity)

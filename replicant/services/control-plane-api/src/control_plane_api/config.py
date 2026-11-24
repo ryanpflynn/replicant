@@ -30,11 +30,6 @@ class Settings:
     s3_endpoint: str | None = None
     s3_region: str = "us-east-1"
     s3_force_path_style: bool = True
-    run_grant_jwks_source: str = "file"
-    run_grant_jwks_file: str | None = None
-    exec_revocations_urls: tuple[str, ...] = ()
-    exec_revocations_token_file: str | None = None
-    exec_revocations_poll_seconds: int = 10
     worker_build_id: str = "b20261024-000000000000"
     gateway_shim_url: str | None = None
     background_tasks: bool = True
@@ -67,11 +62,6 @@ class Settings:
             s3_endpoint=env("REPLICANT_S3_ENDPOINT"),
             s3_region=env("REPLICANT_S3_REGION", "us-east-1") or "us-east-1",
             s3_force_path_style=(env("REPLICANT_S3_FORCE_PATH_STYLE", "true") == "true"),
-            run_grant_jwks_source=env("REPLICANT_RUN_GRANT_JWKS_SOURCE", "file") or "file",
-            run_grant_jwks_file=env("REPLICANT_RUN_GRANT_JWKS_FILE"),
-            exec_revocations_urls=tuple(u for u in (env("REPLICANT_EXEC_REVOCATIONS_URLS", "") or "").split(",") if u),
-            exec_revocations_token_file=env("REPLICANT_EXEC_REVOCATIONS_TOKEN_FILE"),
-            exec_revocations_poll_seconds=int(env("REPLICANT_EXEC_REVOCATIONS_POLL_SECONDS", "10") or 10),
             worker_build_id=env("REPLICANT_WORKER_BUILD_ID", "b20261024-000000000000") or "b20261024-000000000000",
             gateway_shim_url=env("REPLICANT_GATEWAY_SHIM_URL"),
             background_tasks=(env("REPLICANT_CPA_BACKGROUND_TASKS", "true") == "true"),

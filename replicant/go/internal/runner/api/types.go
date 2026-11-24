@@ -1,5 +1,5 @@
 // Package api holds the C-RUNNER 3.0.0 wire types (runner-api.openapi.yaml) shared by runner-local,
-// the sandbox binaries and repo-mirror.
+// the sandbox binaries and the run-token verifiers.
 package api
 
 import (
@@ -89,7 +89,7 @@ type RunSpec struct {
 	Steering              *Steering        `json:"steering,omitempty"`
 	Priority              string           `json:"priority"`
 	TraceContext          *TraceContext    `json:"trace_context,omitempty"`
-	RunGrant              string           `json:"run_grant"`
+	RunScope              RunScope         `json:"run_scope"`
 	Callback              Callback         `json:"callback"`
 	Extra                 map[string]any   `json:"-"`
 }
@@ -268,27 +268,30 @@ type RunTokenClaims struct {
 	Scopes          []string `json:"scopes"`
 	BudgetUSD       *float64 `json:"budget_usd,omitempty"`
 	ActingFor       string   `json:"acting_for"`
-	Grant           string   `json:"grant"`
-	GrantJti        string   `json:"grant_jti"`
 }
 
-// RunGrantClaims (C-RUNNER RunGrantClaims).
-type RunGrantClaims struct {
-	Iss        string   `json:"iss"`
-	Typ        string   `json:"typ"`
-	Jti        string   `json:"jti"`
-	Iat        int64    `json:"iat"`
-	Exp        int64    `json:"exp"`
-	TenantID   string   `json:"tenant_id"`
-	JobID      string   `json:"job_id"`
-	RunID      string   `json:"run_id"`
-	Role       string   `json:"role"`
-	RepoIDs    []string `json:"repo_ids"`
-	Audiences  []string `json:"audiences"`
-	Scopes     []string `json:"scopes"`
-	BudgetUSD  float64  `json:"budget_usd"`
-	ActingFor  string   `json:"acting_for"`
-	SpecDigest string   `json:"spec_digest"`
+// RunScope is C-RUNNER 4.0.0 RunSpec.run_scope: what the run's tokens may claim. The Runner checks tenant_id,
+// repo_ids and acting_for against core's intake record before it accepts the run (SIMPLIFY-D50).
+type RunScope struct {
+	RepoIDs   []string `json:"repo_ids"`
+	Audiences []string `json:"audiences"`
+	Scopes    []string `json:"scopes"`
+	ActingFor string   `json:"acting_for"`
+}
+
+// RunAuthz is the Runner's admitted authorization of one run (runner-local Record.Local.Scope): the run scope
+// bound to the run's identity, budget and expiry. Every token minted for the run claims a subset of it.
+type RunAuthz struct {
+	TenantID  string   `json:"tenant_id"`
+	JobID     string   `json:"job_id"`
+	RunID     string   `json:"run_id"`
+	Role      string   `json:"role"`
+	RepoIDs   []string `json:"repo_ids"`
+	Audiences []string `json:"audiences"`
+	Scopes    []string `json:"scopes"`
+	BudgetUSD float64  `json:"budget_usd"`
+	ActingFor string   `json:"acting_for"`
+	Exp       int64    `json:"exp"`
 }
 
 // Audiences (closed enum).
@@ -296,15 +299,13 @@ const (
 	AudGateway  = "ai-gateway"
 	AudMemory   = "memory-mcp"
 	AudContext  = "context-mcp"
-	AudMirror   = "repo-mirror"
 	AudSandbox  = "runner-sandbox"
-	GrantTyp    = "replicant-run-grant+jwt"
 	TokenTyp    = "JWT"
 	NotifSchema = "replicant.msg.run-status-changed/v1"
 )
 
 // AllAudiences in canonical order.
-var AllAudiences = []string{AudGateway, AudMemory, AudContext, AudMirror, AudSandbox}
+var AllAudiences = []string{AudGateway, AudMemory, AudContext, AudSandbox}
 
 // Problem is an RFC 9457 problem with the C-RUNNER extensions.
 type Problem struct {
@@ -333,7 +334,7 @@ func (p *Problem) Error() string { return p.Code + ": " + p.Detail }
 var problemStatus = map[string]int{
 	"invalid_request": 400, "missing_idempotency_key": 400, "unauthenticated": 401, "forbidden": 403,
 	"run_not_found": 404, "steering_not_supported": 409, "run_not_active": 409, "run_expired": 410,
-	"idempotency_key_reuse": 422, "admission_denied": 422, "run_grant_invalid": 422,
+	"idempotency_key_reuse": 422, "admission_denied": 422, "run_scope_invalid": 422,
 	"definition_not_resolvable": 422, "tenant_quota_exceeded": 429, "rate_limited": 429, "internal": 500,
 	"kubernetes_unavailable": 503, "runner_unavailable": 503,
 }

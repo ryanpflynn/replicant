@@ -11,7 +11,7 @@ ROOT = repo_root()
 
 def _fake_repo(tmp: Path) -> Paths:
     shutil.copytree(ROOT / "dev" / "compose" / "config" / "s3", tmp / "dev" / "compose" / "config" / "s3")
-    shutil.copy(ROOT / "dev" / "compose" / "compose.yaml", tmp / "dev" / "compose" / "compose.yaml")
+    shutil.copy(ROOT / "dev" / "compose" / "compose.v0.yaml", tmp / "dev" / "compose" / "compose.v0.yaml")
     return Paths(tmp)
 
 
@@ -21,13 +21,12 @@ def test_secrets_generated_complete_and_private(tmp_path, monkeypatch):
     created = secrets.ensure(p)
     assert created and secrets.ensure(p) == []          # idempotent
     import yaml
-    doc = yaml.safe_load((ROOT / "dev" / "compose" / "compose.yaml").read_text())
+    doc = yaml.safe_load((ROOT / "dev" / "compose" / "compose.v0.yaml").read_text())
     for name, spec in doc["secrets"].items():
         f = p.secrets / Path(spec["file"]).name
-        assert f.is_file() and f.stat().st_size > 0, name
+        assert f.is_file() and (f.stat().st_size > 0 or name == "anthropic_api_key"), name  # empty in script mode
         assert stat.S_IMODE(f.stat().st_mode) == 0o600, name
-    jwks = json.loads((p.generated / "run-grant-jwks.json").read_text())
-    assert jwks["keys"][0]["kid"] == "rg-local-1" and "d" not in jwks["keys"][0]
+    assert not (p.generated / "run-grant-jwks.json").exists()  # no run grants (SIMPLIFY-D50)
     s3 = json.loads((p.generated / "s3.json").read_text())
     shim = next(i for i in s3["identities"] if i["name"] == "gateway-shim")
     ini = (p.secrets / "s3_gateway_shim_credentials").read_text()
@@ -43,9 +42,22 @@ def test_interpolate():
 
 def test_v0_profile_services():
     svcs = compose.load_services(Paths(ROOT), "v0")
-    assert len(svcs) == 27 and "sbx-edge" in svcs and "memory-service" in svcs and "temporal-schema" not in svcs and "dex" not in svcs
-    assert {"control-plane-web", "slack-integration", "slack-mock"} <= set(svcs)          # RENAME-D6, NOTIFY
-    assert svcs["migrate"].dockerfile.name == "Dockerfile.migrate"
+    assert len(svcs) == 14 and "sbx-edge" in svcs and "memory-service" in svcs and "control-plane-web" in svcs
+    assert not {"migrate", "s3-init", "gitea-bootstrap", "temporal-bootstrap", "temporal-ui", "gateway-state",
+                "run-grants", "github-integration", "slack-integration", "replicant-projector",  # in core (Phase 2)
+                "slack-mock", "grafana",
+                "sbx-dns", "egress-proxy", "repo-mirror"} & set(svcs)      # SIMPLIFY-D1, D3, D30, D31, D40
+    assert [n for n, s in svcs.items() if s.one_shot] == ["init"]
+    assert "slack-mock" in compose.load_services(Paths(ROOT), "v0,slack")
+    assert len(compose.load_services(Paths(ROOT), compose.ALL_PROFILES)) == 21
+    # one image per language (SIMPLIFY-D2): every Python role runs replicant-py, every Go service replicant-go
+    built = {s.image: s.dockerfile.relative_to(ROOT).as_posix() for s in svcs.values() if s.build}
+    assert built == {"localhost/replicant/postgres:17-pgvector0.8.2": "dev/postgres-replicant/Dockerfile",
+                     "localhost/replicant/replicant-py:dev": "images/replicant-py/Dockerfile",
+                     "localhost/replicant/replicant-go:dev": "images/replicant-go/Dockerfile",
+                     "localhost/replicant/control-plane-web:dev": "web/control-plane-web/Dockerfile"}
+    assert svcs["init"].image == compose.PY_IMAGE and svcs["memory-service"].image == compose.PY_IMAGE
+    assert all(img != "localhost/replicant/pause:3.10" for img, _, _ in compose.SANDBOX_IMAGES)
 
 
 def test_import_provider_key_never_echoes(tmp_path, monkeypatch, capsys):

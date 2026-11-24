@@ -12,51 +12,73 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"example.com/replicant/internal/runner/jose"
 )
 
 // Contract fakes for the neighbours runner-local's smoke needs when the v0 stack is not up:
-// the core grants host (JWKS + /grants/revoked), a Gitea-shaped upstream (repo API + smart HTTP) and the
-// github-token-broker. They implement exactly the contract shapes (control-plane-api.openapi.yaml
-// grantRevocationList, github-token-broker.openapi.yaml TokenResponse, Gitea GET /api/v1/repos/{o}/{n}).
+// core (the run-scope intake record and the job revocation list runner-local polls, SIMPLIFY-D50), a
+// Gitea-shaped upstream (repo API + smart HTTP) and the github-token-broker. They implement exactly the contract
+// shapes (control-plane-api GET /internal/v1/jobs/{job_id}/run-scope and GET /internal/v1/revocations,
+// github-token-broker.openapi.yaml TokenResponse, Gitea GET /api/v1/repos/{o}/{n}).
 
-type fakeGrants struct {
-	signer *jose.Signer
-	mu     sync.Mutex
-	jobs   []string
-	runs   []string
+type coreJob struct {
+	TenantID  string   `json:"tenant_id"`
+	RepoIDs   []string `json:"repo_ids"`
+	ActingFor string   `json:"acting_for"`
+	Revoked   bool     `json:"revoked"`
 }
 
-func (g *fakeGrants) revokeJob(id string) { g.mu.Lock(); g.jobs = append(g.jobs, id); g.mu.Unlock() }
+type fakeCore struct {
+	mu   sync.Mutex
+	jobs map[string]*coreJob
+}
 
-func (g *fakeGrants) handler() http.Handler {
+// addJob records the intake record of a job the driver stages (the worker's job exists in core for real).
+func (c *fakeCore) addJob(jobID, tenant string, repoIDs []string, actingFor string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.jobs == nil {
+		c.jobs = map[string]*coreJob{}
+	}
+	if _, ok := c.jobs[jobID]; !ok {
+		c.jobs[jobID] = &coreJob{TenantID: tenant, RepoIDs: repoIDs, ActingFor: actingFor}
+	}
+}
+
+func (c *fakeCore) revokeJob(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if j := c.jobs[id]; j != nil {
+		j.Revoked = true
+	}
+}
+
+func (c *fakeCore) handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /.well-known/jwks.json", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, jose.JWKS{Keys: []jose.JWK{g.signer.PublicJWK()}})
+	mux.HandleFunc("GET /internal/v1/jobs/{job_id}/run-scope", func(w http.ResponseWriter, r *http.Request) {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		id := r.PathValue("job_id")
+		j := c.jobs[id]
+		if j == nil || j.TenantID != r.URL.Query().Get("tenant_id") {
+			writeJSON(w, 404, map[string]any{"code": "not_found"})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"job_id": id, "tenant_id": j.TenantID, "repo_ids": j.RepoIDs, "acting_for": j.ActingFor, "revoked": j.Revoked})
 	})
-	mux.HandleFunc("GET /grants/revoked", func(w http.ResponseWriter, r *http.Request) {
-		g.mu.Lock()
-		defer g.mu.Unlock()
+	mux.HandleFunc("GET /internal/v1/revocations", func(w http.ResponseWriter, r *http.Request) {
+		c.mu.Lock()
+		defer c.mu.Unlock()
 		type ent struct {
 			ID        string `json:"id"`
 			RevokedAt string `json:"revoked_at"`
 		}
-		out := map[string]any{"generated_at": time.Now().UTC().Format(time.RFC3339), "job_ids": []ent{}, "run_ids": []ent{}}
-		var js, rs []ent
-		for _, j := range g.jobs {
-			js = append(js, ent{j, time.Now().UTC().Format(time.RFC3339)})
+		js := []ent{}
+		for id, j := range c.jobs {
+			if j.Revoked {
+				js = append(js, ent{id, time.Now().UTC().Format(time.RFC3339)})
+			}
 		}
-		for _, j := range g.runs {
-			rs = append(rs, ent{j, time.Now().UTC().Format(time.RFC3339)})
-		}
-		if js != nil {
-			out["job_ids"] = js
-		}
-		if rs != nil {
-			out["run_ids"] = rs
-		}
-		writeJSON(w, 200, out)
+		writeJSON(w, 200, map[string]any{"generated_at": time.Now().UTC().Format(time.RFC3339), "job_ids": js, "run_ids": []ent{}})
 	})
 	return mux
 }

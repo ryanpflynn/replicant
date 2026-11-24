@@ -143,11 +143,9 @@ type AgentRunSpec struct {
 	TraceContext *TraceContext `json:"traceContext,omitempty"`
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable"
 	Callback RunCallback `json:"callback"`
-	// Core-signed run grant (compact JWS, CCR-09-02), verified by the Runner at admission. Every run token the Runner mints for this run embeds it and must stay within it.
-	// +kubebuilder:validation:MaxLength=8192
-	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$`
+	// The run scope the Runner admitted (C-RUNNER 4.0.0 RunSpec.run_scope, SIMPLIFY-D50). Every run token the Runner mints for this run claims a subset of it.
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable"
-	RunGrant string `json:"runGrant"`
+	RunScope RunScope `json:"runScope"`
 	// Set to true by the Runner on POST /v1/runs/{run_id}:cancel. One-way.
 	// +optional
 	// +kubebuilder:default=false
@@ -290,6 +288,15 @@ type TraceContext struct {
 	// +optional
 	// +kubebuilder:validation:MaxLength=512
 	Tracestate string `json:"tracestate,omitempty"`
+}
+
+// RunScope is spec.runScope (C-CRD 4.0.0).
+type RunScope struct {
+	// +kubebuilder:validation:MaxItems=5
+	RepoIDs   []string `json:"repoIds"`
+	Audiences []string `json:"audiences"`
+	Scopes    []string `json:"scopes"`
+	ActingFor string   `json:"actingFor"`
 }
 
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable"

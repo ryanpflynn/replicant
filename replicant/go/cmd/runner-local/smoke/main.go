@@ -1,6 +1,6 @@
 // Command smoke is runner-local's component smoke test and Runner contract-case driver (test-strategy.md §5.3,
-// the cases that apply to M1). It plays the workflow side (seed registry, stage inputs, sign the run grant,
-// register the gateway run policy, createRun/poll), hosts contract fakes for the core grants host, Gitea and
+// the cases that apply to M1). It plays the workflow side (seed registry, stage inputs, build the run scope,
+// register the gateway run policy, createRun/poll), hosts contract fakes for core (run scope, revocations), Gitea and
 // github-token-broker, and a Temporal probe workflow that records run.status_changed Signals.
 package main
 
@@ -22,7 +22,6 @@ import (
 	"example.com/replicant/internal/runner/httpx"
 	"example.com/replicant/internal/runner/ids"
 	"example.com/replicant/internal/runner/jcsx"
-	"example.com/replicant/internal/runner/jose"
 	"example.com/replicant/internal/runner/s3x"
 )
 
@@ -30,7 +29,7 @@ type env struct {
 	runner, runnerSbx, shim, shimToken, workerToken, readerToken string
 	s3                                                           *s3x.Client
 	org, envName                                                 string
-	grants                                                       *fakeGrants
+	core                                                         *fakeCore
 	gitea                                                        *fakeGitea
 	broker                                                       *fakeBroker
 	rb                                                           string
@@ -43,14 +42,23 @@ type env struct {
 	lastDiff                                                     []byte
 	mu                                                           sync.Mutex
 	results                                                      []caseResult
-	target                                                       string // isolated | v0
+	target                                                       string            // isolated | v0
+	bundles                                                      map[string][]byte // repo bundles by commit set
+	coreURL, seedToken                                           string            // v0: live core and its dev seed token
+	registered                                                   map[string]bool   // v0: job ids recorded in core's intake
 }
 
 type caseResult struct {
 	ID, Name string
 	Pass     bool
+	Skipped  bool `json:",omitempty"`
 	Detail   string
 }
+
+// skipError marks a case that cannot run against this stack (not a failure): listed as SKIP, not counted.
+type skipError struct{ reason string }
+
+func (s skipError) Error() string { return s.reason }
 
 func main() {
 	mode := flag.String("mode", "all", "smoke | contract | all")
@@ -66,31 +74,34 @@ func main() {
 	e.shimToken, _ = httpx.ReadToken(httpx.Env("SHIM_TOKEN_FILE", "/secrets/shim_token"))
 	e.s3 = s3x.New(s3x.Config{Endpoint: httpx.Env("S3_ENDPOINT", "http://run-s3:8333"), AccessKey: httpx.Env("S3_ACCESS_KEY", "admin"),
 		SecretKey: httpx.Env("S3_SECRET_KEY", "")})
-	signer := jose.GenerateSigner("rg-smoke-1")
-	if p := os.Getenv("GRANT_KEY_FILE"); p != "" {
-		if s, err := jose.LoadSigner(p, "rg-local-1"); err == nil {
-			signer = s
-		}
-	}
-	e.grants = &fakeGrants{signer: signer}
+	e.core = &fakeCore{}
 	e.gitea = &fakeGitea{root: "/tmp/gitea-repos", owner: "acme-payments", name: "ledger-api", id: 1, token: "gitea-upstream-token"}
 	e.broker = &fakeBroker{callerToken: httpx.Env("BROKER_CALLER_TOKEN", "broker-mirror-token"), token: e.gitea.token}
 	e.target = httpx.Env("SMOKE_TARGET", "isolated")
 	if e.target == "v0" {
-		// v0 mode (M3): the live v0 stack is the neighbourhood (run-grants, Gitea, broker, repo-mirror, shim, sbx-edge,
-		// sbx-dns, egress proxy, mirrors). Runs target the real acme-payments/ledger-api at its current main.
+		// v0 mode (M3): the live v0 stack is the neighbourhood (core, Gitea, shim, sbx-edge as the sandbox
+		// network's only member). The live runner asks the live core for each job's run scope, so the jobs the
+		// driver stages must exist in core's intake record (SIMPLIFY-D50): the driver records each one through core's
+		// dev-only POST /v1/admin/dev/job-requests with the dev seed token (SIMPLIFY-D54). Runs target the real acme-payments/ledger-api at its current main; the driver
+		// bundles it from Gitea into the run inputs as the worker does (SIMPLIFY-D40).
 		sha, err := giteaMainSHA(httpx.Env("GITEA_URL", "http://gitea:3300"), httpx.Env("GITEA_ADMIN_PASSWORD_FILE", ""))
 		if err != nil {
 			fatal("gitea main sha: %v", err)
 		}
 		e.gitea.baseSHA = sha
+		e.coreURL = httpx.Env("SMOKE_CORE_URL", "http://control-plane-api:8401")
+		tok, err := httpx.ReadToken(httpx.Env("SMOKE_DEV_SEED_TOKEN_FILE", "/secrets/dev_seed_token"))
+		if err != nil {
+			fatal("dev seed token: %v", err)
+		}
+		e.seedToken = tok
 	} else if err := e.gitea.setup(httpx.Env("SAMPLE_REPO", "/src/dev/sample-repos/ledger-api")); err != nil {
 		fatal("sample repo: %v", err)
 	}
-	serve(":8403", e.grants.handler())
+	serve(":8403", e.core.handler())
 	serve(":3300", e.gitea.handler())
 	serve(":8081", e.broker.handler())
-	fmt.Printf("fakes up: grants :8403, gitea :3300 (base_sha %s), broker :8081\n", e.gitea.baseSHA)
+	fmt.Printf("fakes up: core :8403, gitea :3300 (base_sha %s), broker :8081\n", e.gitea.baseSHA)
 	ctx := context.Background()
 	if addr := os.Getenv("TEMPORAL_ADDRESS"); addr != "" {
 		p, err := startProbe(addr, httpx.Env("TEMPORAL_NAMESPACE", "replicant-local"))
@@ -125,33 +136,48 @@ func main() {
 		start := time.Now()
 		detail, err := c.fn(ctx, e)
 		r := caseResult{ID: c.id, Name: c.name, Pass: err == nil, Detail: detail}
+		mark := map[bool]string{true: "PASS", false: "FAIL"}[r.Pass]
+		if se, ok := err.(skipError); ok {
+			r.Skipped, mark = true, "SKIP"
+			err = se
+		}
 		if err != nil {
 			r.Detail = err.Error()
 		}
-		fmt.Printf("--- %s %s (%.0fs): %s\n", map[bool]string{true: "PASS", false: "FAIL"}[r.Pass], c.id, time.Since(start).Seconds(), r.Detail)
+		fmt.Printf("--- %s %s (%.0fs): %s\n", mark, c.id, time.Since(start).Seconds(), r.Detail)
 		e.results = append(e.results, r)
 	}
 	fmt.Println("\n=== summary")
-	pass := 0
+	pass, skipped := 0, 0
 	for _, r := range e.results {
 		mark := "FAIL"
-		if r.Pass {
+		switch {
+		case r.Skipped:
+			mark, skipped = "SKIP", skipped+1
+		case r.Pass:
 			mark, pass = "PASS", pass+1
 		}
 		fmt.Printf("%-4s %-12s %s\n", mark, r.ID, r.Name)
+		if r.Skipped {
+			fmt.Printf("     %s\n", r.Detail)
+		}
 	}
-	fmt.Printf("%d/%d passed\n", pass, len(e.results))
+	fmt.Printf("%d/%d passed", pass, len(e.results)-skipped)
+	if skipped > 0 {
+		fmt.Printf(", %d skipped", skipped)
+	}
+	fmt.Println()
 	if b, err := json.MarshalIndent(e.results, "", " "); err == nil {
 		_ = os.WriteFile(httpx.Env("RESULTS_FILE", "/tmp/smoke-results.json"), b, 0o644)
 	}
-	if pass != len(e.results) {
+	if pass+skipped != len(e.results) {
 		os.Exit(1)
 	}
 }
 
 // giteaMainSHA returns the ROOT commit of main of acme-payments/ledger-api in the real Gitea (v0 mode): the
-// imported sample with the planted bug, whatever fixes earlier E2E jobs merged since (repo-mirror fetches any
-// reachable SHA).
+// imported sample with the planted bug, whatever fixes earlier E2E jobs merged since (any reachable SHA can be
+// bundled).
 func giteaMainSHA(base, pwFile string) (string, error) {
 	pw, err := httpx.ReadToken(pwFile)
 	if err != nil {

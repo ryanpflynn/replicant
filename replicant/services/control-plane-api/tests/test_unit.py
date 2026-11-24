@@ -6,7 +6,6 @@ import pytest
 from control_plane_api import contracts, registry
 from control_plane_api.auth import parse_token_map
 from control_plane_api.authz import AuthorizeRequest, Evaluator, Principal, PrincipalLookup
-from control_plane_api.grants import load_jwks
 from control_plane_api.ids import derived, dev_user_principal, release_bundle_id
 from control_plane_api.problems import ProblemError
 from control_plane_api.routes_gates import _precheck
@@ -109,14 +108,6 @@ def test_precheck_rules():
         with pytest.raises(ProblemError) as e:
             _precheck(p, G, dec, dig, ch)
         assert e.value.code == code
-
-
-def test_jwks_strips_private_members(tmp_path):
-    from control_plane_api.config import Settings
-    f = tmp_path / "jwks.json"
-    f.write_text(json.dumps({"keys": [{"kty": "EC", "crv": "P-256", "kid": "rg-local-1", "x": "x", "y": "y", "d": "SECRET"}]}))
-    out = load_jwks(Settings(run_grant_jwks_file=str(f)))
-    assert out == {"keys": [{"kty": "EC", "crv": "P-256", "kid": "rg-local-1", "x": "x", "y": "y"}]}
 
 
 # Derived-bundle request digests (derived.config_digest) used projects.jcs = json.dumps(sort_keys) before they moved to

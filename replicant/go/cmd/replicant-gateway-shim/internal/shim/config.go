@@ -39,11 +39,6 @@ type FileConfig struct {
 			IssuersEnv  string `yaml:"issuers_env"`
 			JWKSURLsEnv string `yaml:"jwks_urls_env"`
 		} `yaml:"run_token"`
-		RunGrant struct {
-			IssuerEnv        string `yaml:"issuer_env"`
-			JWKSURLEnv       string `yaml:"jwks_url_env"`
-			RevocationURLEnv string `yaml:"revocation_url_env"`
-		} `yaml:"run_grant"`
 		ServiceTokensFileEnv string `yaml:"service_tokens_file_env"`
 	} `yaml:"auth"`
 	Budgets struct {
@@ -105,10 +100,6 @@ type Config struct {
 	RunTokenAudience        string
 	RunTokenIssuers         []string
 	RunTokenJWKSURLs        []string
-	GrantIssuer             string
-	GrantJWKSURL            string
-	GrantRevocationURL      string
-	GrantRevocationPoll     time.Duration
 	ExecRevocationURLs      []string
 	ExecRevocationTokenFile string
 	ExecRevocationPoll      time.Duration
@@ -227,10 +218,6 @@ func LoadConfig(path, backend, replayMatch, stateMode string) (*Config, error) {
 	if len(c.RunTokenIssuers) != len(c.RunTokenJWKSURLs) {
 		return nil, fmt.Errorf("REPLICANT_RUN_TOKEN_ISSUERS and REPLICANT_RUN_TOKEN_JWKS_URLS must pair by position (%d vs %d)", len(c.RunTokenIssuers), len(c.RunTokenJWKSURLs))
 	}
-	c.GrantIssuer = os.Getenv(envOr(fc.Auth.RunGrant.IssuerEnv, "REPLICANT_RUN_GRANT_ISSUER"))
-	c.GrantJWKSURL = os.Getenv(envOr(fc.Auth.RunGrant.JWKSURLEnv, "REPLICANT_RUN_GRANT_JWKS_URL"))
-	c.GrantRevocationURL = os.Getenv(envOr(fc.Auth.RunGrant.RevocationURLEnv, "REPLICANT_RUN_GRANT_REVOCATION_URL"))
-	c.GrantRevocationPoll = envSeconds("REPLICANT_RUN_GRANT_REVOCATION_POLL_SECONDS", 60)
 	c.ExecRevocationURLs = envList(envOr(fc.Revocations.ExecFeedURLsEnv, "REPLICANT_EXEC_REVOCATIONS_URLS"))
 	c.ExecRevocationTokenFile = os.Getenv(envOr(fc.Revocations.ExecFeedTokenFileEnv, "REPLICANT_EXEC_REVOCATIONS_TOKEN_FILE"))
 	c.ExecRevocationPoll = envSeconds(envOr(fc.Revocations.ExecFeedPollSecondsEnv, "REPLICANT_EXEC_REVOCATIONS_POLL_SECONDS"), 10)

@@ -3,14 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"example.com/replicant/internal/runner/api"
@@ -427,60 +425,9 @@ func (a *Agent) simpleProxy(w http.ResponseWriter, r *http.Request, target, auth
 	}
 }
 
-var gitLimiter = struct {
-	sync.Mutex
-	times []time.Time
-}{}
-
-// gitHandler is the :7802 route to repo-mirror (audience repo-mirror): upload-pack only; after prepare,
-// only lazy blob fetches at ≤ 20 requests/min.
-func (a *Agent) gitHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tok, ok := a.token(api.AudMirror)
-		if !ok || !strings.HasPrefix(r.URL.Path, "/git/") {
-			http.NotFound(w, r)
-			return
-		}
-		if strings.Contains(r.URL.Path, "receive-pack") || r.URL.Query().Get("service") == "git-receive-pack" {
-			http.Error(w, "read-only", 403)
-			return
-		}
-		a.evMu.Lock()
-		prepared := a.prepared
-		a.evMu.Unlock()
-		if prepared {
-			gitLimiter.Lock()
-			now := time.Now()
-			var keep []time.Time
-			for _, t := range gitLimiter.times {
-				if now.Sub(t) < time.Minute {
-					keep = append(keep, t)
-				}
-			}
-			if len(keep) >= 20 {
-				gitLimiter.times = keep
-				gitLimiter.Unlock()
-				http.Error(w, "rate limited", 429)
-				return
-			}
-			gitLimiter.times = append(keep, now)
-			gitLimiter.Unlock()
-		}
-		repoID := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/git/"), "/", 2)[0]
-		extra := map[string]string{}
-		if repoID == a.bs.Repo.RepoID {
-			extra["X-Replicant-Repo-Provider"] = a.bs.Repo.Provider
-			extra["X-Replicant-Repo-Host"] = a.bs.Repo.Host
-			extra["X-Replicant-Repo-Owner"] = a.bs.Repo.Owner
-			extra["X-Replicant-Repo-Name"] = a.bs.Repo.Name
-		}
-		basic := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-run-token:"+tok))
-		a.simpleProxy(w, r, strings.TrimSuffix(a.bs.Endpoints.RepoMirror, "/")+r.URL.Path, basic, extra)
-	})
-}
-
 // inputsHandler is the :7803 route (prepare only): GET /inputs/manifest and /inputs/<bucket_class>/<key>,
-// limited to the run's own inputs/ prefixes, fetched with the run-scoped S3 session.
+// limited to the run's own inputs/ prefixes, fetched with the run-scoped S3 session. It is also how the repository
+// arrives (the repo_bundle input, SIMPLIFY-D40): the sandbox has no git endpoint.
 func (a *Agent) inputsHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a.evMu.Lock()
@@ -526,7 +473,7 @@ func (a *Agent) inputsHandler() http.Handler {
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		b, _, err := cl.Get(r.Context(), bucket, key)
+		body, size, err := cl.GetStream(r.Context(), bucket, key)
 		if err != nil {
 			code := 502
 			if err == s3x.ErrNotFound {
@@ -535,8 +482,12 @@ func (a *Agent) inputsHandler() http.Handler {
 			http.Error(w, err.Error(), code)
 			return
 		}
+		defer body.Close()
 		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Write(b)
+		if size > 0 {
+			w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+		}
+		_, _ = io.Copy(w, body) // streamed: the repo bundle can be larger than agentd's memory
 	})
 }
 

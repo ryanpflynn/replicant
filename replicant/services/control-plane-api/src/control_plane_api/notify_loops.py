@@ -23,6 +23,7 @@ from typing import Any
 import httpx
 from sqlalchemy import text
 
+from control_plane_api import in_process
 from control_plane_api import notify_render as R
 from control_plane_api.config import read_secret
 from control_plane_api.db import OPERATOR_SCOPE
@@ -64,6 +65,8 @@ class NotifyLoops:
         self.svc = svc
         self.db = svc.db
         self._transport = transport
+        self.in_process: dict[str, Any] = {}   # core: module apps of this process by host (in_process.client)
+        self.slack_enabled = True               # core with Slack off: Slack deliveries are suppressed, not retried
 
     @property
     def ns(self):  # noqa: ANN201 - follows runtime overrides (dev-only PUT /v1/admin/dev/notify-overrides)
@@ -76,7 +79,9 @@ class NotifyLoops:
     async def _post(self, url: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         tok = self._token()
         headers = {"Authorization": f"Bearer {tok}"} if tok else {}
-        async with httpx.AsyncClient(timeout=20, transport=self._transport) as c:
+        c = httpx.AsyncClient(timeout=20, transport=self._transport) if self._transport else \
+            in_process.client(self.in_process, url, timeout=20)
+        async with c:
             r = await c.post(url, json=body, headers=headers)
         try:
             data = r.json()
@@ -87,6 +92,8 @@ class NotifyLoops:
     async def send(self, row: Any, slack_override: dict[str, Any] | None = None) -> tuple[str, str | None, str | None]:
         """-> (outcome, external_ref, error) with outcome in sent | suppressed | failed | retry."""
         p = row.payload or {}
+        if not self.slack_enabled and (p.get("op") or row.channel in ("slack_dm", "slack_thread")):
+            return "suppressed", None, "slack_disabled"
         try:
             if p.get("op"):
                 op = p["op"]

@@ -24,9 +24,9 @@ RUNNER_NON_RETRYABLE = [
     "invalid_request", "missing_idempotency_key", "forbidden", "run_not_found", "run_expired",
     "idempotency_key_reuse", "admission_denied", "definition_not_resolvable", "steering_not_supported",
     "run_not_active",
-    # C-RUNNER 2.1.0: the activity re-signs an expired grant and retries once internally (XD-02-14);
-    # a 422 that survives a fresh grant is a real authorization failure and is not retried
-    "run_grant_invalid",
+    # C-RUNNER 4.0.0: the run scope does not match core's intake record of the job (SIMPLIFY-D50); a real
+    # authorization failure, never retried. run_grant_invalid stays for runners still on 3.x.
+    "run_scope_invalid", "run_grant_invalid",
 ]
 
 
@@ -203,7 +203,7 @@ CATALOG: dict[str, ActivityDef] = {a.name: a for a in [
     ActivityDef("budget.tenant_quota_status", IO_INTERNAL, False),
     ActivityDef("cost.record_run", IO_INTERNAL, True),
     ActivityDef("cost.run_resource_usage", IO_INTERNAL, False),  # XD-FIX-R2-064 compute dollars so far
-    # Runner (D-04); runner.start_run signs the run grant (CCR-09-02)
+    # Runner (D-04); the Runner checks runner.start_run's run_scope against core (SIMPLIFY-D50)
     ActivityDef("runner.start_run", RUNNER_START, True),
     ActivityDef("runner.get_run", RUNNER_GET, False),
     ActivityDef("runner.cancel_run", RUNNER_CANCEL, True),

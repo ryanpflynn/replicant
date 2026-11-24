@@ -17,14 +17,14 @@ import (
 
 const revocationTTL = 2 * time.Hour
 
-// Feeds polls the core grant revocation list and the exec revocation feeds (gateway.md §5.3).
+// Feeds polls the runner's revocation feed(s) (gateway.md §5.3). Since SIMPLIFY-D50 that is the only source: the
+// runner folds core's job revocations into it (reason job_revoked), so there is no grants host to poll.
 type Feeds struct {
 	cfg    *Config
 	st     *MemState
 	client *http.Client
 	log    *slog.Logger
 
-	etag        string
 	execCursors map[string]string
 	Failures    atomic.Int64 // replicant_gateway_state_errors_total{reason="revocation_feed"}
 }
@@ -36,9 +36,6 @@ func NewFeeds(cfg *Config, st *MemState, log *slog.Logger) *Feeds {
 
 // Run polls until ctx ends.
 func (f *Feeds) Run(ctx context.Context) {
-	if f.cfg.GrantRevocationURL != "" {
-		go f.loop(ctx, f.cfg.GrantRevocationPoll, f.pollGrants)
-	}
 	if len(f.cfg.ExecRevocationURLs) > 0 {
 		go f.loop(ctx, f.cfg.ExecRevocationPoll, f.pollExec)
 	}
@@ -66,54 +63,11 @@ func (f *Feeds) loop(ctx context.Context, every time.Duration, fn func(context.C
 	}
 }
 
-type grantRevocations struct {
-	JobIDs []struct {
-		ID string `json:"id"`
-	} `json:"job_ids"`
-	RunIDs []struct {
-		ID string `json:"id"`
-	} `json:"run_ids"`
-}
-
-// PollGrantsOnce is exported for tests.
-func (f *Feeds) PollGrantsOnce(ctx context.Context) error { return f.pollGrants(ctx) }
-
-func (f *Feeds) pollGrants(ctx context.Context) error {
-	req, _ := http.NewRequestWithContext(ctx, "GET", f.cfg.GrantRevocationURL, nil)
-	if f.etag != "" {
-		req.Header.Set("If-None-Match", f.etag)
-	}
-	resp, err := f.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotModified {
-		return nil
-	}
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("grants/revoked: http %d", resp.StatusCode)
-	}
-	var gr grantRevocations
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(&gr); err != nil {
-		return err
-	}
-	var runs, jobs []string
-	for _, r := range gr.RunIDs {
-		runs = append(runs, r.ID)
-	}
-	for _, j := range gr.JobIDs {
-		jobs = append(jobs, j.ID)
-	}
-	f.st.Revoke(runs, jobs, revocationTTL)
-	f.etag = resp.Header.Get("ETag")
-	return nil
-}
-
 type execRevocations struct {
 	Revoked []struct {
-		RunID string `json:"run_id"`
-		JobID string `json:"job_id"`
+		RunID  string `json:"run_id"`
+		JobID  string `json:"job_id"`
+		Reason string `json:"reason"`
 	} `json:"revoked"`
 	NextCursor string `json:"next_cursor"`
 }
@@ -160,11 +114,14 @@ func (f *Feeds) pollExec(ctx context.Context) error {
 				}
 				return
 			}
-			var runs []string
+			var runs, jobs []string
 			for _, r := range er.Revoked {
-				runs = append(runs, r.RunID) // keyed by run_id (C-RUNNER verifier obligation 5)
+				runs = append(runs, r.RunID) // keyed by run_id (C-RUNNER verifier obligation 3)
+				if r.Reason == "job_revoked" && r.JobID != "" {
+					jobs = append(jobs, r.JobID) // core revoked the whole job (runner-local main.go)
+				}
 			}
-			f.st.Revoke(runs, nil, revocationTTL)
+			f.st.Revoke(runs, jobs, revocationTTL)
 			f.execCursors[u] = er.NextCursor
 		}()
 	}

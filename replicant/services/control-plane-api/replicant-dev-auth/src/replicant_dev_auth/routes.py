@@ -115,6 +115,78 @@ async def register_dev_bundle(request: Request, body: dict[str, Any] = Body(...)
     return out
 
 
+
+# ------------------------------------------------------------------------------------------------ test job intake
+JOB_RE = re.compile(r"^job_[0-9a-hjkmnp-tv-z]{26}$")
+TENANT_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
+PRINCIPAL_RE = re.compile(r"^(usr_[0-9a-hjkmnp-tv-z]{26}|svc_[a-z][a-z0-9-]{2,40})$")
+RB_RE = re.compile(r"^rb_[0-9a-hjkmnp-tv-z]{26}$")
+REPO_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+
+
+@router.post("/v1/admin/dev/job-requests")
+async def register_test_job(request: Request, body: dict[str, Any] = Body(...),
+                            principal: Any = _require_seed()) -> Any:
+    """LOCAL ONLY (SIMPLIFY-D54): record an intake row for a job that no channel submitted, so a test driver that
+    plays the worker (the Runner contract driver, go/cmd/runner-local/smoke in v0 mode) can create runs the live
+    runner-local admits: run-scope (routes_runner.py) reads targets and acting_for from this row. No workflow is
+    started and the row is born `started`, so the intake retrier never starts one either. Body:
+    `{job_id, tenant_id, repo_ids: [..1-5], requester_principal_id, release_bundle_id?}`. Idempotent for the same
+    tenant (the targets and requester are replaced); 409 when the job_id belongs to another tenant or to a job a
+    channel submitted."""
+    import datetime as dt
+    import json
+
+    from fastapi.responses import JSONResponse
+
+    from control_plane_api.db import OPERATOR_SCOPE
+    from control_plane_api.ids import ulid
+    from control_plane_api.problems import ProblemError
+
+    if not request.app.state.settings.is_local:     # install() refuses non-local too; defence in depth
+        raise ProblemError(404, "not_found")
+    allowed = {"job_id", "tenant_id", "repo_ids", "requester_principal_id", "release_bundle_id"}
+    if set(body) - allowed:
+        raise ProblemError(422, "invalid_request", detail=f"unknown fields {sorted(set(body) - allowed)}")
+    job, tenant, who = body.get("job_id"), body.get("tenant_id"), body.get("requester_principal_id")
+    repos = body.get("repo_ids")
+    rb = body.get("release_bundle_id") or "rb_" + "0" * 26
+    if not (isinstance(job, str) and JOB_RE.match(job)) or not (isinstance(tenant, str) and TENANT_RE.match(tenant)) \
+            or len(tenant) > 63 or not (isinstance(who, str) and PRINCIPAL_RE.match(who)) \
+            or not (isinstance(rb, str) and RB_RE.match(rb)) \
+            or not (isinstance(repos, list) and 1 <= len(repos) <= 5
+                    and all(isinstance(r, str) and REPO_ID_RE.match(r) for r in repos)):
+        raise ProblemError(422, "invalid_request")
+    now = dt.datetime.now(dt.UTC)
+    doc = {"schema_version": "replicant.job-request/v1", "tenant_id": tenant,
+           "source": {"channel": "api", "event_type": "dev.test_job", "event_id": job},
+           "requester": {"kind": "user" if who.startswith("usr_") else "service", "principal_id": who},
+           "targets": [{"repo": {"repo_id": r}, "base_ref": "main"} for r in repos],
+           "intent": {"title": "dev test job (SIMPLIFY-D54)", "text": "", "format": "markdown", "untrusted": True},
+           "workflow_type": "bugfix", "priority": "normal", "received_at": now.isoformat().replace("+00:00", "Z")}
+    db = request.app.state.db
+    async with db.tx(scope=OPERATOR_SCOPE) as conn:
+        row = (await conn.execute(text("SELECT tenant_id, dedupe_key FROM intake.job_requests WHERE job_id = :j"),
+                                  {"j": job})).first()
+    owner = row.tenant_id if row is not None else None
+    if row is not None and (owner != tenant or not str(row.dedupe_key).startswith("dev:test-job:")):
+        raise ProblemError(409, "job_exists", detail="the job_id belongs to another tenant or to a submitted job")
+    async with db.tx(role="svc_cpa_intake", tenant=tenant) as conn:
+        if owner is None:
+            await conn.execute(text(
+                "INSERT INTO intake.job_requests (job_id, tenant_id, request_id, dedupe_key, channel, requester, "
+                "submitted_by, workflow_type, request, release_bundle_id, assignment_reason, release_cohort, "
+                "assignment_version, start_status, started_at, received_at) VALUES (:j, :t, :rq, :k, 'api', :who, :by, "
+                "'bugfix', CAST(:doc AS jsonb), :rb, 'default', 'default', 0, 'started', :now, :now)"),
+                {"j": job, "t": tenant, "rq": ulid("jrq"), "k": f"dev:test-job:{job}", "who": who,
+                 "by": principal.principal_id, "doc": json.dumps(doc), "rb": rb, "now": now})
+        else:
+            await conn.execute(text("UPDATE intake.job_requests SET requester = :who, request = CAST(:doc AS jsonb) "
+                                    "WHERE job_id = :j AND tenant_id = :t"),
+                               {"j": job, "t": tenant, "who": who, "doc": json.dumps(doc)})
+    return JSONResponse({"job_id": job, "tenant_id": tenant, "repo_ids": repos, "acting_for": who,
+                         "created": owner is None}, status_code=201 if owner is None else 200)
+
 # ------------------------------------------------------------------------------------------------ notify overrides
 NOTIFY_OVERRIDABLE = {"pr_idle_seconds": int, "pr_remind_every_seconds": int, "job_max_age_days": int,
                       "lifetime_lead_seconds": int, "digest_threshold": int, "quiet_default": str,

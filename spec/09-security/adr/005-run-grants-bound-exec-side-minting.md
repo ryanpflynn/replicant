@@ -1,6 +1,9 @@
 # ADR-09-005: Core-signed run grants bound what the exec side can mint
 
-- **Status:** Accepted; applied in C-RUNNER 2.x (final 2.5.2) and C-CRD 2.x (final 2.4.0). Was CCR-09-02 (C-RUNNER `RunSpec.run_grant`,
+> **Superseded** by [ADR-015: Single cluster, hardened sandbox pool](../../00-contracts/adr/015-single-cluster-hardened-sandbox-pool.md) (SIMPLIFY Phase 6, 2026-11-23;
+> C-RUNNER 4.0.0, C-CRD 4.0.0). Kept for the record; do not implement.
+
+- **Status:** Superseded by ADR-015 (2026-11-23): no run grants; the Runner checks each run against core's intake record (C-RUNNER 4.0.0). Was: Accepted; applied in C-RUNNER 2.x (final 2.5.2) and C-CRD 2.x (final 2.4.0). Was CCR-09-02 (C-RUNNER `RunSpec.run_grant`,
   `RunTokenClaims.grant`/`grant_jti`; C-CRD `spec.runGrant`).
 - **Constraints:** D-04, D-21; ADR-002, ADR-007
 

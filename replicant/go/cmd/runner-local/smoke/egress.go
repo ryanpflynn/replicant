@@ -15,8 +15,9 @@ import (
 	"example.com/replicant/internal/runner/s3x"
 )
 
-// caseEgress (v0 only): SEC-EGRESS-01..08 (test-strategy.md §8.1) on runner-local with the real sandbox network
-// (replicant-sbx: sbx-dns, sbx-edge, egress proxy, mirrors). 01-07 run inside the agent container of a real run
+// caseEgress (v0 only): SEC-EGRESS-01..08 (test-strategy.md §8.1) and 09..11 (SIMPLIFY-D30: static sandbox hosts,
+// sbx-edge SNI allowlist, no direct-IP route) on runner-local with the real sandbox network (replicant-sbx: sbx-edge
+// only). 01-07 and 09-11 run inside the agent container of a real run
 // (script runner-contract-egress/egress_probe: Claude Code's Bash tool executes tests/security/egress/egress-probe.sh,
 // whose output becomes the run's handoff); 08 uses the run's vended S3 credentials (RC-SBX-04 matrix).
 func caseEgress(ctx context.Context, e *env) (string, error) {
@@ -69,7 +70,7 @@ func caseEgress(ctx context.Context, e *env) (string, error) {
 	seen, failed := map[string]bool{}, []string{}
 	for _, line := range strings.Split(text, "\n") {
 		f := strings.SplitN(strings.TrimSpace(line), " ", 3)
-		if len(f) < 2 || !strings.HasPrefix(f[0], "SEC-EGRESS-0") {
+		if len(f) < 2 || !strings.HasPrefix(f[0], "SEC-EGRESS-") {
 			continue
 		}
 		detail := ""
@@ -83,8 +84,8 @@ func caseEgress(ctx context.Context, e *env) (string, error) {
 		e.record(f[0], "inside the sandbox (agent container)", f[1] == "PASS", detail)
 	}
 	missing := []string{}
-	for i := 1; i <= 7; i++ {
-		id := fmt.Sprintf("SEC-EGRESS-0%d", i)
+	for _, i := range []int{1, 2, 3, 4, 5, 6, 7, 9, 10, 11} {
+		id := fmt.Sprintf("SEC-EGRESS-%02d", i)
 		if !seen[id] {
 			missing = append(missing, id)
 			e.record(id, "inside the sandbox (agent container)", false, "no result line in the probe output")

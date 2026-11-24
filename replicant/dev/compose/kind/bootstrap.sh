@@ -101,15 +101,14 @@ YAML
 S3_CONTAINER=replicant-s3-1; docker inspect "$S3_CONTAINER" >/dev/null 2>&1 || S3_CONTAINER=replicant-s3-minio-1
 bridge temporal 7233 replicant-temporal-1 replicant-core
 bridge s3 8333 "$S3_CONTAINER" replicant-core
-# Core run-grant JWKS and revocation list for the kind runner-api and controller (C-RUNNER 3.0.0, R1-253).
-bridge grants 8403 replicant-run-grants-1 replicant-core
 bridge sbx-edge 80 replicant-sbx-edge-1 replicant-sbx
-bridge sbx-dns 53 replicant-sbx-dns-1 replicant-sbx
 
-# Cluster DNS: forward sbx.local to sbx-dns so pods resolve the same sandbox names as runner-local sandboxes.
-SBX_DNS_IP="$(ip_of replicant-sbx-dns-1 replicant-sbx)"
+# Cluster DNS: answer the sbx.local names with sbx-edge's address, the same static entries runner-local gives its
+# sandboxes (SIMPLIFY-D30: there is no sbx-dns any more).
+SBX_EDGE_IP="$(ip_of replicant-sbx-edge-1 replicant-sbx)"
+SBX_NAMES="gateway.sbx.local memory-mcp.sbx.local context-mcp.sbx.local runner-sandbox.sbx.local runner-sandbox-k8s.sbx.local s3.sbx.local otlp.sbx.local"
 kubectl --context "$CTX" -n kube-system get configmap coredns -o yaml | \
-  sed "s|    .:53 {|    sbx.local:53 {\n        forward . ${SBX_DNS_IP}\n    }\n    .:53 {|" | \
+  sed "s|    .:53 {|    sbx.local:53 {\n        hosts {\n            ${SBX_EDGE_IP} ${SBX_NAMES}\n        }\n    }\n    .:53 {|" | \
   kubectl --context "$CTX" apply -f -
 
 # CRD (contract file, unmodified) + controller, runner-api, run-notifier (WS-02 chart, local values).
@@ -127,9 +126,6 @@ helm upgrade --install replicant-exec /helm/replicant-exec --namespace replicant
   --set runnerApi.service.nodePort=30480 \
   --set runnerApi.sandboxListener.nodePort=30490 \
   --set runnerApi.sandboxListener.publicBaseUrl=http://runner-sandbox-k8s.sbx.local \
-  --set grants.issuer=replicant-local-core \
-  --set grants.jwksUrl=http://grants.replicant-runner.svc:8403/.well-known/jwks.json \
-  --set grants.revocationUrl=http://grants.replicant-runner.svc:8403/grants/revoked \
   --set runnerApi.revocations.readersSecretKey=runner_revocations_readers \
   --set runnerApi.revocations.bucket=local-replicant-local-ops \
   --set runnerApi.revocations.prefix=exec-revocations/local/ \

@@ -8,6 +8,14 @@ monorepo is `/Users/rflynn/replicant/replicant`, the CLI is `replicant`, images 
 project is `replicant`, and env vars are `REPLICANT_*`. Quick start: `uv run replicant dev up --profile v0`, then
 `uv run replicant dev seed`.
 
+**Simplified stack (2026-11-23).** This is the original M1 build plan and is kept as written, but the stack it
+describes has since been simplified (`DEVIATIONS.md` `## SIMPLIFY`, SIMPLIFY-D1..D59; spec ADR-015). Read the service
+list, ownership and stack-definition notes below through that: `dev/compose/compose.v0.yaml` is standalone (no copy of
+the spec `compose.yaml`), the Python roles share one `replicant-py` image and runner-local and gateway-shim one
+`replicant-go` image, and there are no run grants, no repo-mirror, no sbx-dns or egress proxy, and no separate
+migrate, s3-init, gitea-bootstrap, temporal-bootstrap, temporal-ui or gateway-state services. The current architecture
+is in [`docs/design/v0-system-design.md`](../design/v0-system-design.md) §1, §2 and §5.
+
 Target, in the order the milestones prove it:
 
 1. A Gitea issue labelled `replicant` triggers a job.
@@ -27,7 +35,7 @@ plan §1 is `spec/99-implementation-plan/plan.md`). Contracts are in `spec/00-co
 |---|---|---|---|
 | **M1** | All plumbing on the `v0` profile: intake, pinned ReplicantJob, runner-local sandboxes, gate, publish, projection | gateway shim `script` backend (deterministic canned fix, no key) | local Gitea |
 | M2 | Real `claude -p` through the shim in `passthrough` mode (key from `replicant/dev/.env`, never logged); observability profile (Loki, Tempo, Grafana, Alloy) with `job_id` correlation | passthrough | Gitea |
-| M3 | Dev GitHub App on the user's personal org via a Cloudflare quick tunnel; egress isolation (sbx-dns, egress-proxy); chaos cases | passthrough | GitHub |
+| M3 | Dev GitHub App on the user's personal org via a Cloudflare quick tunnel; egress isolation (then sbx-dns and egress-proxy; now sbx-edge alone, SIMPLIFY-D30, D31); chaos cases | passthrough | GitHub |
 
 Only M1 is in scope now.
 
@@ -41,7 +49,8 @@ Only M1 is in scope now.
 - **Containers.** Use `podman` and `podman-compose` (`/opt/homebrew/bin/podman-compose`). Use `podman build`, not buildx
   bake (a bake file is optional). Images are tagged `localhost/replicant/<name>:dev`.
 - **Contracts.** Copy the machine-readable contract files verbatim from `spec/00-contracts` into `replicant/contracts/`.
-- **Stack definition.** `spec/11-local-dev/compose/compose.yaml` and `config/` are the **authoritative map** of service
+- **Stack definition** (superseded by SIMPLIFY-D1: `compose.v0.yaml` is now standalone and the local copy of the
+  spec `compose.yaml` is deleted). `spec/11-local-dev/compose/compose.yaml` and `config/` are the **authoritative map** of service
   names, ports, env var names, secret file names and dependencies. Copy them to `replicant/dev/compose/` and add a profile
   **`v0`** containing only the services listed below. Keep every name, port, env var and secret path exactly as
   specified, so the components agree without negotiating.
@@ -50,26 +59,32 @@ Only M1 is in scope now.
 
 ### Services in the `v0` profile (M1)
 
+As planned for M1. Today's default stack is 14 services: postgres-replicant, s3, temporal (built-in UI), `init`
+(migrations, buckets, Gitea setup; SIMPLIFY-D3), control-plane-api (core: API, github-integration, the Slack module
+when enabled and the projector worker; SIMPLIFY-D10..D13), control-plane-web, github-token-broker, replicant-worker,
+publisher-worker, memory-service, gitea, runner-local, gateway-shim and sbx-edge; plus the opt-in `slack` and
+`observability` profiles.
+
 | Service | Owner | Notes |
 |---|---|---|
 | `postgres-replicant` | PLATFORM | |
 | `temporal` | PLATFORM | M1 may use the Temporal CLI dev server image with a persisted SQLite file instead of `postgres-temporal` + `temporal-schema`. Worker Deployment APIs work on the dev server (verified by WS-01). Record this in DEVIATIONS |
-| `temporal-bootstrap` | PLATFORM | |
-| `temporal-ui` | PLATFORM | |
+| `temporal-bootstrap` | PLATFORM | Removed: dev-server flags (SIMPLIFY-D1) |
+| `temporal-ui` | PLATFORM | Removed: the dev server's built-in UI (SIMPLIFY-D1) |
 | `s3` (SeaweedFS) | PLATFORM | |
-| `s3-init` | PLATFORM | |
-| `migrate` | PLATFORM | |
+| `s3-init` | PLATFORM | Now a step of `init` (SIMPLIFY-D3) |
+| `migrate` | PLATFORM | Now a step of `init` (SIMPLIFY-D3) |
 | `gitea` | PLATFORM | |
-| `gitea-bootstrap` | PLATFORM | |
-| `control-plane-api` | CONTROL | Also serves `run-grants`, as in the compose spec |
-| `github-integration` | CONTROL | Gitea adapter only in M1 |
+| `gitea-bootstrap` | PLATFORM | Now split between `gitea` and `init` (SIMPLIFY-D3) |
+| `control-plane-api` | CONTROL | Also serves `run-grants`, as in the compose spec (run grants removed: SIMPLIFY-D50) |
+| `github-integration` | CONTROL | Gitea adapter only in M1. Now a module of control-plane-api (SIMPLIFY-D10) |
 | `github-token-broker` | CONTROL | Gitea tokens in M1 |
 | `replicant-worker` | WORKER | |
 | `publisher-worker` | WORKER | |
-| `replicant-projector` | WORKER | |
+| `replicant-projector` | WORKER | Now runs inside control-plane-api (SIMPLIFY-D13) |
 | `runner-local` | RUNNER | |
-| `repo-mirror` | RUNNER | |
-| `gateway-shim` | GATEWAY | `gateway-state` Valkey, or an in-memory state backend for local; record the choice |
+| `repo-mirror` | RUNNER | Removed: the repo arrives as a git bundle in the run inputs (SIMPLIFY-D40) |
+| `gateway-shim` | GATEWAY | `gateway-state` Valkey, or an in-memory state backend for local; record the choice (in-memory, GATEWAY-D1; `gateway-state` removed, SIMPLIFY-D1) |
 
 Not in M1: dex and identity-service (use a static dev principal; document it), langfuse/clickhouse/valkey for Langfuse,
 memory-service (the `memory.*` activities return a pinned empty snapshot, per plan §1.3), context-mcp, zoekt,

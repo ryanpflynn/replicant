@@ -3,7 +3,7 @@
     smoke.py seed   platform caps, tenants, local bundle + bootstrap, SCM installation, seed-status
     smoke.py run    open a Gitea issue as alice with label `replicant`; assert intake row, pinned workflow, ack comment;
                     then send a signed Gitea `pull_request` closed/merged webhook for the job's branch and assert the
-                    `pr.event` Signal reached the workflow; check run-grants JWKS and /grants/revoked
+                    `pr.event` Signal reached the workflow; check the Runner's run-scope and revocation routes (SIMPLIFY-D50)
 """
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ import uuid
 SEC = os.path.join(os.environ["CTL_HOME"], "secrets")
 CPA = "http://127.0.0.1:58401"
 GI = "http://127.0.0.1:58080"
-GRANTS = "http://127.0.0.1:58403"
 GITEA = "http://127.0.0.1:53300"
 ENGINE = os.environ.get("REPLICANT_CONTAINER_CLI", "podman")
 ORG, REPO = "acme-payments", "ledger-api"
@@ -191,11 +190,12 @@ def run() -> None:
                 break
             time.sleep(1)
         ok("COMPLETED" in st, f"stub ReplicantJob received pr.event pull_request_merged and completed ({st})")
-    s, jwks = call("GET", f"{GRANTS}/.well-known/jwks.json")
-    ok(s == 200 and jwks["keys"][0]["kid"] == "rg-local-1" and "d" not in jwks["keys"][0], "run-grants JWKS (public only)")
-    s, rev = call("GET", f"{GRANTS}/grants/revoked")
-    ok(s == 200 and {"generated_at", "job_ids", "run_ids"} <= set(rev), f"/grants/revoked: {len(rev['job_ids'])} jobs, "
+    runner_auth = {"Authorization": f"Bearer {secret('runner_cp_token')}"}
+    s, rev = call("GET", f"{CPA}/internal/v1/revocations", headers=runner_auth)
+    ok(s == 200 and {"job_ids", "run_ids"} <= set(rev), f"/internal/v1/revocations: {len(rev['job_ids'])} jobs, "
        f"{len(rev['run_ids'])} runs")
+    s, sc = call("GET", f"{CPA}/internal/v1/jobs/{job}/run-scope?tenant_id=payments", headers=runner_auth)
+    ok(s == 200 and sc.get("tenant_id") == "payments" and sc.get("repo_ids"), f"run-scope of {job}: {sc}")
     s, b = call("GET", f"{CPA}/internal/v1/tenants/payments/gateway-quota",
                 headers={"Authorization": f"Bearer {secret('shim_token')}"})
     ok(s == 200 and b["daily_budget_usd"] == 10, f"gateway-quota for the shim -> {s} {b}")

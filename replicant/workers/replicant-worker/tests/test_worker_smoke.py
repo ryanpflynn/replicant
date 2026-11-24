@@ -2,7 +2,7 @@
 runs the shipped bugfix graph end to end on a local Temporal dev server, PINNED to a Worker Deployment version that
 is set current, against contract fakes of its neighbours:
 
-* runner-local: C-RUNNER 3.0.0 (RunSpec schema, ES256 run grant over spec_digest, Idempotency-Key, the inputs
+* runner-local: C-RUNNER 4.0.0 (RunSpec schema with run_scope and no run grant, Idempotency-Key, the inputs
   manifest digest, run_result in S3, `run.status_changed` hint Signals with plain JSON payloads);
 * gateway-shim: RunPolicy (gateway-interface.openapi.yaml);
 * control-plane-api: postNotification;
@@ -28,8 +28,6 @@ import fakes
 import httpx
 import pytest
 import zstandard
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec
 from temporalio import activity
 from temporalio.client import Client
 from temporalio.common import PinnedVersioningOverride, Priority, VersioningOverride, WorkerDeploymentVersion  # noqa: F401
@@ -40,7 +38,7 @@ from temporalio.worker import Worker
 from replicant_temporal.search_attributes import dev_server_args, job_start_attributes
 from replicant_temporal.versioning import set_current_version
 from replicant_worker import ids, resources
-from replicant_worker.activities import base, bundle, config, grants, s3
+from replicant_worker.activities import base, bundle, config, repo_bundle, s3
 
 BUILD = "b20261024-0000000000ab"
 T = "payments"
@@ -79,8 +77,8 @@ def bundle_bytes() -> bytes:
 class FakeRunner:
     """runner-local per RUNNER-02, enough for the bugfix path."""
 
-    def __init__(self, fs3: fakes.FakeS3, client: Client, pub_key: ec.EllipticCurvePublicKey) -> None:
-        self.s3, self.client, self.key = fs3, client, pub_key
+    def __init__(self, fs3: fakes.FakeS3, client: Client) -> None:
+        self.s3, self.client = fs3, client
         self.runs: dict[str, dict[str, Any]] = {}
         self.policies: dict[str, dict[str, Any]] = {}
         self.job_budgets: list[dict[str, Any]] = []
@@ -111,16 +109,9 @@ class FakeRunner:
         key = json.loads(req.headers["idempotency-key"])
         spec = json.loads(req.content)
         errs = fakes.errors(self.specs, spec)
-        h, claims, sig, si = fakes.jwt_parts(spec["run_grant"])
-        from cryptography.hazmat.primitives import hashes
-        from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
-        try:
-            self.key.verify(encode_dss_signature(int.from_bytes(sig[:32], "big"), int.from_bytes(sig[32:], "big")), si,
-                            ec.ECDSA(hashes.SHA256()))
-        except Exception:  # noqa: BLE001
-            errs.append("bad grant signature")
-        if claims["spec_digest"] != grants.spec_digest(spec):
-            errs.append("grant spec_digest mismatch")
+        sc = spec.get("run_scope") or {}   # C-RUNNER 4.0.0: what runner-local checks against core's intake record
+        if spec["repo"]["repo_id"] not in (sc.get("repo_ids") or []) or not sc.get("acting_for"):
+            errs.append("run_scope does not cover the run")
         mkey = spec["inputs"]["manifest_uri"].split("/", 3)[3]
         if hashlib.sha256(self.s3.objs.get((ART, mkey), b"")).hexdigest() != spec["inputs"]["manifest_sha256"]:
             errs.append("inputs manifest digest mismatch (A-4)")
@@ -229,26 +220,26 @@ def peer_activities(fs3: fakes.FakeS3, published: list[dict[str, Any]], projecti
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    key = ec.generate_private_key(ec.SECP256R1())
-    kf = tmp_path / "rg.pem"
-    kf.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
-    for k, v in {"REPLICANT_ENV": "local", "REPLICANT_RUN_GRANT_KEY_FILE": str(kf), "REPLICANT_RUNNER_URL": "http://runner.test",
+    for k, v in {"REPLICANT_ENV": "local", "REPLICANT_RUNNER_URL": "http://runner.test",
                  "REPLICANT_GATEWAY_URL": "http://runner.test", "REPLICANT_CONTROL_PLANE_URL": "http://runner.test",
                  "REPLICANT_GATEWAY_SCRIPT_SET": "ledger-api-v0", "REPLICANT_LOCAL_REGISTRY_PUBLISH": "false",
                  "REPLICANT_BUNDLE_FALLBACK_ANY": "true"}.items():  # CONFIG-D5: arbitrary rb_ in tests
         monkeypatch.setenv(k, v)
     config.settings.cache_clear()
-    grants.signer.cache_clear()
     bundle._cache.clear()
     fs3 = fakes.FakeS3()
     s3.set_client(fs3)
-    yield fs3, key
+
+    async def fake_build(repo, refs, dest, *, job_id):  # no SCM here: test_activities covers the real fetch
+        dest.write_bytes(b"# v2 git bundle\n" + json.dumps(refs, sort_keys=True).encode())
+    monkeypatch.setattr(repo_bundle, "build", fake_build)
+    yield fs3
     s3.set_client(None)
     base.set_http(None)
 
 
 def test_bugfix_end_to_end_on_the_real_worker(env) -> None:
-    fs3, key = env
+    fs3 = env
 
     async def main() -> None:
         tenv = await WorkflowEnvironment.start_local(namespace="replicant-local", dev_server_extra_args=[
@@ -257,7 +248,7 @@ def test_bugfix_end_to_end_on_the_real_worker(env) -> None:
             from replicant_temporal import TemporalSettings, connect
             client = await connect(TemporalSettings(address=tenv.client.service_client.config.target_host,
                                                     namespace=tenv.client.namespace))
-            fr = FakeRunner(fs3, client, key.public_key())
+            fr = FakeRunner(fs3, client)
             base.set_http(httpx.AsyncClient(transport=httpx.MockTransport(fr)))
             from replicant_worker import cli
             from replicant_worker.activities.catalog_impl import ACTIVITIES_BY_QUEUE

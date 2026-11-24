@@ -165,7 +165,7 @@ func (s *Server) emit(rc *reqCtx, res Result, cost int64, src, status string) {
 	}
 	if rc.caller != nil {
 		if rc.caller.Kind == "run" {
-			ev.Caller = usage.Caller{Kind: "run", TokenJti: rc.caller.Run.Jti, GrantJti: rc.caller.Run.GrantJti}
+			ev.Caller = usage.Caller{Kind: "run", TokenJti: rc.caller.Run.Jti}
 		} else {
 			ev.Caller = usage.Caller{Kind: "service", ServicePrincipal: rc.caller.Service}
 			if localAllServices[rc.caller.Service] { // the event schema allows only the three data-plane principals

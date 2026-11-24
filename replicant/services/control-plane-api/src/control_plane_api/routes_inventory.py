@@ -33,7 +33,7 @@ import httpx
 from fastapi import APIRouter, Body, Depends, Request, Response
 from sqlalchemy import text
 
-from control_plane_api import audit
+from control_plane_api import audit, in_process
 from control_plane_api import inventory as I
 from control_plane_api.auth import current_principal, require
 from control_plane_api.authz import Principal
@@ -650,7 +650,8 @@ async def rescan(request: Request, body: Any = Body(default=None),
     ns = request.app.state.notify.ns
     tok = read_secret(ns.delivery_token_file)
     try:
-        async with httpx.AsyncClient(timeout=15) as c:
+        async with in_process.client(getattr(request.app.state, "in_process", None), ns.github_integration_url,
+                                     timeout=15) as c:
             r = await c.post(f"{ns.github_integration_url}/internal/v1/inventory:rescan",
                              json={"repo_ids": [str(x) for x in ids]} if ids is not None else {},
                              headers={"Authorization": f"Bearer {tok}"} if tok else {})

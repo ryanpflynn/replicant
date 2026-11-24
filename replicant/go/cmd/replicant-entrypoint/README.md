@@ -1,7 +1,7 @@
 # replicant-entrypoint
 
-WS-03 runner entrypoint (cli-invocation.md §4): `prepare` (inputs through agentd :7803 with digest checks, blobless
-checkout of `base_sha` through agentd :7802 → repo-mirror, prior diff, managed settings + managed MCP, tools copy;
+WS-03 runner entrypoint (cli-invocation.md §4): `prepare` (inputs through agentd :7803 with digest checks,
+full-history checkout of `base_sha` from the `repo_bundle` input (a git bundle fetched through agentd :7803, SIMPLIFY-D40), prior diff, managed settings + managed MCP, tools copy;
 exits 40–43), `run` (bootstrap steps, `$HOME` + joined prompt, `claude -p` stream-json with the §2.1 argv / §2.2 env,
 event parsing, turn budget, steering, finalize message, SIGTERM/cancel handling, `kill(-1)`, diff bundle, handoff,
 review report / plan, `run_result` validated against the contract + role schemas, `outputs.json`, exit codes §4.6;

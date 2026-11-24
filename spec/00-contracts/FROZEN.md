@@ -10,11 +10,11 @@ consuming workstream.
 
 | ID | Version | Files |
 |---|---|---|
-| C-ARCH | 2.0.0 (major, CCR-ORCH-02: product rename to Replicant) | architecture.md |
+| C-ARCH | **3.0.0** (major, SIMPLIFY-D50 / ADR-015: one cluster, hardened sandbox pool) | architecture.md |
 | C-STATE | 2.0.0 (major, CCR-ORCH-02: product rename to Replicant) | state-ownership.md |
 | C-IDS | 2.0.0 (major, CCR-ORCH-02: product rename to Replicant) | ids-and-naming.md |
-| C-RUNNER | **3.0.0** (major, CCR-ORCH-02: product rename to Replicant) | runner-api.openapi.yaml, schemas/run-result.schema.json |
-| C-CRD | **3.0.0** (major, CCR-ORCH-02: product rename to Replicant) | agentrun-crd.yaml, agentrun-crd.md |
+| C-RUNNER | **4.0.0** (major, SIMPLIFY-D50 / ADR-015: `run_grant` replaced by `run_scope`, checked against core) | runner-api.openapi.yaml, schemas/run-result.schema.json |
+| C-CRD | **4.0.0** (major, SIMPLIFY-D50 / ADR-015: `spec.runGrant` replaced by `spec.runScope`) | agentrun-crd.yaml, agentrun-crd.md |
 | C-MSG | 2.0.0 (major, CCR-ORCH-02: product rename to Replicant) | events-and-signals.md, schemas/workflow-messages.schema.json |
 | C-JOBREQ | 2.0.0 (major, CCR-ORCH-02: product rename to Replicant) | job-request.schema.json |
 | C-DEF | **3.0.0** (major, CCR-ORCH-02: product rename to Replicant) | definitions-contracts.md, schemas/definition-envelope.schema.json, schemas/release-bundle.schema.json |

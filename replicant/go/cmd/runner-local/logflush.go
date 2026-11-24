@@ -23,7 +23,7 @@ func (s *Server) flushLogs(ctx context.Context, r *Record) {
 	if url == "" || s.Engine == nil {
 		return
 	}
-	names := []string{cGuard, cVolumeInit, cPrepare, cAgentd, cWatchdog, cAgent, cUploader}
+	names := []string{cSandboxInit, cPrepare, cAgentd, cAgent, cUploader}
 	deadline := time.Now().Add(3 * time.Minute)
 	for time.Now().Before(deadline) {
 		running := false

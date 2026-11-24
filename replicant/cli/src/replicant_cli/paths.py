@@ -8,17 +8,17 @@ from pathlib import Path
 
 def repo_root() -> Path:
     env = os.environ.get("REPLICANT_REPO_ROOT")
-    if env and Path(env, "dev", "compose", "compose.yaml").is_file():
+    if env and Path(env, "dev", "compose", "compose.v0.yaml").is_file():
         return Path(env).resolve()
     here = Path(__file__).resolve()
     for p in here.parents:
-        if (p / "dev" / "compose" / "compose.yaml").is_file():
+        if (p / "dev" / "compose" / "compose.v0.yaml").is_file():
             return p
     cwd = Path.cwd().resolve()
     for p in (cwd, *cwd.parents):
-        if (p / "dev" / "compose" / "compose.yaml").is_file():
+        if (p / "dev" / "compose" / "compose.v0.yaml").is_file():
             return p
-    raise SystemExit("cannot find the Replicant repo (dev/compose/compose.yaml); set REPLICANT_REPO_ROOT")
+    raise SystemExit("cannot find the Replicant repo (dev/compose/compose.v0.yaml); set REPLICANT_REPO_ROOT")
 
 
 @dataclass(frozen=True)
@@ -31,10 +31,7 @@ class Paths:
 
     @property
     def compose_file(self) -> Path:
-        return self.compose_dir / "compose.yaml"
-
-    @property
-    def v0_file(self) -> Path:
+        """The standalone v0 stack (SIMPLIFY-D1)."""
         return self.compose_dir / "compose.v0.yaml"
 
     @property

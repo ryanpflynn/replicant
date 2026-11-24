@@ -3,9 +3,17 @@
 v0 scope: delivers Replicant notifications as Slack DMs for the control-plane-api dispatcher (channel `slack_dm`) and
 verifies inbound Slack requests. Locally it talks to [slack-mock](../../tools/slack-mock) (`SLACK_API_URL`).
 
+**In the stack, this package runs inside the `core` process** (`control-plane-api serve`; DEVIATIONS SIMPLIFY-D10).
+It is loaded only when `REPLICANT_SLACK_ENABLED=true`.
+
+- **Ingress:** `/slack/events|interactions|commands` are served on control-plane-api's listener, port 8401.
+- **Internal routes:** the `/internal/v1/**` routes and the calls to control-plane-api run in process, so the
+  caller token files are not used there.
+- **Database login:** `REPLICANT_SLACK_INTEGRATION_DB_DSN` / `_DB_PASSWORD_FILE`.
+
 ```sh
 uv run --package slack-integration --group dev pytest services/slack-integration/tests -q   # no DB needed
-podman build -f services/slack-integration/Dockerfile -t localhost/replicant/slack-integration:dev .
+podman build -f images/replicant-py/Dockerfile --target dev -t localhost/replicant/replicant-py:dev .   # shared Python image (SIMPLIFY-D2)
 slack-integration serve | healthcheck
 ```
 

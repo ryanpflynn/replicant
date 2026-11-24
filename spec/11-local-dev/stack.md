@@ -1,7 +1,7 @@
 # Local Stack
 
 **Workstream:** WS-11 · **Section:** `spec/11-local-dev/` · **Compose file:** [compose/compose.yaml](compose/compose.yaml) ·
-**Contracts:** C-ARCH 2.0.0, C-STATE 2.0.0, C-IDS 2.0.0, C-RUNNER 3.0.0, C-CRD 3.0.0, C-MSG 2.0.0, C-JOBREQ 2.0.0,
+**Contracts:** C-ARCH 3.0.0, C-STATE 2.0.0, C-IDS 2.0.0, C-RUNNER 4.0.0, C-CRD 4.0.0, C-MSG 2.0.0, C-JOBREQ 2.0.0,
 C-DEF 3.0.0, C-ART 2.0.0, C-PG 2.0.0
 
 ## Purpose
@@ -10,6 +10,34 @@ Run the whole Replicant on one laptop with Docker or Podman, before any cloud sp
 service images, the same migrations, the same Temporal persistence plugin, the same Runner API, the same
 registry and bundle flow, and the same S3 key layout as production (D-20). This document specifies the
 compose stack, the `replicant dev` CLI that drives it, seed data, reset, and the laptop it needs.
+
+### The implemented local stack (v0, 2026-11-23)
+
+This document specifies the full target stack. The stack the monorepo actually runs is
+`replicant/dev/compose/compose.v0.yaml`, a standalone file (it no longer layers on [compose/compose.yaml](compose/compose.yaml))
+recorded in `replicant/docs/v0/DEVIATIONS.md` (PLATFORM-D*, SIMPLIFY-D*):
+
+- **14 default services:** postgres-replicant, s3 (SeaweedFS), temporal (CLI dev server with its built-in UI on 8233,
+  namespace and search attributes registered by flags), `init` (one-shot: migrations, buckets, Gitea setup;
+  SIMPLIFY-D3), control-plane-api (the core process: API, github-integration, the Slack module when enabled and the
+  projector worker; SIMPLIFY-D10..D13), control-plane-web, github-token-broker, replicant-worker, publisher-worker,
+  memory-service, gitea, runner-local, gateway-shim and sbx-edge. Opt-in profiles: `slack` (slack-mock) and
+  `observability`.
+- **Images:** `replicant-py` (every Python role, chosen by `command:`) and `replicant-go` (runner-local, gateway-shim),
+  plus postgres, control-plane-web and the sandbox images (sandbox-sidecars, cli-claude-code, env-go/python/node)
+  (SIMPLIFY-D2).
+- **Per run:** six containers: `sandbox-init`, `pause` (a sandbox-sidecars subcommand), `replicant-agentd`, `prepare`,
+  `agent`, `uploader` (with the disk watchdog) (SIMPLIFY-D20..D22).
+- **Sandbox network:** sbx-edge only: HTTP routes for `*.sbx.local`, an SNI allowlist on :443, static `/etc/hosts` on the
+  pause container, no proxy variables (ADR-11-007 as amended, SIMPLIFY-D30, D31). The repository arrives as a git
+  bundle in the run inputs; there is no git endpoint in the sandbox (SIMPLIFY-D40).
+- **No run grants** (ADR-015, C-RUNNER 4.0.0): runner-local checks each run's `run_scope` against core's intake record,
+  signs run tokens itself and serves the only revocation feed (SIMPLIFY-D50).
+
+Not run in v0, among others: postgres-temporal, temporal-schema, temporal-bootstrap, temporal-ui, migrate, s3-init,
+gitea-bootstrap (replaced by the dev server and `init`), gateway-state (the shim keeps state in memory, GATEWAY-D1),
+Dex, identity-service, Langfuse, context-mcp, Zoekt, the package mirrors. The run-grants, repo-mirror, sbx-dns and
+egress-proxy services are removed from the design (ADR-015, ADR-11-007, ADR-011 note) and from the sections below.
 
 ## Decisions summary
 
@@ -21,11 +49,11 @@ compose stack, the `replicant dev` CLI that drives it, seed data, reset, and the
 | **Challenge D-08 (accepted, CCR-11-02):** SeaweedFS is the local S3 (profile `s3-seaweedfs`, always on); MinIO from source is the alternative profile `s3-minio`, which takes over the `s3.replicant.localhost` name | D-08 | [ADR-11-004](adr/004-challenge-d08-minio-locally.md) |
 | Langfuse is in `core`, because prompt management feeds every bundle (accepted, CCR-11-03) | D-03, D-17 | [ADR-11-005](adr/005-langfuse-in-core-profile.md) |
 | Dev App webhooks via a **Cloudflare quick tunnel** with automatic `PATCH /app/hook/config`; smee only as an opt-in last resort | D-24 | [ADR-07-004](../07-control-plane-and-ux/adr/004-dev-webhook-forwarding.md) (supersedes [ADR-11-006](adr/006-dev-app-webhook-forwarding.md)) |
-| Run grants work locally exactly as in production: replicant-worker and eval-worker sign `RunSpec.run_grant` with a local file key (issuer `replicant-local-core`); `run-grants` serves the JWKS and `/grants/revoked`; runner-local, the kind runner-api, the shim, memory-mcp, context-mcp and repo-mirror verify | C-RUNNER 3.0.0, C-ARCH 2.0.0 §6 | — |
+| No run grants, as in production: the worker sends `RunSpec.run_scope`; runner-local (and the kind runner-api) checks it against core's intake record (`GET /internal/v1/jobs/{job_id}/run-scope`), signs the run tokens and serves the only revocation feed; the shim, memory-mcp and context-mcp verify against the Runner's JWKS and feed (SIMPLIFY-D50) | C-RUNNER 4.0.0, C-ARCH 3.0.0 §6 | [ADR-015](../00-contracts/adr/015-single-cluster-hardened-sandbox-pool.md) |
 | The AI gateway is WS-03's `replicant-gateway-shim` binary with local backends; the CLI reaches it only through `replicant-agentd` | D-11, C-ARCH 2.0.0 §1.1 | [gateway-stub.md](gateway-stub.md) |
 | control-plane-api and identity-service run their `dev` build target (adds only `replicant_dev_auth`); every other image is the production target | XD-09-14 | — |
-| Sandboxes on an internal network that reaches only sbx-edge, sbx-dns, the egress proxy, and mirrors | D-21 | [ADR-11-007](adr/007-sandbox-network-local.md) |
-| One-shot `migrate` service gates every Replicant service (`service_completed_successfully`) | D-26 | — |
+| Sandboxes on an internal network that reaches only sbx-edge (HTTP routes plus an SNI egress allowlist; names from static host entries) | D-21 | [ADR-11-007](adr/007-sandbox-network-local.md) |
+| One-shot `migrate` service gates every Replicant service (`service_completed_successfully`); in v0 the `init` one-shot does this (SIMPLIFY-D3) | D-26 | — |
 | Seed data only through APIs (`replicant dev seed`); `replicant dev reset` rebuilds from migrations | D-26 | — |
 | `k8s` profile: kind v0.33.0, Kubernetes 1.36, Cilium, real CRD/controller/runner-api/run-notifier, Kata when `/dev/kvm` exists | D-05, D-06, D-20 | — |
 
@@ -61,19 +89,16 @@ flowchart LR
     LF[langfuse web/worker + clickhouse + valkey + postgres-langfuse]
     S3[("s3: SeaweedFS<br/>(or s3-minio)")]
     DEX[dex]
-    GWS["gateway-shim (WS-03 binary)<br/>+ gateway-state Valkey"]
-    GR["run-grants<br/>grants.replicant.localhost"]
-    RM[repo-mirror]
+    GWS["gateway-shim (WS-03 binary)<br/>+ gateway-state Valkey (not in v0)"]
     OPS["ops-worker, retention-sweeper"]
-    FW -->|"signs run_grant (file key)"| RL
-    GR -.JWKS, revocations.-> RL & GWS & RM
+    MIR["npm / go / pypi mirrors"]
+    FW -->|"run_scope"| RL
+    RL -->|"run-scope check, revocations"| CPA
+    RL -.JWKS, revocation feed.-> GWS
   end
   subgraph Sbx["replicant-sbx (internal: no route off-host)"]
     SBX["sandbox pod group<br/>agent (CLI) · replicant-agentd (tokens) · sidecars<br/>(same images as prod)"]
-    EDGE[sbx-edge nginx]
-    SDNS[sbx-dns]
-    EGP[egress-proxy squid]
-    MIR["npm / go / pypi mirrors"]
+    EDGE["sbx-edge nginx<br/>routes + SNI allowlist"]
   end
   subgraph Obs["profile observability"]
     ALY[alloy] --> LOKI[loki] & TEMPO[tempo] & PROM[prometheus]
@@ -86,10 +111,8 @@ flowchart LR
   end
   RL -->|Docker/Podman API| SBX
   SBX --> EDGE
-  EDGE --> GWS & MEM & CMCP & RL & RM & S3 & ALY
-  SBX --> SDNS
-  SBX --> EGP
-  SBX --> MIR
+  EDGE --> GWS & MEM & CMCP & RL & S3 & ALY
+  EDGE -->|SNI allowlist| MIR
   FW -.->|REPLICANT_RUNNER_URL=k8s| KRA
   RL -->|Signal run.status_changed| TMP
 ```
@@ -100,7 +123,7 @@ flowchart LR
 
 | Profile | Contents | Started by |
 |---|---|---|
-| `core` | 48 services: stores (Replicant Postgres, Temporal and Langfuse Postgres), Temporal, migrate, Dex, control plane, `run-grants`, integrations, workers (Replicant, publisher, projector, eval, ops, retention-sweeper), memory and context, Gitea, runner-local, repo-mirror, gateway shim + `gateway-state`, sandbox edge, egress proxy and mirrors, Langfuse | `replicant dev up` |
+| `core` | Stores (Replicant Postgres, Temporal and Langfuse Postgres), Temporal, migrate, Dex, control plane, integrations, workers (Replicant, publisher, projector, eval, ops, retention-sweeper), memory and context, Gitea, runner-local, gateway shim + `gateway-state`, sandbox edge and mirrors, Langfuse. (The v0 stack: §"The implemented local stack".) | `replicant dev up` |
 | `s3-seaweedfs` | `s3` (SeaweedFS 4.48). `replicant dev up` always adds it unless `--s3 minio` | `replicant dev up` |
 | `observability` | Alloy, Loki, Tempo, Prometheus, Grafana | `replicant dev up --with-observability` |
 | `k8s` | `k8s-provisioner` one-shot that creates the kind cluster `replicant-local` and installs Cilium, (Kata), the contract CRD and WS-02's `replicant-exec` chart | `replicant dev up --with-k8s` |
@@ -133,13 +156,12 @@ nothing else (WS-07 identity.md §9.3 L-1; parity.md P-32). "Prod" is the counte
 | s3 (profile `s3-seaweedfs`) or s3-minio / s3-init | `chrislusf/seaweedfs:4.48` / `amazon/aws-cli:2.37.8` applying WS-10's `config/s3/local/*.json`, plus the `ops` bucket | 8333 | TCP | — | S3: 7 bucket classes + `ops` + `legal` per env (the legal bucket is not created locally, parity.md P-42) |
 | temporal-schema | `temporalio/admin-tools:1.32.1` | — | exit 0 | postgres-temporal | `temporal-sql-tool` pre-upgrade Job |
 | temporal | `temporalio/server:1.32.1` | 7233 | TCP 7233 | temporal-schema | Helm `temporalio/temporal` |
-| temporal-bootstrap | `temporalio/admin-tools:1.32.1` | — | exit 0 | temporal | namespace + search attribute Job (WS-10) |
-| temporal-ui | `temporalio/ui:2.55.0` | 8233 | — | temporal-bootstrap, dex | Temporal UI behind Okta |
+| temporal-bootstrap | `temporalio/admin-tools:1.32.1` | — | exit 0 | temporal | namespace + search attribute Job (WS-10). v0: dev-server flags instead (SIMPLIFY-D1) |
+| temporal-ui | `temporalio/ui:2.55.0` | 8233 | — | temporal-bootstrap, dex | Temporal UI behind Okta. v0: the dev server's built-in UI (SIMPLIFY-D1) |
 | temporal-codec-server | Replicant | 8402 | — | — | `temporal-codec-server` (KMS key) |
-| migrate | Replicant `migrate` | — | exit 0 | postgres-replicant | `migrate` Job (Argo CD PreSync / Helm pre-upgrade, WS-10) |
+| migrate | Replicant `migrate` | — | exit 0 | postgres-replicant | `migrate` Job (Argo CD PreSync / Helm pre-upgrade, WS-10). v0: step of the `init` one-shot (SIMPLIFY-D3) |
 | dex | `dexidp/dex:v2.46.0` | 5556 | `/healthz/ready` :5558 | — | Okta OIDC |
 | control-plane-api | Replicant (`target: dev`) | 8401 | `/readyz` | migrate, s3-init, temporal-bootstrap, dex, langfuse-web | same (prod target) |
-| run-grants | Replicant control-plane-api image, `control-plane-api serve-grants` | 8403 | JWKS GET | control-plane-api | grants app on `grants.<env>.replicant.internal` (WS-07 architecture.md §2.7) |
 | control-plane-web | Replicant (nginx) | 8400 | `/healthz` | control-plane-api | same |
 | identity-service | Replicant (`target: dev`) | — | `/readyz` | migrate, s3-init, broker | same (prod target) |
 | github-integration | Replicant | — | `/readyz` | migrate, s3-init, temporal-bootstrap, broker | same |
@@ -156,18 +178,15 @@ nothing else (WS-07 identity.md §9.3 L-1; parity.md P-32). "Prod" is the counte
 | ecosystem-indexer | Replicant | — | `/readyz` | migrate, ecosystem-stubs | CronJobs + Deployment |
 | ecosystem-stubs | Replicant `tools/ecosystem-stubs` | — | `/healthz` | — | Backstage, CI contract artifacts |
 | zoekt-indexserver / zoekt-webserver | `ghcr.io/sourcegraph/zoekt:0.0.0-20260812144518-c6cd01494dc0` | 6070 | — | gitea | Zoekt StatefulSet |
-| gitea / gitea-bootstrap | `gitea/gitea:28.1.0-rootless` | 3300 | `/api/healthz` | — | GitHub |
-| runner-local | Replicant `go/cmd/runner-local` | 8480 | `/readyz` | s3-init, temporal-bootstrap | runner-api + agentrun-controller + run-notifier |
-| repo-mirror | Replicant | — | — | broker, gitea | repo-mirror |
-| gateway-shim / gateway-state | Replicant `go/cmd/replicant-gateway-shim` (WS-03) / `valkey/valkey:8.1.10-alpine` | 8420 | `/readyz` | run-grants | `replicant-gateway-shim` (core, `replicant-gateway`) and its Valkey |
-| sbx-edge | `nginx:1.30.5` (envsubst template) | — | `nginx -t` | gateway-shim, runner-local | PrivateLink/NLB endpoints + S3 VPC endpoint |
-| sbx-dns | `coredns/coredns:1.14.7` | — | — | — | cluster DNS + Cilium DNS policy |
-| egress-proxy | `ubuntu/squid:6.6-24.04_edge` | — | `squid -k check` | — | egress control (WS-02) |
+| gitea / gitea-bootstrap | `gitea/gitea:28.1.0-rootless` | 3300 | `/api/healthz` | — | GitHub. v0: the gitea service runs the CLI bootstrap and `init` the API part (SIMPLIFY-D3) |
+| runner-local | Replicant `go/cmd/runner-local` | 8480 | `/readyz` | s3-init, temporal-bootstrap, control-plane-api (run-scope) | the Runner on core nodes, with its executor and notifier (ADR-015) |
+| gateway-shim / gateway-state | Replicant `go/cmd/replicant-gateway-shim` (WS-03) / `valkey/valkey:8.1.10-alpine` | 8420 | `/readyz` | control-plane-api | `replicant-gateway-shim` (core, `replicant-gateway`) and its Valkey. v0: no gateway-state (SIMPLIFY-D1, GATEWAY-D1) |
+| sbx-edge | `nginx:1.30.5` (envsubst template) | — | `nginx -t` | gateway-shim, runner-local | the ADR-015 sandbox endpoints + S3 VPC endpoint; its SNI allowlist stands in for the egress proxy and Cilium FQDN policy (SIMPLIFY-D31) |
 | pkg-npm / pkg-go / pkg-pypi | `verdaccio/verdaccio:6.10.5` / `gomods/athens:v0.19.2` / `epicwink/proxpi:1.3.0` | — | — | — | Artifactory/Nexus |
 | clickhouse, valkey | `clickhouse/clickhouse-server:25.12.11.4-alpine`, `valkey/valkey:8.1.10-alpine` | — | ping | — | Langfuse deps |
 | langfuse-web / langfuse-worker | `langfuse/langfuse:4.50.0` / `langfuse/langfuse-worker:4.50.0` | 3000 | `/api/public/health` | postgres-langfuse, clickhouse, valkey, s3-init | Langfuse v4 |
 | alloy, loki, tempo, prometheus, grafana | `grafana/alloy:v1.21.2` running WS-08's `local.alloy`, `grafana/loki:3.7.8` (`auth_enabled: true`, WS-08 runtime overrides), `grafana/tempo:2.10.8`, `prom/prometheus:v3.13.4`, `grafana/grafana:13.0.10` | 12345, 3100, 3200, 9090, 3001 | — | — | WS-08 platform |
-| k8s-provisioner | Replicant `dev/k8s-tools` (kind v0.33.0, Helm v4.3.1, kubectl 1.36, perl) | 8481 (runner-api NodePort) | exit 0 | runner-local, run-grants | exec EKS cluster |
+| k8s-provisioner | Replicant `dev/k8s-tools` (kind v0.33.0, Helm v4.3.1, kubectl 1.36, perl) | 8481 (runner-api NodePort) | exit 0 | runner-local | the hardened sandbox node pool (ADR-015) |
 | webhook-ingress / webhook-forwarder (`github-dev`) | `nginx:1.30.5` / `cloudflare/cloudflared:2026.10.3` | 20241 (tunnel metrics) | — | github-integration | GitHub App webhook ingress (ALB) |
 
 Image tags were taken from the Docker Hub / GHCR / Quay tag APIs [verified: https://hub.docker.com/v2/repositories/<repo>/tags, https://ghcr.io/v2/<repo>/tags/list, https://quay.io/api/v1/repository/keycloak/keycloak/tag/, 2026-10-24], choosing releases at
@@ -188,7 +207,7 @@ same URL works everywhere:
 |---|---|
 | `http://app.replicant.localhost:8400` | control-plane UI |
 | `http://api.replicant.localhost:8401` | control-plane API (`/v1/...`, `/internal/v1/...`) |
-| `http://temporal.replicant.localhost:8233` | Temporal UI (namespace `replicant-local`) |
+| `http://temporal.replicant.localhost:8233` | Temporal UI (namespace `replicant-local`; v0's built-in UI opens on `default`, SIMPLIFY-D1) |
 | `http://dex.replicant.localhost:5556/dex` | OIDC issuer (same value inside and outside containers) |
 | `http://git.replicant.localhost:3300` | Gitea (clone URLs, webhooks, browser) |
 | `http://slack.replicant.localhost:8410` | Slack mock (channels, Block Kit buttons) |
@@ -196,7 +215,6 @@ same URL works everywhere:
 | `http://langfuse.replicant.localhost:3000` | Langfuse |
 | `http://grafana.replicant.localhost:3001` | Grafana (observability profile) |
 | `http://gateway.replicant.localhost:8420` | gateway shim (`/v1/budget`, `/internal/v1/runs/{id}/policy` for tests; backend shown by `replicant dev status`) |
-| `http://grants.replicant.localhost:8403` | core run-grant JWKS and `/grants/revoked` |
 
 Sandboxes see a different, smaller namespace (`*.sbx.local`, ADR-11-007).
 
@@ -212,7 +230,7 @@ flowchart LR
   MIG -->|completed| SVC["every replicant Python service"]
   S3I -->|completed| SVC
   TB -->|completed| TSVC["Temporal clients: control-plane-api, github-integration, workers, runner-local"]
-  CPA -->|healthy| RG[run-grants] -->|healthy| RLS[runner-local] & SHIM[gateway-shim]
+  CPA -->|healthy| RLS[runner-local] & SHIM[gateway-shim]
   LFW -->|healthy| CPA[control-plane-api] & FW[replicant-worker] & EVW[eval-worker]
   DEX[dex] -->|healthy| CPA
 ```
@@ -232,11 +250,10 @@ git-ignored) with mode 0700:
 | `secrets/db_<role>` (16 files) | Passwords for `replicant_migrator`, each `svc_<service>` that WS-10 defines a login for (including `svc_github_token_broker`, `svc_retention_sweeper`, `svc_context_mcp`), `grafana_ro` | 32 random bytes, base64url |
 | `secrets/pg_replicant_superuser` | Bootstrap superuser (only the init scripts use it) | random |
 | `secrets/run_token_signing_key` | ES256 P-256 private key (PEM) the Runner signs run tokens with (prod: exec KMS) | `cryptography` EC keygen |
-| `secrets/run_grant_signing_key` | ES256 P-256 private key (PEM), kid `rg-local-1`, that replicant-worker and eval-worker sign `RunSpec.run_grant` with (prod: core KMS key class `run-grant`) | `cryptography` EC keygen |
-| `generated/run-grant-jwks.json` | Public JWK of `run_grant_signing_key`, served by `run-grants` | derived from the key |
+| `secrets/runner_cp_token` | runner-local's caller token for core's `run-scope` and `revocations` routes (principal `svc_runner-local`, SIMPLIFY-D50) | random |
 | `secrets/temporal_codec_key` | AES-256-GCM key for the payload codec | 32 random bytes |
 | `secrets/runner_worker_tokens`, `runner_worker_token`, `runner_eval_token` | Static dev keys for the Runner orchestration listener, mapped to subjects `system:serviceaccount:replicant-workers:replicant-worker` and `…:replicant-eval:eval-worker` | random |
-| `secrets/gitea_*`, `slack_*`, `scim_token`, `dev_seed_token`, `usage_ingest_token`, `gateway_service_token(s)`, `broker_mirror_token` | Integration secrets | random |
+| `secrets/gitea_*`, `slack_*`, `scim_token`, `dev_seed_token`, `usage_ingest_token`, `gateway_service_token(s)` | Integration secrets | random |
 | `~/.config/replicant/dev-keys.env` (outside the repo) | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `VOYAGE_API_KEY` (embeddings, R2-057) for the shim's passthrough/record backends (WS-03); optional (`env_file required: false`); replay and script backends need none | written by the developer or `replicant dev keys set` |
 | OS keyring (`replicant-dev/github-app`), served by `replicant secret-agent` on `$REPLICANT_DEV_HOME/secret-agent/agent.sock` | Dev GitHub App PEM, webhook secret, client secret (WS-07 github-app.md §5.3). Only github-token-broker (PEM) and github-integration (webhook secret) mount the socket | GitHub manifest conversion (walkthrough 11) |
 | `github-app.env` | Non-secret dev App id, slug, client id | same |
@@ -246,7 +263,7 @@ git-ignored) with mode 0700:
 | S3 `local-replicant-local-ops` | The `ops` bucket (C-ART 2.0.0, CCR-09-10): `kill-switches/v1/state.json` (out-of-band kill-switch mirror; control-plane-api is the only writer, intake, the Publisher and `runner.start_run` read it when Postgres is down) and `exec-revocations/local/<yyyymmddhh>.ndjson` (runner-local's revocation feed, 90-day expiry). Same keys as prod; prod additionally mirrors the kill-switch state to a ConfigMap | s3-init creates it |
 | `secrets/s3_services_credentials`, `s3_gateway_shim_credentials` | AWS shared-credentials INI files for the `replicant-services` and `gateway-shim` S3 identities | rendered with the S3 identities |
 | `secrets/control_plane_shim_token`, `control_plane_internal_callers` | The shim's static token for control-plane-api `GET /internal/v1/tenants/{tenant_id}/gateway-quota`, and control-plane-api's local allowlist mapping it to caller `svc_replicant-gateway-shim` (prod: projected ServiceAccount token, WS-07 identity.md E24; XD-W3-R1V-067) | random |
-| `secrets/runner_revocations_readers`, `runner_revocations_token` | Static dev tokens that the four revocation-feed readers (shim, memory-service, context-mcp, repo-mirror) present to `GET /v1/revocations`, and runner-local's allowlist of them | random |
+| `secrets/runner_revocations_readers`, `runner_revocations_token` | Static dev tokens that the three revocation-feed readers (shim, memory-service, context-mcp) present to `GET /v1/revocations`, and runner-local's allowlist of them (repo-mirror is gone, SIMPLIFY-D40) | random |
 
 `replicant dev secrets rotate [--name <secret>]` regenerates and restarts dependents. Nothing in
 `$REPLICANT_DEV_HOME` is ever committed; a pre-commit hook (`detect-secrets` baseline) blocks it.
@@ -260,7 +277,7 @@ talks to services only through their HTTP APIs.
 
 | Command | Effect |
 |---|---|
-| `replicant dev up [--with-observability] [--with-k8s] [--with-github] [--s3 seaweedfs\|minio] [--runner local\|k8s] [--gateway passthrough\|record\|replay\|script] [--no-build]` | Preflight (§6.4) → generate secrets, the run-grant JWKS and `.env` if absent → `docker compose build` for Replicant images (skipped with `--no-build` or when `REPLICANT_IMAGE_TAG` points at CI-built images) → `docker compose --profile core --profile s3-seaweedfs (or s3-minio) [--profile observability] up -d --wait` → wait for all healthchecks (timeout 10 min) → run `seed` if the stack has never been seeded (marker: `GET /v1/admin/dev/seed-status`) → print the URL table |
+| `replicant dev up [--with-observability] [--with-k8s] [--with-github] [--s3 seaweedfs\|minio] [--runner local\|k8s] [--gateway passthrough\|record\|replay\|script] [--no-build]` | Preflight (§6.4) → generate secrets and `.env` if absent → `docker compose build` for Replicant images (skipped with `--no-build` or when `REPLICANT_IMAGE_TAG` points at CI-built images) → `docker compose --profile core --profile s3-seaweedfs (or s3-minio) [--profile observability] up -d --wait` → wait for all healthchecks (timeout 10 min) → run `seed` if the stack has never been seeded (marker: `GET /v1/admin/dev/seed-status`) → print the URL table |
 | `replicant dev down [--volumes]` | `docker compose down`; `--volumes` also deletes all state |
 | `replicant dev status` | Service health, migration revision (`GET /v1/admin/migrations`), Temporal namespace and worker deployment versions, current gateway mode, runner selection, seeded bundle |
 | `replicant dev doctor` | Preflight checks plus: `*.localhost` resolution, Dex users vs identity-service SCIM users, Gitea webhook delivery test, run-token JWKS reachable from sbx-edge, a canary sandbox that proves egress denial (`curl https://example.com` must fail) |
@@ -299,7 +316,7 @@ seeded admin **user** carol.
 | 1 | Identity (SCIM, as Okta) | identity-service `POST /scim/v2/Users` ×6, `POST /scim/v2/Groups` ×7 with members | Users alice, bob, carol, dave, erin, grace (`usr_…` minted by identity-service; Okta `sub` = Dex `userID`). Groups `replicant-admins` (carol), `replicant-operators` (carol, grace), `replicant-release-managers` (grace), `replicant-platform-admins` (grace), `payments-engineers` (alice, bob, dave, erin), `payments-approvers` (bob), `payments-admins` (erin) |
 | 2 | Tenants and spend limits | control-plane-api `PUT /v1/admin/platform-caps` (local caps: `platform_daily_usd_max` 50, `platform_monthly_usd_max` 500, `tenant_daily_usd_default` 10, `tenant_monthly_usd_default` 100), then `POST /v1/admin/tenants`, which fills `quotas.monthly_budget_usd`/`daily_budget_usd` from those defaults (WS-07 architecture.md §2.10) | `payments`, `local-dev` (C-IDS reserved for local use), `replicant-eval` (reserved), each with a quota, so the shim's `GET /internal/v1/tenants/{t}/gateway-quota` returns 200 and never `tenant_quota_unset` (WS-03 gateway.md §6.1) |
 | 3 | Role bindings | control-plane-api `PUT /v1/admin/role-bindings` (proxied to identity-service; WS-07 identity.md §5.3 roles) | `{group: payments-engineers, tenant: payments, role: engineer}`, `{group: payments-approvers, tenant: payments, role: approver}`, `{group: payments-admins, tenant: payments, role: tenant_admin}`, `{group: replicant-operators, scope: platform, role: operator}`, `{group: replicant-release-managers, scope: platform, role: release_manager}`, `{group: replicant-platform-admins, scope: platform, role: platform_admin}`; `settings.replicant_admin_group: replicant-admins` (D-25: `memory:admin` comes only from that group, never from a binding) |
-| 4 | Gitea | Gitea `POST /admin/users` ×5; `POST /orgs` `acme-payments`; `POST /orgs/acme-payments/teams` (`payments-maintainers` write, `readers` read); `POST /orgs/acme-payments/repos` ×3; git push of `dev/sample-repos/*.bundle` via HTTP as replicant-bot; `POST /repos/{o}/{r}/branch_protections` (`main`: `required_approvals: 1`, `enable_push: false` except replicant-bot not whitelisted, so PRs are required); `POST /orgs/acme-payments/hooks` (type `gitea`, `content_type: json`, events `issues, issue_comment, pull_request, pull_request_review_approved, pull_request_review_rejected, pull_request_review_comment, pull_request_comment, pull_request_sync`, secret = `gitea_webhook_secret`, URL `http://github-integration:8080/webhooks/gitea`) | Repos `acme-payments/ledger-api` (Go service, planted FX-fee double-reversal bug matching the C-JOBREQ example), `acme-payments/checkout-web` (Next.js app with Playwright smoke tests and a planted rounding bug in the refund summary page), `acme-payments/payments-contracts` (OpenAPI + AsyncAPI). alice, bob, erin: write; dave: read only; carol: none |
+| 4 | Gitea | Gitea `POST /admin/users` ×5; `POST /orgs` `acme-payments`; `POST /orgs/acme-payments/teams` (`payments-maintainers` write, `readers` read); `POST /orgs/acme-payments/repos` ×3; git push of `dev/sample-repos/*.bundle` via HTTP as replicant-bot; `POST /repos/{o}/{r}/branch_protections` (`main`: `required_approvals: 1`, `enable_push: false` except replicant-bot not whitelisted, so PRs are required); `POST /orgs/acme-payments/hooks` (type `gitea`, `content_type: json`, events `issues, issue_comment, pull_request, pull_request_review_approved, pull_request_review_rejected, pull_request_review_comment, pull_request_comment, pull_request_sync`, secret = `gitea_webhook_secret`, URL `http://github-integration:8080/webhooks/gitea`; v0: `http://control-plane-api:8401/webhooks/gitea`, SIMPLIFY-D3) | Repos `acme-payments/ledger-api` (Go service, planted FX-fee double-reversal bug matching the C-JOBREQ example), `acme-payments/checkout-web` (Next.js app with Playwright smoke tests and a planted rounding bug in the refund summary page), `acme-payments/payments-contracts` (OpenAPI + AsyncAPI). alice, bob, erin: write; dave: read only; carol: none |
 | 5 | Identity links | identity-service `POST /v1/admin/dev/identity-links` (local-only endpoint; prod uses the link flow) | Gitea user IDs and Slack mock user IDs linked to each `usr_…`. Not linked on purpose: Gitea user `mallory` (created too) so walkthrough 6 can show an ignored comment |
 | 6 | SCM installation | github-integration `POST /v1/admin/scm-installations` | `provider: gitea, host: git.replicant.localhost:3300, org: acme-payments` opted in for tenant `payments`, and `org: replicant-eval-golden` for tenant `replicant-eval`. **Host form (XD-FIX-R1-273):** `repo.host` is the URL authority, lowercase, with the port kept unless it is the scheme default; so every reference is `git.replicant.localhost:3300/<owner>/<name>` (`ReplicantRepos`, CLI `--repo`, JobRequest) |
 | 7 | Slack | slack-mock already has the workspace; control-plane-api `PUT /v1/admin/tenants/payments/settings` | approval channel `C0PAYAPPR1` (operational config, ADR-013) |
@@ -328,11 +345,11 @@ Measured values replace these when `replicant dev measure` runs in CI on the ref
 | Temporal | server (4 services in one process), UI, codec | ~0.9 GB | 4 history shards |
 | Langfuse (core) | web, worker, ClickHouse, Valkey | ~2.8 GB | ClickHouse dominates |
 | Identity, Git, search | Dex, Gitea, Zoekt ×2 | ~0.7 GB | |
-| Egress | squid, 3 mirrors, sbx-edge, sbx-dns | ~0.5 GB | mirror caches on disk |
-| Replicant services | 22 containers (adds run-grants, ops-worker, retention-sweeper) | ~4.6 GB | replicant-worker ~0.7 GB (LangGraph + Temporal SDK) |
+| Egress | 3 mirrors, sbx-edge | ~0.5 GB | mirror caches on disk |
+| Replicant services | 21 containers (adds ops-worker, retention-sweeper) | ~4.6 GB | replicant-worker ~0.7 GB (LangGraph + Temporal SDK) |
 | Gateway | gateway-shim (Go), gateway-state (Valkey) | ~0.15 GB | the old Python stub was ~0.2 GB; net change small |
 | **core subtotal** | | **~10.5 GB** | |
-| Sandboxes (core) | `REPLICANT_MAX_CONCURRENT_RUNS=2`; each run is a pod group (pause, agentd ~40 MB, uploader/watchdog ~60 MB, agent, QA services) | up to ~10.5 GB | implementer on `go-service`: 2 CPU / 4 GiB; QA on `nextjs-app` (build + Playwright Chromium): 4 CPU / 6 GiB |
+| Sandboxes (core) | `REPLICANT_MAX_CONCURRENT_RUNS=2`; each run is a pod group (sandbox-init, pause, agentd ~40 MB, prepare, agent, uploader with the watchdog ~60 MB, QA services; SIMPLIFY-D20) | up to ~10.5 GB | implementer on `go-service`: 2 CPU / 4 GiB; QA on `nextjs-app` (build + Playwright Chromium): 4 CPU / 6 GiB |
 | observability | Alloy running WS-08's `local.alloy` (two Loki pipelines plus second-pass gitleaks redaction), Loki, Tempo, Prometheus, Grafana | ~2.1 GB | 7-day retention; the redaction stage is CPU-heavy under log bursts |
 | k8s profile | kind (2 nodes), Cilium, runner-api, controller, notifier (+Kata VM overhead per pod) | ~2.5 GB + sandboxes | sandboxes run here instead of runner-local while `--runner k8s` |
 
@@ -365,7 +382,7 @@ finishes, which is what happens anyway in a bugfix job.
 ### 6.4 Preflight (`replicant dev up`)
 
 Fails with an actionable message if: available VM memory < 20 GB (or < 14 GB with `--lean`); free disk
-< 60 GB; Compose < 2.24; ports 3000, 3300, 5556, 7233, 8233, 8333, 8400–8403, 8410, 8420, 8480 busy;
+< 60 GB; Compose < 2.24; ports 3000, 3300, 5556, 7233, 8233, 8333, 8400–8402, 8410, 8420, 8480 busy;
 `*.localhost` does not resolve to 127.0.0.1; the container socket is unreachable; the `replicant-sbx`
 subnet `172.31.250.0/24` collides with an existing network.
 
@@ -374,7 +391,7 @@ subnet `172.31.250.0/24` collides with an existing network.
 `replicant dev reset` rebuilds every store from empty and re-runs migrations; it never runs SQL:
 
 1. `docker compose stop` all Replicant services (stores keep running).
-2. Delete volumes `pg-replicant-data`, `s3-data` (or `minio-data`), `runner-local-state`, `repo-mirror-cache`,
+2. Delete volumes `pg-replicant-data`, `s3-data` (or `minio-data`), `runner-local-state`,
    `zoekt-data`, `pg-langfuse-data`, `clickhouse-data`, `valkey-data`, `gateway-state-data`
    (and `pg-temporal-data` with `--temporal`;
    Gitea volumes unless `--keep-gitea`). Sandbox containers and volumes labelled
@@ -411,14 +428,14 @@ Total time on the minimum laptop: about 6–9 minutes, dominated by the smoke ev
 **What is the minimum laptop spec for the `core` and `observability` profiles together?**
 32 GB RAM with 24 GB given to the container VM or cgroup budget, 8 performance cores (VM 8 vCPU),
 150 GB free SSD, macOS 15+ on Apple Silicon or Linux with cgroup v2 (§6.2). The budget now includes the gateway
-shim and its Valkey, `run-grants`, the ops and retention workers, agentd and the WS-02 sidecars in every run's pod
+shim and its Valkey, the ops and retention workers, agentd and the WS-02 sidecars in every run's pod
 group, and WS-08's `local.alloy` pipeline with second-pass redaction (§6.1: core ~10.5 GB, observability ~2.1 GB,
 two concurrent runs ~10.5 GB, about 23 GB). These remain estimates until `replicant dev measure` produces measured
 numbers on the two reference machines (M3 Pro 36 GB; Linux 8C/32 GB) in the weekly `local-stack` CI job.
 
 **Which production behaviors cannot be reproduced locally, and how are they covered instead?** See
 [parity.md §3](parity.md#3-production-behaviors-that-cannot-be-reproduced-locally-must-answer), which now
-includes run-grant signing (KMS), agentd token custody, the shim versus enterprise gateway split, the QA builder
+includes Runner token signing (KMS), agentd token custody, the shim versus enterprise gateway split, the QA builder
 seccomp exception, dev-target images, the split history export, and the fourth exec role `run-notifier`.
 
 ## Open questions
@@ -445,10 +462,10 @@ webhook forwarder (decided by WS-07 ADR-07-004: Cloudflare quick tunnel).
 
 ## Interfaces
 
-- **Consumed:** C-ARCH 2.0.0 §3 (composition), §1.1 (agentd, shim), §6 (credentials, run grants); C-PG 2.0.0
+- **Consumed:** C-ARCH 3.0.0 §3 (composition), §1.1 (agentd, shim), §6 (credentials, run scope); C-PG 2.0.0
   (instances, roles, migrate); C-ART 2.0.0 (buckets, keys, split history export); C-IDS 2.0.0 (namespace, search
-  attributes, task queues, IDs); C-RUNNER 3.0.0 (local listener URL `http://localhost:8480`, static dev key, run
-  grants, per-audience tokens); C-CRD 3.0.0 (applied unmodified in the `k8s` profile); C-DEF 3.0.0 (registry publish,
+  attributes, task queues, IDs); C-RUNNER 4.0.0 (local listener URL `http://localhost:8480`, static dev key, run
+  scope, per-audience tokens); C-CRD 4.0.0 (applied unmodified in the `k8s` profile); C-DEF 3.0.0 (registry publish,
   bundle build); C-STATE 2.0.0 (kill-switch mirror: control-plane-api writer plus the break-glass role, revocation list); C-MSG 2.0.0.
 - **Provided:** the compose stack, `replicant dev` CLI contract, seed data set, and the local configuration
   knobs other workstreams' services must accept (cross-ws-dependencies.md XD-11-01..15 and the XD-FIX-R1-* entries).

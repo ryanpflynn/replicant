@@ -1,5 +1,7 @@
 #!/bin/sh
-# v0 gitea-bootstrap (PLATFORM-D6). Idempotent. Never prints a secret.
+# v0 gitea-bootstrap (PLATFORM-D6). Idempotent. Never prints a secret. The compose stack no longer runs it: the gitea
+# service and the `init` one-shot do the same steps (SIMPLIFY-D3; images/replicant-py/init.py). Kept for
+# services/control-plane-api/tests/smoke/smoke.sh, which bootstraps a standalone Gitea with it.
 #  1. the spec bootstrap.sh: site admin `gitea-admin` and the `replicant-bot` user (CLI)
 #  2. human user `alice` (random password; the E2E driver acts as her through the admin `Sudo` header)
 #  3. org acme-payments, team payments-maintainers (write) with replicant-bot and alice

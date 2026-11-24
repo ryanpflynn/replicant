@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -72,6 +73,12 @@ type manifestArtifact struct {
 
 func uploaderMain() int {
 	log := httpx.Logger("uploader")
+	// The workspace disk watchdog (formerly its own container) samples for as long as the uploader runs.
+	limit, _ := strconv.ParseInt(os.Getenv("REPLICANT_WORKSPACE_LIMIT_BYTES"), 10, 64)
+	wctx, wstop := context.WithCancel(context.Background())
+	defer wstop()
+	go watchdog(wctx, sandbox.WorkspaceDir, sandbox.StatusDir, limit,
+		time.Duration(httpx.EnvInt("REPLICANT_WATCHDOG_INTERVAL_SECONDS", 3))*time.Second)
 	bs, err := sandbox.ReadBootstrap("")
 	if err != nil || bs.WS02 == nil {
 		log.Error("bootstrap.json unreadable", "err", err)

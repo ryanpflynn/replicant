@@ -1,10 +1,14 @@
 #!/bin/sh
-# Runner contract cases (test-strategy.md §5.3) and SEC-EGRESS-01..08 (§8.1) against runner-local IN THE LIVE v0
-# STACK (replicant dev up --profile v0 [--with-observability]): the real sandbox network replicant-sbx (sbx-dns,
-# sbx-edge, egress proxy, mirrors), run-grants, Gitea, the broker, repo-mirror and the gateway shim (script backend).
-# The driver is go/cmd/runner-local/smoke in SMOKE_TARGET=v0 mode, run in a `plat-` container on replicant-core.
+# Runner contract cases (test-strategy.md §5.3) and SEC-EGRESS-01..11 (§8.1, SIMPLIFY-D30) against runner-local IN THE
+# LIVE v0 STACK (replicant dev up --profile v0 [--with-observability]): the real sandbox network replicant-sbx (sbx-edge:
+# static sandbox hosts, SNI egress allowlist), core (run scope, SIMPLIFY-D50), Gitea, the broker and the gateway shim
+# (script backend). The driver is go/cmd/runner-local/smoke in SMOKE_TARGET=v0 mode, run in a `plat-` container on
+# replicant-core; it records each job id it stages in core's intake through the dev-only
+# POST /v1/admin/dev/job-requests (dev seed token, SIMPLIFY-D54) so runner-local's run-scope admission finds it.
 #
 #   tests/runner-contract/run-v0.sh [driver args]      e.g. --mode contract | --only SEC-EGRESS,RC-RUN-13
+# RC-CAN-01 (cancel while Pending) needs runner-local's test hook and is SKIPPED otherwise: start the stack with
+# RUNNER_TEST_HOOKS=true replicant dev up --profile v0, run --only RC-CAN-01, then dev up again without it.
 # Results: tests/runner-contract/results-v0.json (git-ignored). Exit status = the driver's.
 set -eu
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -13,7 +17,7 @@ NET=replicant-core
 ENGINE="${REPLICANT_CONTAINER_CLI:-podman}"
 # Running container of a compose service (both compose implementations set these labels; names differ).
 ctr() { "$ENGINE" ps -q --filter label=com.docker.compose.project=replicant --filter "label=com.docker.compose.service=$1" | head -1; }
-for c in runner-local gateway-shim repo-mirror sbx-edge sbx-dns egress-proxy; do
+for c in runner-local gateway-shim sbx-edge control-plane-api; do
   [ -n "$(ctr "$c")" ] || { echo "v0 service $c is not running (replicant dev up --profile v0)"; exit 2; }
 done
 # SEC-EGRESS and the contract cases run on the scripted gateway: switch gateway-shim to `script` for the run and
@@ -63,6 +67,9 @@ turns:
       usage: {input_tokens: 12000, output_tokens: 200}
 YAML
 
+# RC-CAN-01 needs runner-local's RUNNER_TEST_HOOKS=true hold hook (off by default); the driver SKIPs it otherwise.
+HOOKS="$("$ENGINE" inspect "$(ctr runner-local)" --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^RUNNER_TEST_HOOKS=//p' | head -1)"
+
 RES="$ROOT/tests/runner-contract/results-v0.json"
 "$ENGINE" rm -f plat-contract-driver >/dev/null 2>&1 || true
 if [ "$ENGINE" = podman ]; then
@@ -74,11 +81,12 @@ fi
 "$ENGINE" run --name plat-contract-driver --network "$NET" -v "$ROOT:/src:ro" --security-opt label=disable \
   -v "$SOCK:/var/run/docker.sock" -e CONTAINER_HOST=unix:///var/run/docker.sock -v plat-gomod:/go/pkg/mod -v plat-gocache:/root/.cache \
   -v replicant_runner-local-state:/runner-state:ro -v "$S:/secrets:ro" \
-  -e SMOKE_TARGET=v0 -e GOWORK=off -e GOFLAGS=-mod=mod \
+  -e SMOKE_TARGET=v0 -e "RUNNER_TEST_HOOKS=${HOOKS:-false}" -e GOWORK=off -e GOFLAGS=-mod=mod \
   -e S3_ENDPOINT=http://s3.replicant.localhost:8333 -e S3_ACCESS_KEY=replicant-services -e "S3_SECRET_KEY=$(cat "$S/s3_services_secret")" \
   -e RUNNER_URL=http://runner-local:8480 -e RUNNER_SANDBOX_URL=http://runner-local:8490 -e SHIM_URL=http://gateway-shim:8420 \
   -e WORKER_TOKEN_FILE=/secrets/runner_worker_token -e READER_TOKEN_FILE=/secrets/runner_revocations_token \
-  -e SHIM_TOKEN_FILE=/secrets/gateway_service_token -e GRANT_KEY_FILE=/secrets/run_grant_signing_key \
+  -e SHIM_TOKEN_FILE=/secrets/gateway_service_token \
+  -e SMOKE_CORE_URL=http://control-plane-api:8401 -e SMOKE_DEV_SEED_TOKEN_FILE=/secrets/dev_seed_token \
   -e TEMPORAL_ADDRESS=temporal:7233 -e RUNNER_STATE_DIR=/runner-state \
   -e GITEA_URL=http://gitea:3300 -e GITEA_ADMIN_PASSWORD_FILE=/secrets/gitea_admin_password -e RESULTS_FILE=/tmp/results.json \
   -w /src/go/cmd/runner-local docker.io/library/golang:1.26 \

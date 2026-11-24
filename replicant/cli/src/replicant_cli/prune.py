@@ -1,9 +1,10 @@
 """`replicant dev prune`: keep the container VM's disk from filling (the Podman VM hangs when the host disk is full).
 
 Default (safe): finished sandbox containers (ar-*, only runs with no container still running), exited one-shot
-containers of project `replicant` (migrate, bootstraps: compose re-runs them on the next `up`), dangling images,
+containers of project `replicant` (init: compose re-runs it on the next `up`), dangling images,
 `fstrim -a` in the Podman machine (Docker reclaims space itself). --images: unused images except localhost/replicant/*:dev, the images the compose
-files reference, the sandbox images and the test-runner images. --volumes: anonymous unused volumes and the volumes of
+file references, the sandbox images and the test-runner images; the per-service images that replicant-py and
+replicant-go replaced (SIMPLIFY-D2) are removed too. --volumes: anonymous unused volumes and the volumes of
 sandbox runs that have no container left. Named volumes of project `replicant` (Postgres, S3, Gitea, ...) are never
 touched.
 """
@@ -22,6 +23,12 @@ from replicant_cli.testing import GO_IMAGE, NODE_IMAGE, PLAYWRIGHT_IMAGE
 RUN_LABEL = "replicant.example.com/run-id"
 SMOKE_IMAGES = ("docker.io/temporalio/admin-tools:1.32.1",)  # control-plane-api tests/smoke/env.sh
 LOW_SPACE_GIB = 10
+# localhost/replicant/<name>:dev images no compose service or sandbox uses since SIMPLIFY-D2 (one replicant-py and one
+# replicant-go image); --images removes them although they carry the :dev tag.
+RETIRED_IMAGES = frozenset({
+    "migrate", "control-plane-api", "github-integration", "github-token-broker", "memory-service", "slack-integration",
+    "slack-mock", "replicant-worker", "publisher-worker", "replicant-projector", "runner-local", "repo-mirror",
+    "replicant-gateway-shim"})
 
 
 def free_gib() -> float:
@@ -37,13 +44,7 @@ def _norm_ref(ref: str) -> str:
 def keep_images(p: Paths) -> set[str]:
     refs = {img for img, _, _ in compose.SANDBOX_IMAGES}
     refs |= {GO_IMAGE, NODE_IMAGE, PLAYWRIGHT_IMAGE, *SMOKE_IMAGES}
-    for prof in ("v0,observability", "core,observability"):
-        refs |= {s.image for s in compose.load_services(p, prof).values() if s.image}
-    # image: lines the profile filter misses (other profiles, override-only services)
-    env = compose.env_values(p)
-    for f in p.compose_dir.glob("compose*.yaml"):
-        for m in re.finditer(r"^\s*image:\s*[\"']?([^\s\"'#]+)", f.read_text(), re.M):
-            refs.add(_norm_ref(compose.interpolate(m.group(1), env)))
+    refs |= {s.image for s in compose.load_services(p, compose.ALL_PROFILES).values() if s.image}
     # base images of the repo's Dockerfiles, so `replicant dev up` rebuilds without pulling
     for f in [*p.root.glob("**/Dockerfile*")]:
         if "node_modules" in f.parts or ".venv" in f.parts:
@@ -92,7 +93,9 @@ def _unused_images(p: Paths) -> list[tuple[str, str]]:
         names = im["Names"]
         if not names or im["Id"] in used:
             continue  # dangling ones go with the default prune
-        if any(n in keep or (n.startswith("localhost/replicant/") and n.endswith(":dev")) for n in names):
+        if any(n in keep or (n.startswith("localhost/replicant/") and n.endswith(":dev")
+                             and n.removeprefix("localhost/replicant/").removesuffix(":dev") not in RETIRED_IMAGES)
+               for n in names):
             continue
         out.append((im["Id"], ", ".join(names)))
     return out

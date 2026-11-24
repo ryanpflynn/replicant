@@ -31,7 +31,6 @@ const (
 	TerminationDefault = "/dev/termination-log"
 	LoopbackGateway    = "127.0.0.1:7800"
 	LoopbackMCP        = "127.0.0.1:7801"
-	LoopbackGit        = "127.0.0.1:7802"
 	LoopbackInputs     = "127.0.0.1:7803"
 )
 
@@ -73,7 +72,6 @@ type Endpoints struct {
 	MemoryMCP     string `json:"memory_mcp,omitempty"`
 	ContextMCP    string `json:"context_mcp,omitempty"`
 	CodeSearchMCP string `json:"code_search_mcp,omitempty"`
-	RepoMirror    string `json:"repo_mirror"`
 	OTLP          string `json:"otlp,omitempty"`
 	LogTransport  string `json:"log_transport,omitempty"`
 }
@@ -82,7 +80,7 @@ type BootstrapRepo struct {
 	RepoID     string `json:"repo_id"`
 	BaseSHA    string `json:"base_sha"`
 	FetchDepth int    `json:"fetch_depth"`
-	// Local additions so agentd can tell repo-mirror which upstream repository the id names.
+	// Local additions (the repository the id names; informational since the repo arrives as a bundle, SIMPLIFY-D40).
 	Provider string `json:"provider,omitempty"`
 	Host     string `json:"host,omitempty"`
 	Owner    string `json:"owner,omitempty"`

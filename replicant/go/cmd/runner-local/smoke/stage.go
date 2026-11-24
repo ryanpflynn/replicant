@@ -4,10 +4,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"example.com/replicant/internal/runner/api"
+	"example.com/replicant/internal/runner/httpx"
 	"example.com/replicant/internal/runner/ids"
 	"example.com/replicant/internal/runner/jcsx"
 	"example.com/replicant/internal/runner/s3x"
@@ -96,14 +102,17 @@ type runOpts struct {
 	tenant, role, lai, workflowType string
 	jobID                           string
 	baseSHA                         string
-	envRef                          *api.DefinitionRef
-	budget                          float64
-	active, finalize, startup       int32
-	scriptKey, scriptSet            string
-	corruptInput                    bool
-	extraObjects                    []extraObj
-	steering                        bool
-	agentRole                       string
+	// bundleBaseSHA is the commit the staged repo bundle carries as refs/replicant/base (default baseSHA); a
+	// different value stages a bundle that does not hold the plan's base_sha (RC-RUN-09)
+	bundleBaseSHA             string
+	envRef                    *api.DefinitionRef
+	budget                    float64
+	active, finalize, startup int32
+	scriptKey, scriptSet      string
+	corruptInput              bool
+	extraObjects              []extraObj
+	steering                  bool
+	agentRole                 string
 	// repo onboarding (§8c): run-plan repo_config, config_base_sha and mcp_auto_allow
 	repoConfig, configBaseSHA string
 	mcpAutoAllow              []map[string]any
@@ -119,7 +128,7 @@ type staged struct {
 	spec                  map[string]any
 	body                  []byte
 	digest                string
-	grant                 string
+	scope                 api.RunScope
 	prefixes              api.ArtifactPrefixes
 }
 
@@ -160,7 +169,7 @@ func (e *env) defaults(o runOpts) runOpts {
 	return o
 }
 
-// stage writes the inputs (run plan, prompts, task packet, manifest) and builds the RunSpec and its grant.
+// stage writes the inputs (run plan, prompts, task packet, manifest) and builds the RunSpec and its run scope.
 func (e *env) stage(ctx context.Context, o runOpts) (*staged, error) {
 	o = e.defaults(o)
 	wf := o.jobID
@@ -173,11 +182,11 @@ func (e *env) stage(ctx context.Context, o runOpts) (*staged, error) {
 	if o.envRef != nil {
 		envRef = *o.envRef
 	}
-	scopes := []string{"credentials:aws", "gateway:invoke", "repo:fetch"}
+	scopes := []string{"credentials:aws", "gateway:invoke"}
 	if o.steering {
 		scopes = append(scopes, "inbox:read")
 	}
-	audiences := []string{"ai-gateway", "repo-mirror", "runner-sandbox"}
+	audiences := []string{"ai-gateway", "runner-sandbox"}
 	agent := agentSpec()
 	if o.role == "qa" {
 		agent["roles"] = []string{"qa"}
@@ -225,6 +234,20 @@ func (e *env) stage(ctx context.Context, o runOpts) (*staged, error) {
 	}
 	objs := []obj{{"run_plan", "run_inputs", "run_plan", "", "application/json", planB}, {"system_append", "agent_prompt", "system_append", "", "text/markdown", sys},
 		{"first_message", "agent_prompt", "first_message", "", "text/markdown", first}, {"task_packet", "task_packet", "context_file", "task_packet.json", "application/json", task}}
+	// the repository as a git bundle (SIMPLIFY-D40; replicant_worker/activities/repo_bundle.py): prepare's only source
+	bundleBase := o.baseSHA
+	if o.bundleBaseSHA != "" {
+		bundleBase = o.bundleBaseSHA
+	}
+	refs := map[string]string{"refs/replicant/base": bundleBase}
+	if o.configBaseSHA != "" && o.configBaseSHA != o.baseSHA {
+		refs["refs/replicant/config"] = o.configBaseSHA
+	}
+	bundle, err := e.repoBundle(refs)
+	if err != nil {
+		return nil, fmt.Errorf("repo bundle: %v", err)
+	}
+	objs = append(objs, obj{"repo_bundle", "run_inputs", "repo_bundle", "", "application/x-git-bundle", bundle})
 	for _, x := range o.extraObjects {
 		objs = append(objs, obj{x.name, x.typ, x.place, x.path, x.ctype, x.body})
 	}
@@ -275,7 +298,7 @@ func (e *env) stage(ctx context.Context, o runOpts) (*staged, error) {
 		"callback":      map[string]any{"kind": "temporal_signal", "namespace": "replicant-local", "workflow_id": wf, "signal_name": "run.status_changed"},
 	}
 	st := &staged{runID: runID, key: key, jobID: o.jobID, wf: wf, spec: spec, prefixes: pre}
-	if err := e.sign(st, o, audiences, scopes); err != nil {
+	if err := e.scope(st, o, audiences, scopes); err != nil {
 		return nil, err
 	}
 	if err := e.registerPolicy(ctx, st, o); err != nil {
@@ -292,6 +315,8 @@ func fileName(name, path, place string) string {
 		return "system-append.md"
 	case "first_message":
 		return "first-message.md"
+	case "repo_bundle":
+		return "repo.bundle"
 	}
 	if path != "" {
 		return path
@@ -299,37 +324,78 @@ func fileName(name, path, place string) string {
 	return name
 }
 
-// sign computes spec_digest over the body without run_grant/trace_context and signs RunGrantClaims.
-func (e *env) sign(st *staged, o runOpts, audiences, scopes []string) error {
-	st.spec["run_grant"] = "x.y.z"
+// actingFor is the requester of every job the driver stages.
+var actingFor = ids.Derived("usr", "replicant-dev-user", "alice")
+
+// scope sets RunSpec.run_scope, records the job's intake record in core (the fake core in isolated mode; the live
+// core through its dev-only route in v0 mode, SIMPLIFY-D54; the worker's jobs exist in core for real) and computes
+// spec_digest over the body without run_scope/trace_context (C-RUNNER 4.0.0).
+func (e *env) scope(st *staged, o runOpts, audiences, scopes []string) error {
+	repo := fmt.Sprint(e.gitea.id)
+	st.scope = api.RunScope{RepoIDs: []string{repo}, Audiences: audiences, Scopes: scopes, ActingFor: actingFor}
+	st.spec["run_scope"] = st.scope
+	e.core.addJob(o.jobID, o.tenant, []string{repo}, actingFor)
+	if err := e.registerJob(o.jobID, o.tenant, []string{repo}, actingFor); err != nil {
+		return err
+	}
 	b, _ := json.Marshal(st.spec)
 	d, err := jcsx.SpecDigest(b)
 	if err != nil {
 		return err
 	}
 	st.digest = d
-	now := time.Now().Unix()
-	claims := api.RunGrantClaims{Iss: "replicant-local-core", Typ: api.GrantTyp, Jti: ids.ULID("rgr"), Iat: now,
-		Exp: now + int64(o.startup+o.active+o.finalize) + 300, TenantID: o.tenant, JobID: o.jobID, RunID: st.runID, Role: o.role,
-		RepoIDs: []string{fmt.Sprint(e.gitea.id)}, Audiences: audiences, Scopes: scopes, BudgetUSD: o.budget,
-		ActingFor: ids.Derived("usr", "replicant-dev-user", "alice"), SpecDigest: d}
-	g, err := e.grants.signer.Sign(api.GrantTyp, claims)
-	if err != nil {
-		return err
-	}
-	st.grant = g
-	st.spec["run_grant"] = g
-	st.body, _ = json.Marshal(st.spec)
+	st.body = b
 	return nil
 }
 
-func (e *env) resign(st *staged, o runOpts) {
+// registerJob records, in v0 mode, a job id the driver has not recorded yet in the live core's intake
+// (POST /v1/admin/dev/job-requests, dev seed token, SIMPLIFY-D54) so runner-local's run-scope admission finds it.
+// Like the fake core's addJob, the first tenant a job id is staged for owns it (RC-SCOPE-05 stages the same job id
+// for another tenant and expects 422).
+func (e *env) registerJob(jobID, tenant string, repoIDs []string, actingFor string) error {
+	if e.target != "v0" {
+		return nil
+	}
+	e.mu.Lock()
+	done := e.registered[jobID]
+	e.mu.Unlock()
+	if done {
+		return nil
+	}
+	body := map[string]any{"job_id": jobID, "tenant_id": tenant, "repo_ids": repoIDs, "requester_principal_id": actingFor}
+	if strings.HasPrefix(e.rb, "rb_") {
+		body["release_bundle_id"] = e.rb
+	}
+	b, _ := json.Marshal(body)
+	req, _ := http.NewRequest(http.MethodPost, e.coreURL+"/v1/admin/dev/job-requests", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+e.seedToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("register job %s in core: %v", jobID, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 && resp.StatusCode != 201 {
+		rb, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("register job %s in core: %d %s", jobID, resp.StatusCode, rb)
+	}
+	e.mu.Lock()
+	if e.registered == nil {
+		e.registered = map[string]bool{}
+	}
+	e.registered[jobID] = true
+	e.mu.Unlock()
+	return nil
+}
+
+// rescope rebuilds the body after a test changed st.spec (the scope itself is unchanged).
+func (e *env) rescope(st *staged, o runOpts) {
 	o = e.defaults(o)
-	scopes := []string{"credentials:aws", "gateway:invoke", "repo:fetch"}
+	scopes := []string{"credentials:aws", "gateway:invoke"}
 	if o.steering {
 		scopes = append(scopes, "inbox:read")
 	}
-	_ = e.sign(st, o, []string{"ai-gateway", "repo-mirror", "runner-sandbox"}, scopes)
+	_ = e.scope(st, o, []string{"ai-gateway", "runner-sandbox"}, scopes)
 }
 
 func (e *env) registerPolicy(ctx context.Context, st *staged, o runOpts) error {
@@ -398,4 +464,70 @@ func failureReason(st map[string]any) string {
 		return fmt.Sprint(f["reason"])
 	}
 	return ""
+}
+
+// repoBundle builds the run's repo bundle as the worker's context.stage_inputs does: the wanted commits fetched
+// from the SCM (the fake Gitea's bare repository; the real Gitea in v0 mode) under refs/replicant/*, then
+// `git bundle create`. Cached per commit set.
+func (e *env) repoBundle(refs map[string]string) ([]byte, error) {
+	keys := make([]string, 0, len(refs))
+	for r, sha := range refs {
+		keys = append(keys, r+"="+sha)
+	}
+	sort.Strings(keys)
+	ck := strings.Join(keys, ",")
+	e.mu.Lock()
+	if b, ok := e.bundles[ck]; ok {
+		e.mu.Unlock()
+		return b, nil
+	}
+	e.mu.Unlock()
+	src := filepath.Join(e.gitea.root, e.gitea.owner, e.gitea.name+".git")
+	auth := []string{"-c", "uploadpack.allowAnySHA1InWant=true"}
+	if e.target == "v0" {
+		pw, err := httpx.ReadToken(httpx.Env("GITEA_ADMIN_PASSWORD_FILE", ""))
+		if err != nil {
+			return nil, err
+		}
+		src = httpx.Env("GITEA_URL", "http://gitea:3300") + "/" + e.gitea.owner + "/" + e.gitea.name + ".git"
+		auth = []string{"-c", "http.extraHeader=Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("gitea-admin:"+pw))}
+	}
+	dir, err := os.MkdirTemp("", "smoke-bundle-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	git := func(args ...string) error {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("git %s: %v %s", args[0], err, out)
+		}
+		return nil
+	}
+	fetch := append(append([]string{}, auth...), "fetch", "-q", "--no-tags", src)
+	var names []string
+	for r, sha := range refs {
+		fetch = append(fetch, sha+":"+r)
+		names = append(names, r)
+	}
+	sort.Strings(names)
+	out := filepath.Join(dir, "repo.bundle")
+	for _, step := range [][]string{{"init", "-q", "--bare"}, fetch, append([]string{"bundle", "create", "-q", out}, names...)} {
+		if err := git(step...); err != nil {
+			return nil, err
+		}
+	}
+	b, err := os.ReadFile(out)
+	if err != nil {
+		return nil, err
+	}
+	e.mu.Lock()
+	if e.bundles == nil {
+		e.bundles = map[string][]byte{}
+	}
+	e.bundles[ck] = b
+	e.mu.Unlock()
+	return b, nil
 }

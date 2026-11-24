@@ -8,7 +8,8 @@ history in `replicant_db/migrations/versions/` = `202610240001_ops` (roles, gran
 
 - CLI: `replicant-db migrate --to head --advisory-lock --verify-drift --ensure-roles`, `replicant-db migrate status`,
   `replicant-db maintenance run`. Locally migrate also creates/secures partitions (DEVIATIONS PLATFORM-D5).
-- Image: `podman build -f libs/python/replicant-db/Dockerfile.migrate -t localhost/replicant/migrate:dev .` (repo root).
+- Image: there is no separate migrate image any more. The CLI is in `images/replicant-py` (`localhost/replicant/replicant-py:dev`),
+  and the stack's `init` one-shot runs `replicant-db migrate ... --ensure-roles` (SIMPLIFY-D2, D3).
 - Unit tests: `uv run --package replicant-db --group dev pytest libs/python/replicant-db`
 - Migration gate (podman, ~2 min): `STRICT=1 libs/python/replicant-db/tools/validate_migrations.sh` — fresh migrate,
   no-op rerun, downgrade/upgrade/check round trip, lint, catalog diff against the spec DDL built with psql (all 17

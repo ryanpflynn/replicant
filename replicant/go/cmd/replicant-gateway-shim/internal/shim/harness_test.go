@@ -33,7 +33,6 @@ model_map:
 price_book: {source: file, path: PRICES}
 auth:
   run_token: {audience: ai-gateway, issuers_env: REPLICANT_RUN_TOKEN_ISSUERS, jwks_urls_env: REPLICANT_RUN_TOKEN_JWKS_URLS}
-  run_grant: {issuer_env: REPLICANT_RUN_GRANT_ISSUER, jwks_url_env: REPLICANT_RUN_GRANT_JWKS_URL, revocation_url_env: REPLICANT_RUN_GRANT_REVOCATION_URL}
   service_tokens_file_env: REPLICANT_GATEWAY_SERVICE_TOKENS_FILE
 budgets:
   dev_defaults: {run_usd: 2, job_usd: 5}
@@ -71,7 +70,6 @@ type harness struct {
 	t        *testing.T
 	dir      string
 	runKey   *ecdsa.PrivateKey
-	grantKey *ecdsa.PrivateKey
 	svcToken string
 	cfg      *Config
 	srv      *Server
@@ -80,14 +78,13 @@ type harness struct {
 }
 
 type runOpts struct {
-	aud         any
-	budget      float64
-	role        string
-	grantKey    *ecdsa.PrivateKey
-	grantBudget float64
-	scopes      []string
-	exp         time.Duration
-	jobID       string
+	aud    any
+	budget float64
+	role   string
+	key    *ecdsa.PrivateKey // signing key (default: the runner's)
+	scopes []string
+	exp    time.Duration
+	jobID  string
 }
 
 type minted struct {
@@ -111,7 +108,6 @@ func newHarness(t *testing.T, backend, upstream string, env map[string]string) *
 	t.Helper()
 	h := &harness{t: t, dir: t.TempDir(), usage: &memUsage{}}
 	h.runKey, _ = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	h.grantKey, _ = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	jw := func(name string, k *ecdsa.PrivateKey, kid string) string {
 		b, _ := json.Marshal(jose.JWKS{Keys: []jose.JWK{jose.PublicJWK(&k.PublicKey, kid)}})
 		p := filepath.Join(h.dir, name)
@@ -134,9 +130,6 @@ func newHarness(t *testing.T, backend, upstream string, env map[string]string) *
 	base := map[string]string{
 		"REPLICANT_RUN_TOKEN_ISSUERS":           "http://runner-local:8480",
 		"REPLICANT_RUN_TOKEN_JWKS_URLS":         jw("runner.json", h.runKey, "r1"),
-		"REPLICANT_RUN_GRANT_ISSUER":            "replicant-local-core",
-		"REPLICANT_RUN_GRANT_JWKS_URL":          jw("grant.json", h.grantKey, "g1"),
-		"REPLICANT_RUN_GRANT_REVOCATION_URL":    "",
 		"REPLICANT_EXEC_REVOCATIONS_URLS":       "",
 		"REPLICANT_GATEWAY_SERVICE_TOKENS_FILE": filepath.Join(h.dir, "svc.yaml"),
 		"REPLICANT_GATEWAY_CASSETTE_ROOTS":      "scripts=" + scripts,
@@ -186,14 +179,11 @@ func (h *harness) mint(o runOpts) minted {
 	if o.budget == 0 {
 		o.budget = 15
 	}
-	if o.grantBudget == 0 {
-		o.grantBudget = o.budget
-	}
 	if o.role == "" {
 		o.role = "implementer"
 	}
-	if o.grantKey == nil {
-		o.grantKey = h.grantKey
+	if o.key == nil {
+		o.key = h.runKey
 	}
 	if o.scopes == nil {
 		o.scopes = []string{"gateway:invoke"}
@@ -206,19 +196,12 @@ func (h *harness) mint(o runOpts) minted {
 		m.jobID = ids.ULID("job")
 	}
 	now := time.Now()
-	gj, af := ids.ULID("rgr"), ids.ULID("usr")
-	grant, err := (&jose.Signer{Key: o.grantKey, Kid: "g1"}).Sign("replicant-run-grant+jwt", map[string]any{
-		"iss": "replicant-local-core", "typ": "replicant-run-grant+jwt", "jti": gj, "iat": now.Unix(), "exp": now.Add(2 * time.Hour).Unix(),
-		"tenant_id": m.tenant, "job_id": m.jobID, "run_id": m.runID, "role": o.role, "repo_ids": []string{"r1"},
-		"audiences": []string{"ai-gateway"}, "scopes": []string{"gateway:invoke"}, "budget_usd": o.grantBudget, "acting_for": af,
-		"spec_digest": "sha256:" + strings.Repeat("0", 64)})
-	if err != nil {
-		h.t.Fatal(err)
-	}
-	m.token, err = (&jose.Signer{Key: h.runKey, Kid: "r1"}).Sign("", map[string]any{
+	af := ids.ULID("usr")
+	var err error
+	m.token, err = (&jose.Signer{Key: o.key, Kid: "r1"}).Sign("", map[string]any{
 		"iss": "http://runner-local:8480", "sub": "run:" + m.runID, "aud": o.aud, "exp": now.Add(o.exp).Unix(), "iat": now.Unix(),
 		"jti": ids.ULID("rtk"), "tenant_id": m.tenant, "job_id": m.jobID, "run_id": m.runID, "role": o.role,
-		"release_bundle_id": ids.ULID("rb"), "scopes": o.scopes, "budget_usd": o.budget, "acting_for": af, "grant": grant, "grant_jti": gj})
+		"release_bundle_id": ids.ULID("rb"), "scopes": o.scopes, "budget_usd": o.budget, "acting_for": af})
 	if err != nil {
 		h.t.Fatal(err)
 	}

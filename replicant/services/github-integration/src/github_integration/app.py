@@ -7,6 +7,11 @@ Routes:
 * `POST /v1/admin/scm-installations` `{provider: gitea, host, org, tenant_id}` - registers a Gitea org as an
   installation (synthetic installation ids 1, 2, ...); seed step 6. M1 auth: the dev seed token (local only).
 * `GET /healthz`, `GET /readyz`.
+
+In the `core` process (control_plane_api.core, SIMPLIFY-D10) only the ingress routes (`app.state.ingress_router`:
+the two webhook routes and scm-installations) are served, on control-plane-api's listener; the `/internal/v1/**`
+routes are reached in process only, by control-plane-api through an ASGI transport that marks the request with the
+caller in the ASGI scope (`IN_PROCESS_CALLER`), which replaces the notify caller token there.
 """
 from __future__ import annotations
 
@@ -18,7 +23,7 @@ import logging
 import re
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
@@ -35,6 +40,12 @@ MAX_BODY = 26 * 1024 * 1024
 ORG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-_.]{0,99}$")
 TENANT_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 COUNTS: dict[str, int] = {}
+IN_PROCESS_CALLER = "replicant.in_process_caller"   # control_plane_api.in_process (never set from a network request)
+
+
+def from_core(request: Request) -> bool:
+    """A call from control-plane-api in the same process (core); network clients cannot set the scope key."""
+    return request.scope.get(IN_PROCESS_CALLER) == "svc_control-plane-api"
 
 
 def _count(outcome: str) -> None:
@@ -82,8 +93,9 @@ def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None =
     app = FastAPI(title="github-integration", lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.consumer = consumer
     app.state.engine = engine
+    ingress = APIRouter()     # served by core on control-plane-api's listener; the rest is in-process only there
 
-    @app.post("/webhooks/gitea")
+    @ingress.post("/webhooks/gitea")
     async def gitea_webhook(request: Request) -> Response:
         body = await request.body()                       # raw bytes, before any JSON parsing
         if len(body) > MAX_BODY:
@@ -107,12 +119,12 @@ def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None =
         _count("accepted" if res.rowcount else "duplicate")
         return Response(status_code=202)
 
-    @app.post("/github/webhook")
+    @ingress.post("/github/webhook")
     async def github_webhook() -> Response:
         # The dev GitHub App webhook secret comes from `replicant secret-agent` (M3); without it nothing can verify.
         return _problem(503, "github_app_not_registered")
 
-    @app.post("/v1/admin/scm-installations")
+    @ingress.post("/v1/admin/scm-installations")
     async def register_installation(request: Request) -> JSONResponse:
         seed = read_secret(s.dev_seed_token_file) if s.is_local else None
         cpa = read_secret(s.notify_caller_token_file)   # CONFIG: control-plane-api's service token (live trigger sync)
@@ -161,7 +173,7 @@ def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None =
         cpa = read_secret(s.notify_caller_token_file)   # CONFIG: control-plane-api's service token (live trigger sync)
         tok = bearer_token(request)
         by_seed = token_ok(tok, seed)
-        if not (by_seed or token_ok(tok, cpa)):
+        if not (by_seed or from_core(request) or token_ok(tok, cpa)):
             return _problem(401, "unauthenticated")
         try:
             body = await request.json()
@@ -226,7 +238,7 @@ def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None =
         repos, or of every active repo. Auth: control-plane-api's service token (or the local dev seed token)."""
         seed = read_secret(s.dev_seed_token_file) if s.is_local else None
         cpa = read_secret(s.notify_caller_token_file)
-        if not bearer_ok(request, (seed, cpa)):
+        if not (from_core(request) or bearer_ok(request, (seed, cpa))):
             return _problem(401, "unauthenticated")
         try:
             body = await request.json() if await request.body() else {}
@@ -253,7 +265,7 @@ def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None =
         """control-plane-api's notify dispatcher -> issue comment as replicant-bot (`github_comment` channel).
         Auth: bearer = the notify delivery token (local static caller token; prod: projected SA token)."""
         want = read_secret(s.notify_caller_token_file)
-        if not bearer_ok(request, want):
+        if not (from_core(request) or bearer_ok(request, want)):
             return _problem(401, "unauthenticated")
         try:
             b = await request.json()
@@ -293,6 +305,8 @@ def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None =
         lines += [f'replicant_github_deliveries_total{{outcome="{k}"}} {v}' for k, v in sorted(COUNTS.items())]
         return Response("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
 
+    app.include_router(ingress)
+    app.state.ingress_router = ingress
     return app
 
 

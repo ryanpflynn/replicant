@@ -18,12 +18,11 @@ import (
 // Container names in the sandbox Pod (controller.md section 4; shape agreed with WS-03
 // cli-invocation.md section 1.1, XD-03-01).
 const (
-	CWorkspaceGuard = "workspace-guard"  // WS-02 init: hard-limit check (fail closed)
-	CAgentd         = "replicant-agentd" // WS-03 native sidecar: sole run-token holder
-	CWatchdog       = "watchdog"         // WS-02 native sidecar
-	CPrepare        = "prepare"          // WS-03 init: tools, inputs, git, diff, session
-	CAgent          = "agent"            // WS-03 entrypoint + CLI
-	CUploader       = "uploader"         // WS-02 regular container: outlives the agent
+	CSandboxInit = "sandbox-init"     // WS-02 init: volume ownership, then the hard-limit check (fail closed)
+	CAgentd      = "replicant-agentd" // WS-03 native sidecar: sole run-token holder
+	CPrepare     = "prepare"          // WS-03 init: tools, inputs, git, diff, session
+	CAgent       = "agent"            // WS-03 entrypoint + CLI
+	CUploader    = "uploader"         // WS-02 regular container: outlives the agent; runs the disk watchdog
 )
 
 // Exit codes of the agent container (WS-03 cli-invocation.md section 4.6, normative).
@@ -41,7 +40,7 @@ const (
 	ExitTerminated            = 143
 )
 
-// Exit codes of prepare (WS-03) and workspace-guard (WS-02).
+// Exit codes of prepare (WS-03) and sandbox-init (WS-02).
 const (
 	PrepInputsFetchFailed    = 40
 	PrepDiffApplyFailed      = 41
@@ -292,11 +291,15 @@ func derive(o Observation) Decision {
 	}
 
 	// Init container failures (Provisioning).
-	if t := terminated(containerStatus(p, CWorkspaceGuard, true)); t != nil && t.ExitCode != 0 {
+	if t := terminated(containerStatus(p, CSandboxInit, true)); t != nil && t.ExitCode != 0 {
 		if cancel {
 			return cancelled(r)
 		}
-		return Decision{Phase: v1.PhaseFailed, Reason: v1.ReasonControllerError, Message: "workspace hard limit not enforced (guard exit " + itoa(t.ExitCode) + ")"}
+		msg := "sandbox-init exit " + itoa(t.ExitCode)
+		if t.ExitCode == GuardLimitNotEnforced {
+			msg = "workspace hard limit not enforced (guard exit " + itoa(t.ExitCode) + ")"
+		}
+		return Decision{Phase: v1.PhaseFailed, Reason: v1.ReasonControllerError, Message: msg}
 	}
 	if t := terminated(containerStatus(p, CPrepare, true)); t != nil && t.ExitCode != 0 {
 		if cancel {

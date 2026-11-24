@@ -1,9 +1,12 @@
 """`replicant_runner_client` + runner.* activities (WS-01 graphs/README.md §2.4; C-RUNNER 3.0.0).
 
-`runner.start_run` receives the RunSpec decision fields from workflow code, adds the per-attempt fields (`run_grant`,
-`trace_context`), computes `spec_digest` and signs the grant (ES256 file key locally), then POSTs with
-`Idempotency-Key: "ik1:<workflow_id>:<logical_activity_id>"`. Problem codes map to ApplicationError types; a
-`retryable: false` problem is non-retryable; 429 honours Retry-After; `run_grant_invalid` is re-signed once.
+`runner.start_run` receives the RunSpec decision fields from workflow code, adds the per-attempt fields (`run_scope`,
+`trace_context`), then POSTs with `Idempotency-Key: "ik1:<workflow_id>:<logical_activity_id>"`. Problem codes map to
+ApplicationError types; a `retryable: false` problem is non-retryable; 429 honours Retry-After.
+
+There is no run grant any more (C-RUNNER 4.0.0, SIMPLIFY-D50): `run_scope` is built from the activity's `grant` input
+(the input keeps its name, so the workflow's commands and its replay histories are unchanged) and the Runner checks
+it against core's intake record of the job before it accepts the run; `run_scope_invalid` is not retried.
 """
 from __future__ import annotations
 
@@ -17,13 +20,13 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from replicant_worker import ids
-from replicant_worker.activities import grants, s3
+from replicant_worker.activities import jcs, s3
 from replicant_worker.activities.base import http, implements, problem
 from replicant_worker.activities.config import read_secret, settings
 
 NON_RETRYABLE_CODES = {"invalid_request", "missing_idempotency_key", "forbidden", "run_not_found", "run_expired",
                        "idempotency_key_reuse", "admission_denied", "definition_not_resolvable",
-                       "steering_not_supported", "run_not_active", "run_grant_invalid"}
+                       "steering_not_supported", "run_not_active", "run_scope_invalid", "run_grant_invalid"}
 OUTPUT_BUCKET = {"session_state": "session", "workspace_archive": "session"}
 
 
@@ -67,10 +70,19 @@ async def _post_run(run_spec: dict[str, Any], key: str) -> httpx.Response:
                              headers=_headers({"Idempotency-Key": json.dumps(key)}))
 
 
-def _signed(a: dict[str, Any], run_spec: dict[str, Any]) -> dict[str, Any]:
-    signer = grants.signer()
-    claims = grants.grant_claims(run_spec=run_spec, run_id=a["run_id"], grant=a["grant"], issuer=signer.issuer)
-    return {**run_spec, "run_grant": signer.sign(claims)}
+PER_ATTEMPT_FIELDS = ("run_scope", "trace_context")
+
+
+def spec_digest(run_spec: dict[str, Any]) -> str:
+    """sha256(JCS(RunSpec without run_scope and trace_context)) (C-RUNNER 4.0.0)."""
+    return jcs.digest({k: v for k, v in run_spec.items() if k not in PER_ATTEMPT_FIELDS})
+
+
+def run_scope(grant: dict[str, Any]) -> dict[str, Any]:
+    """C-RUNNER 4.0.0 RunSpec.run_scope from the activity's `grant` input (workflow state: the job's targets, the
+    plan's audiences and scopes, the requester)."""
+    return {"repo_ids": list(grant.get("repo_ids") or [])[:5], "audiences": sorted(set(grant.get("audiences") or [])),
+            "scopes": sorted(set(grant.get("scopes") or [])), "acting_for": grant["acting_for"]}
 
 
 @implements("runner.start_run")
@@ -83,10 +95,8 @@ async def runner_start_run(a: dict[str, Any]) -> dict[str, Any]:
     tp = os.environ.get("TRACEPARENT")
     if tp:
         spec["trace_context"] = {"traceparent": tp}
-    r = await _post_run(_signed(a, spec), key)
-    if r.status_code == 422 and problem(r).get("code") == "run_grant_invalid":
-        activity.logger.warning("run_grant_invalid; re-signing once (XD-02-14)")
-        r = await _post_run(_signed(a, spec), key)
+    spec["run_scope"] = run_scope(a["grant"])
+    r = await _post_run(spec, key)
     if r.status_code not in (200, 201):
         raise runner_error("POST /v1/runs", r)
     st = r.json()

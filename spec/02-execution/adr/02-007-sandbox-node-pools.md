@@ -1,7 +1,8 @@
 # ADR-02-007: Sandbox node pools and warm capacity
 
 - **Status:** Accepted (WS-02, 2026-10-24), conditional on B-GATE results.
-- **Constraints:** D-06, D-07, D-22; ADR-007 (exec cluster, now its own AWS account per CCR-09-07)
+- **Constraints:** D-06, D-07, D-22; ADR-007 (exec cluster, now its own AWS account per CCR-09-07).
+  **Note (2026-11-23):** ADR-007 is superseded by [ADR-015](../../00-contracts/adr/015-single-cluster-hardened-sandbox-pool.md); these pools now live in the one cluster, tainted, on their own subnets, with the hardening ADR-015 lists.
 
 ## Context
 

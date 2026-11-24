@@ -132,6 +132,20 @@
           },
           "minContains": 0,
           "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "place": {
+                "const": "repo_bundle"
+              }
+            },
+            "required": [
+              "place"
+            ]
+          },
+          "minContains": 0,
+          "maxContains": 1
         }
       ]
     }
@@ -228,7 +242,7 @@
           ]
         },
         "place": {
-          "description": "What the entrypoint does with the object. run_plan: the replicant.run-plan/v1 document written by agents.build_run_plan (exactly one per manifest). system_append: role prompt + constraints, no memory text (staged by context.stage_inputs) → /replicant/inputs/system-append.md. system_append_memory: the memory block (type memory_injection, replicant.memory-injection/v1) → /replicant/inputs/memory-injection.json, the only staged copy of memory text (purgeable); the entrypoint joins system-append.md + \"\\n\\n\" + its .rendered on tmpfs (/run/replicant/prompt/system-append.md), never uploaded (XD-W2-04-01). first_message: composed first user turn (task, handoff, reviewer feedback, steering backlog) → /replicant/inputs/first-message.md. context_file: /replicant/inputs/context/<path> (read-only to the agent). qa_file: /replicant/inputs/qa/<path> (QA contracts, plan acceptance; WS-05). apply_diff: git apply --binary --index onto base_sha (DiffApplyFailed on conflict). restore_session: unpack into the CLI session directory after the session-resume rule SR-1 checks (cli-invocation.md section 2.8). none: verified only.",
+          "description": "What the entrypoint does with the object. run_plan: the replicant.run-plan/v1 document written by agents.build_run_plan (exactly one per manifest). system_append: role prompt + constraints, no memory text (staged by context.stage_inputs) → /replicant/inputs/system-append.md. system_append_memory: the memory block (type memory_injection, replicant.memory-injection/v1) → /replicant/inputs/memory-injection.json, the only staged copy of memory text (purgeable); the entrypoint joins system-append.md + \"\\n\\n\" + its .rendered on tmpfs (/run/replicant/prompt/system-append.md), never uploaded (XD-W2-04-01). first_message: composed first user turn (task, handoff, reviewer feedback, steering backlog) → /replicant/inputs/first-message.md. context_file: /replicant/inputs/context/<path> (read-only to the agent). qa_file: /replicant/inputs/qa/<path> (QA contracts, plan acceptance; WS-05). apply_diff: git apply --binary --index onto base_sha (DiffApplyFailed on conflict). restore_session: unpack into the CLI session directory after the session-resume rule SR-1 checks (cli-invocation.md section 2.8). repo_bundle: a `git bundle` (content type application/x-git-bundle) whose ref refs/replicant/base is the run's base commit (and refs/replicant/config the repo-configuration commit, when the plan has config_base_sha); prepare fetches it into /workspace/repo and checks out base_sha (exactly one per manifest when the run checks out a repository; the sandbox has no git endpoint). none: verified only.",
           "type": "string",
           "enum": [
             "run_plan",
@@ -239,6 +253,7 @@
             "qa_file",
             "apply_diff",
             "restore_session",
+            "repo_bundle",
             "none"
           ]
         },

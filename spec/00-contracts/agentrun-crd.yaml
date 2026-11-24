@@ -1,4 +1,5 @@
-# Contract C-CRD v3.0.0 (WS-00). 3.0.0 (breaking, CCR-ORCH-02): product rename to Replicant. API group `replicant.example.com`, CRD `agentruns.replicant.example.com`, labels and annotations `replicant.example.com/*`, priority classes `replicant-run-*`.
+# Contract C-CRD v4.0.0 (WS-00). 4.0.0 (breaking, SIMPLIFY-D50): spec.runGrant is replaced by the required immutable spec.runScope (C-RUNNER 4.0.0 RunSpec.run_scope, checked by the Runner against core's intake record). AgentRun is a bare Pod plus a write-once S3 record (agentrun-crd.md).
+# 3.0.0: Contract C-CRD v3.0.0 (WS-00). 3.0.0 (breaking, CCR-ORCH-02): product rename to Replicant. API group `replicant.example.com`, CRD `agentruns.replicant.example.com`, labels and annotations `replicant.example.com/*`, priority classes `replicant-run-*`.
 # 2.4.0: 2.4.0 (additive, wave 1): priorityClassName replicant-eval (CCR-02-06); security-cancel terminal reason rule (CCR-09-09, semantics in agentrun-crd.md).
 # 2.3.1: 2.3.1 (fix, R2-002): spec-digest also excludes trace_context; spec.traceContext keeps the first create's value.
 # 2.3.0: 2.3.0 (additive): optional immutable spec.workflowType (CCR-08-03).
@@ -110,7 +111,7 @@ spec:
                 - priorityClassName
                 - timeouts
                 - callback
-                - runGrant
+                - runScope
               x-kubernetes-validations:
                 - rule: "!oldSelf.cancelRequested || self.cancelRequested"
                   message: cancelRequested cannot be reverted to false
@@ -509,11 +510,31 @@ spec:
                     signalName:
                       type: string
                       enum: [run.status_changed]
-                runGrant:
-                  type: string
-                  description: Core-signed run grant (compact JWS, CCR-09-02), verified by the Runner at admission. Every run token the Runner mints for this run embeds it and must stay within it.
-                  maxLength: 8192
-                  pattern: '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+                runScope:
+                  type: object
+                  description: The run scope the Runner admitted (C-RUNNER 4.0.0 RunSpec.run_scope; SIMPLIFY-D50). Every run token the Runner mints for this run claims a subset of it.
+                  additionalProperties: false
+                  required: [repoIds, audiences, scopes, actingFor]
+                  properties:
+                    repoIds:
+                      type: array
+                      maxItems: 5
+                      items:
+                        type: string
+                        maxLength: 64
+                    audiences:
+                      type: array
+                      items:
+                        type: string
+                        enum: [ai-gateway, memory-mcp, context-mcp, repo-mirror, runner-sandbox]
+                    scopes:
+                      type: array
+                      items:
+                        type: string
+                        maxLength: 40
+                    actingFor:
+                      type: string
+                      maxLength: 64
                   x-kubernetes-validations:
                     - rule: self == oldSelf
                       message: immutable
@@ -685,5 +706,9 @@ spec:
     namespace: replicant-prod
     workflowId: job_01m5p7x7r0bt69j0h0fbxepw90
     signalName: run.status_changed
-  runGrant: eyJhbGciOiJFUzI1NiIsImtpZCI6InJnLTIwMjYtMTAiLCJ0eXAiOiJmYWN0b3J5LXJ1bi1ncmFudCtqd3QifQ.eyJpc3MiOiJmYWN0b3J5LXByb2QtY29yZSIsInR5cCI6ImZhY3RvcnktcnVuLWdyYW50K2p3dCIsImp0aSI6InJncl8wMW01cDd4N3Mwa2QzbThxMnY2eDl6NGI3YyIsImlhdCI6MTc5MjgyMTY2MCwiZXhwIjoxNzkyODI2MTYwLCJ0ZW5hbnRfaWQiOiJwYXltZW50cyIsImpvYl9pZCI6ImpvYl8wMW01cDd4N3IwYnQ2OWowaDBmYnhlcHc5MCIsInJ1bl9pZCI6InJ1bl9najNoM2VwM3BoamZzOWUyM3Y3Njh6cmNhNSIsInJvbGUiOiJpbXBsZW1lbnRlciIsInJlcG9faWRzIjpbIlJfa2dET0syYTlYdyJdLCJhdWRpZW5jZXMiOlsiYWktZ2F0ZXdheSIsIm1lbW9yeS1tY3AiLCJjb250ZXh0LW1jcCIsInJlcG8tbWlycm9yIiwicnVubmVyLXNhbmRib3giXSwic2NvcGVzIjpbImdhdGV3YXk6aW52b2tlIiwibWVtb3J5OnJlYWQiLCJtZW1vcnk6c2VhcmNoIiwiY29udGV4dDpyZWFkIiwiY29kZV9zZWFyY2g6cmVhZCIsInJlcG86ZmV0Y2giLCJpbmJveDpyZWFkIiwiY3JlZGVudGlhbHM6YXdzIl0sImJ1ZGdldF91c2QiOjE1LCJhY3RpbmdfZm9yIjoidXNyXzAxa25rOGRmcjBmdmpjN3YwYjl2aHZremJwIiwic3BlY19kaWdlc3QiOiJzaGEyNTY6YzBmZmVlOGUxYjJkM2Y0YTViNmM3ZDhlOWYwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZjAwMTEyMiJ9.Ujo9BvRrDazllOKsi0UijvzBa1nE3Zcq0uz6M2HNzeJGLTPlJrHZ8ryuV4YyiQPxy8_vD1ujzwmLgYx5E_-CzA
+  runScope:
+    repoIds: [R_kgDOK2a9Xw]
+    audiences: [ai-gateway, memory-mcp, context-mcp, runner-sandbox]
+    scopes: ['gateway:invoke', 'memory:read', 'memory:search', 'context:read', 'code_search:read', 'inbox:read', 'credentials:aws']
+    actingFor: usr_01knk8dfr0fvjc7v0b9vhvkzbp
   cancelRequested: false

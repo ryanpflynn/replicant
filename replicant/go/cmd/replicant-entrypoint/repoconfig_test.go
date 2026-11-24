@@ -156,8 +156,6 @@ func TestRestoreBaseConfig(t *testing.T) {
 	}
 	origin := t.TempDir()
 	gitT(t, origin, "init", "-q")
-	gitT(t, origin, "config", "uploadpack.allowAnySHA1InWant", "true")
-	gitT(t, origin, "config", "uploadpack.allowFilter", "true")
 	writeFiles(t, origin, map[string]string{"CLAUDE.md": "base root\n", "src/CLAUDE.md": "base nested\n", ".claude/settings.json": `{"hooks":{}}`,
 		".claude/rules/style.md": "tabs\n", ".mcp.json": `{"mcpServers":{}}`, "main.go": "package main\n"})
 	gitT(t, origin, "add", "-A")
@@ -171,12 +169,15 @@ func TestRestoreBaseConfig(t *testing.T) {
 	gitT(t, origin, "commit", "-qm", "branch")
 	head := gitT(t, origin, "rev-parse", "HEAD")
 
-	// the sandbox checkout: only the branch head, shallow, so the base commit must be fetched
-	repo := t.TempDir()
-	gitT(t, repo, "init", "-q")
-	gitT(t, repo, "remote", "add", "origin", "file://"+origin)
-	gitT(t, repo, "fetch", "-q", "--no-tags", "--depth", "1", "origin", head)
-	gitT(t, repo, "checkout", "-q", "--detach", head)
+	// the sandbox checkout at the branch head from a repo bundle that also carries the default-branch commit
+	gitT(t, origin, "update-ref", bundleRefBase, head)
+	gitT(t, origin, "update-ref", bundleRefConfig, base)
+	bundle := filepath.Join(t.TempDir(), "repo.bundle")
+	gitT(t, origin, "bundle", "create", "-q", bundle, bundleRefBase, bundleRefConfig)
+	repo := filepath.Join(t.TempDir(), "repo")
+	if err := checkoutAt(context.Background(), repo, head, "replicant/job_x", bundle); err != nil {
+		t.Fatal(err)
+	}
 	if err := restoreBaseConfig(context.Background(), repo, base); err != nil {
 		t.Fatal(err)
 	}

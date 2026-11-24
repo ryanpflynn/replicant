@@ -22,10 +22,6 @@ auth:
     audience: ai-gateway                       # string equality (C-RUNNER 3.0.0 verifier obligation 1)
     issuers_env: REPLICANT_RUN_TOKEN_ISSUERS
     jwks_urls_env: REPLICANT_RUN_TOKEN_JWKS_URLS
-  run_grant:
-    issuer_env: REPLICANT_RUN_GRANT_ISSUER
-    jwks_url_env: REPLICANT_RUN_GRANT_JWKS_URL
-    revocation_url_env: REPLICANT_RUN_GRANT_REVOCATION_URL
   service_tokens_file_env: REPLICANT_GATEWAY_SERVICE_TOKENS_FILE
 budgets:
   dev_defaults: {run_usd: 2, job_usd: 5}       # WS-03 gateway.md §8 passthrough defaults

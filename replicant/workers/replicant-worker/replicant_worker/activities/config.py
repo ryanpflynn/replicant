@@ -26,9 +26,6 @@ class Settings:
     gateway_token_file: str | None
     control_plane_url: str
     control_plane_token_file: str | None
-    grant_key_file: str | None
-    grant_kid: str
-    grant_issuer: str
     cassette_set: str | None
     script_set: str | None
     script_key: str
@@ -72,8 +69,6 @@ def settings() -> Settings:
         gateway_token_file=env("REPLICANT_GATEWAY_SERVICE_TOKEN_FILE"),
         control_plane_url=(env("REPLICANT_CONTROL_PLANE_URL", "http://control-plane-api:8401") or "").rstrip("/"),
         control_plane_token_file=env("REPLICANT_CONTROL_PLANE_TOKEN_FILE"),
-        grant_key_file=env("REPLICANT_RUN_GRANT_KEY_FILE"), grant_kid=env("REPLICANT_RUN_GRANT_KID", "rg-local-1") or "rg-local-1",
-        grant_issuer=env("REPLICANT_RUN_GRANT_ISSUER", f"replicant-{fenv}-core") or f"replicant-{fenv}-core",
         cassette_set=env("REPLICANT_GATEWAY_CASSETTE_SET"), script_set=env("REPLICANT_GATEWAY_SCRIPT_SET"),
         script_key=env("REPLICANT_GATEWAY_SCRIPT_KEY", "{node_key}.c{cycle}.n{ordinal}") or "{node_key}.c{cycle}.n{ordinal}",
         script_sets=script_sets(env("REPLICANT_GATEWAY_SCRIPT_SETS")),

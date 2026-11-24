@@ -1,7 +1,7 @@
 #!/bin/sh
 # CONTROL component smoke test (M1), against real neighbours where they exist and a contract fake of ReplicantJob:
 #   Postgres (PLATFORM image, migrated by PLATFORM's `migrate` image), Temporal CLI dev server, Gitea 28.1 bootstrapped
-#   with PLATFORM's gitea-bootstrap v0 script, and the three CONTROL images (control-plane-api:dev + run-grants,
+#   with PLATFORM's gitea-bootstrap v0 script, and the three CONTROL images (control-plane-api:dev,
 #   github-integration:dev, github-token-broker:dev). The ReplicantJob worker is tests/smoke/stub_worker.py (versioned
 #   worker replicant-worker:<build>) unless STUB_WORKER=0 and WORKER's replicant-worker is polling.
 #
@@ -21,7 +21,7 @@ PY="${PYTHON:-python3}"
 
 if [ "${1:-}" = down ]; then
   pkill -f "stub_worker.py" 2>/dev/null || true
-  "$ENGINE" rm -f -v ctl-cpa ctl-grants ctl-gi ctl-broker ctl-gitea >/dev/null 2>&1 || true
+  "$ENGINE" rm -f -v ctl-cpa ctl-gi ctl-broker ctl-gitea >/dev/null 2>&1 || true
   "$ENGINE" volume rm ctl-gitea-data ctl-gitea-config >/dev/null 2>&1 || true
   "$HERE/env.sh" down
   exit 0
@@ -33,21 +33,13 @@ gen() { [ -s "$1" ] || (umask 077; "$PY" -c 'import secrets;print(secrets.token_
 step "1. stores: postgres (migrated) + temporal"
 "$HERE/env.sh" up >/dev/null
 for n in gitea_admin_password gitea_bot_password gitea_webhook_secret dev_seed_token gi_cp_token broker_gi_token \
-         broker_publisher_token broker_mirror_token shim_token; do gen "$SEC/$n"; done
+         broker_publisher_token broker_mirror_token shim_token runner_cp_token; do gen "$SEC/$n"; done
 (umask 077
- printf '%s svc_replicant-gateway-shim\n%s svc_github-integration\n' "$(cat "$SEC/shim_token")" "$(cat "$SEC/gi_cp_token")" \
-   > "$SEC/control_plane_internal_callers"
+ printf '%s svc_replicant-gateway-shim\n%s svc_github-integration\n%s svc_runner-local\n' "$(cat "$SEC/shim_token")" \
+   "$(cat "$SEC/gi_cp_token")" "$(cat "$SEC/runner_cp_token")" > "$SEC/control_plane_internal_callers"
  printf '"%s": github-integration\n"%s": publisher-worker\n"%s": repo-mirror\n' "$(cat "$SEC/broker_gi_token")" \
    "$(cat "$SEC/broker_publisher_token")" "$(cat "$SEC/broker_mirror_token")" > "$SEC/broker_caller_tokens")
-if [ ! -s "$CTL_HOME/run-grant-jwks.json" ]; then
-  openssl ecparam -name prime256v1 -genkey -noout -out "$SEC/run_grant_signing_key" 2>/dev/null
-  openssl ec -in "$SEC/run_grant_signing_key" -pubout -outform DER 2>/dev/null | "$PY" -c '
-import base64,json,sys
-d=sys.stdin.buffer.read()[-65:]; b=lambda x: base64.urlsafe_b64encode(x).decode().rstrip("=")
-print(json.dumps({"keys":[{"kty":"EC","crv":"P-256","alg":"ES256","use":"sig","kid":"rg-local-1","x":b(d[1:33]),"y":b(d[33:])}]}))' \
-    > "$CTL_HOME/run-grant-jwks.json"
-fi
-chmod 0644 "$SEC"/* "$CTL_HOME/run-grant-jwks.json"   # containers run as non-root uids; the dir stays 0700 for others
+chmod 0644 "$SEC"/*   # containers run as non-root uids; the dir stays 0700 for others
 
 step "2. gitea + PLATFORM v0 bootstrap (org acme-payments, repo ledger-api, label replicant, org webhook)"
 if ! "$ENGINE" container inspect ctl-gitea >/dev/null 2>&1; then
@@ -90,13 +82,6 @@ COMMON="-e REPLICANT_ENV=local -e REPLICANT_ORG=local -e REPLICANT_LOG_FORMAT=js
   -e REPLICANT_DB_PASSWORD_FILE=/run/secrets/db_svc_control_plane_api -e REPLICANT_DEV_SEED_TOKEN_FILE=/run/secrets/dev_seed_token \
   -e REPLICANT_INTERNAL_CALLER_TOKENS_FILE=/run/secrets/control_plane_internal_callers \
   localhost/replicant/control-plane-api:dev >/dev/null
-"$ENGINE" container inspect ctl-grants >/dev/null 2>&1 || "$ENGINE" run -d --name ctl-grants --network $NET --network-alias grants.replicant.localhost \
-  -p 127.0.0.1:58403:8403 $COMMON -e REPLICANT_HTTP_PORT=8403 \
-  -e REPLICANT_DB_DSN=postgresql+psycopg://svc_control_plane_api@ctl-pg:5432/replicant \
-  -e REPLICANT_DB_PASSWORD_FILE=/run/secrets/db_svc_control_plane_api -e REPLICANT_RUN_GRANT_JWKS_SOURCE=file \
-  -e REPLICANT_RUN_GRANT_JWKS_FILE=/etc/replicant/run-grant-jwks.json \
-  -v "$CTL_HOME/run-grant-jwks.json:/etc/replicant/run-grant-jwks.json:ro" \
-  localhost/replicant/control-plane-api:dev control-plane-api serve-grants --port 8403 >/dev/null
 "$ENGINE" container inspect ctl-gi >/dev/null 2>&1 || "$ENGINE" run -d --name ctl-gi --network $NET --network-alias github-integration \
   -p 127.0.0.1:58080:8080 $COMMON -e REPLICANT_HTTP_PORT=8080 \
   -e REPLICANT_DB_DSN=postgresql+psycopg://svc_github_integration@ctl-pg:5432/replicant \
@@ -106,7 +91,7 @@ COMMON="-e REPLICANT_ENV=local -e REPLICANT_ORG=local -e REPLICANT_LOG_FORMAT=js
   -e REPLICANT_CONTROL_PLANE_TOKEN_FILE=/run/secrets/gi_cp_token -e REPLICANT_TOKEN_BROKER_URL=http://github-token-broker:8080 \
   -e REPLICANT_TOKEN_BROKER_TOKEN_FILE=/run/secrets/broker_gi_token -e REPLICANT_DEV_SEED_TOKEN_FILE=/run/secrets/dev_seed_token \
   -e REPLICANT_S3_ENDPOINT= localhost/replicant/github-integration:dev >/dev/null
-for c in ctl-broker:8080 ctl-cpa:8401 ctl-grants:8403 ctl-gi:8080; do
+for c in ctl-broker:8080 ctl-cpa:8401 ctl-gi:8080; do
   n="${c%%:*}"; p="${c##*:}"; path=/readyz; i=0
   until "$ENGINE" exec "$n" python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:$p$path',timeout=3)" 2>/dev/null; do
     i=$((i+1)); [ $i -gt 40 ] && { echo "$n not ready"; "$ENGINE" logs --tail 20 "$n"; exit 1; }; sleep 2; done

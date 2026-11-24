@@ -23,7 +23,7 @@ approver), carol (replicant-admins, operator: Memory), dave (payments viewer), e
 ```sh
 # image + container on the running v0 stack (from replicant/)
 podman build -f web/control-plane-web/Dockerfile -t localhost/replicant/control-plane-web:dev .
-cd dev/compose && podman-compose --project-name replicant -f compose.yaml -f compose.v0.yaml -f compose.v0.deps.yaml \
+cd dev/compose && podman-compose --project-name replicant -f compose.v0.yaml \
   --env-file .env --profile v0 up -d --no-deps control-plane-web
 
 # typecheck + unit tests (host Node is 16, so in a container)

@@ -4,7 +4,10 @@ M1 authentication sources, in order:
 1. Internal caller tokens (`REPLICANT_INTERNAL_CALLER_TOKENS_FILE`, REPLICANT_ENV=local only; XD-W3-R1V-067): static
    bearer token -> service principal (`svc_replicant-gateway-shim`, `svc_github-integration`, ...), which holds
    permission `service:<name>`.
-2. Authenticators registered by the dev-only package `replicant_dev_auth` (dev image target only, identity.md §9.3 L-1):
+2. In-process callers (SIMPLIFY-D10): the modules that run in the same `core` process (github-integration,
+   slack-integration) call through `in_process.transport()`, which puts their service principal in the ASGI scope;
+   only principals registered with `allow_in_process()` are accepted.
+3. Authenticators registered by the dev-only package `replicant_dev_auth` (dev image target only, identity.md §9.3 L-1):
    the dev seed token (`svc_dev-seeder`, `dev:seed`) and the static dev users (`X-Replicant-Dev-User`).
 Prod OIDC/BFF sessions and device-grant JWTs are not implemented in M1 (no Dex/Okta); every other request is 401.
 """
@@ -60,6 +63,8 @@ class AuthContext:
         self.evaluator = Evaluator(self.directory, self.rbac)
         self.authenticators: list[Authenticator] = []
         self._internal: dict[str, Principal] = {}
+        self._in_process: dict[str, Principal] = {}
+        self.authenticators.append(self._scope_in_process)
         if settings.internal_caller_tokens_file:
             if not settings.is_local:
                 raise SystemExit("REPLICANT_INTERNAL_CALLER_TOKENS_FILE is honoured only when REPLICANT_ENV=local")
@@ -72,6 +77,16 @@ class AuthContext:
             except FileNotFoundError:
                 log.warning("internal caller tokens file not found; no internal callers")
         self.authenticators.append(self._bearer_internal)
+
+    def allow_in_process(self, principal_id: str) -> None:
+        p = service_principal(principal_id, method="in_process")
+        self._in_process[principal_id] = p
+        self.directory.add(p)
+
+    def _scope_in_process(self, request: Request) -> Principal | None:
+        from control_plane_api.in_process import IN_PROCESS_CALLER
+        pid = request.scope.get(IN_PROCESS_CALLER)
+        return self._in_process.get(pid) if isinstance(pid, str) else None
 
     def attach_db(self, db: Any) -> None:
         self.rbac.db = db

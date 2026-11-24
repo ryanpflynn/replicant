@@ -18,6 +18,6 @@ by CCR-09-06), parity P-12. The broker is the only holder of the `replicant-bot`
 ## Run and test
 
 ```sh
-podman build -f services/github-token-broker/Dockerfile -t localhost/replicant/github-token-broker:dev .
+podman build -f images/replicant-py/Dockerfile --target dev -t localhost/replicant/replicant-py:dev .   # shared Python image (SIMPLIFY-D2)
 .venv-ctl/bin/python -m pytest -q services/github-token-broker/tests     # Gitea is an httpx MockTransport fake
 ```

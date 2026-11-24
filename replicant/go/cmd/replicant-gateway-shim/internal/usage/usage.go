@@ -58,7 +58,6 @@ type Caller struct {
 	Kind             string `json:"kind"`
 	TokenJti         string `json:"token_jti,omitempty"`
 	ServicePrincipal string `json:"service_principal,omitempty"`
-	GrantJti         string `json:"grant_jti,omitempty"`
 }
 
 // Tokens is the event usage object.

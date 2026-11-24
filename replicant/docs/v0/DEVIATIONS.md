@@ -1021,3 +1021,315 @@ Interfaces: `docs/design/onboarding-interfaces.md` (ONBOARD-01).
   host; `fstrim` inside the VM gave back only part of it. Give the VM a disk cap the host can afford. When freeing
   space, delete `~/.colima/_lima/_disks/colima` as well: `colima delete` keeps that data disk. Podman behaves the
   same, and `replicant dev prune` trims both.
+
+## SIMPLIFY (architecture simplification, 2026-11-23)
+- **SIMPLIFY-D1 `dev/compose/compose.v0.yaml` is standalone.** It no longer layers on the spec `compose.yaml`;
+  `compose.v0.deps.yaml` and the CLI's `!reset`/`!override` loader are gone. The local copies of the spec
+  stack (`compose.yaml`) and its chaos override (`compose.chaos.yaml`) are deleted: nothing read them and their
+  per-service Dockerfiles no longer exist. The spec keeps its own copy under `spec/11-local-dev/compose`. The CLI supports only profile `v0` (`core` is gone).
+  - **Profiles:** the v0 services carry no `profiles:` key. `slack` (slack-mock) and `observability` are opt-in:
+    `replicant dev up --profile v0,slack` and `--with-observability`. `up` writes `REPLICANT_SLACK_ENABLED` to `.env`
+    to match the `slack` profile, so core's Slack module is on only with slack-mock.
+  - **Dropped:** `gateway-state` (Valkey, unused since GATEWAY-D1; with it `REPLICANT_GATEWAY_STATE_ADDR`),
+    `temporal-ui` and `temporal-bootstrap`.
+  - **Temporal:** the dev server serves its built-in UI on 8233 (alias `temporal.replicant.localhost`; it opens on
+    namespace `default`, not `replicant-local`). `--namespace replicant-local` and 14 `--search-attribute` flags
+    replace `bootstrap-v0.sh`. The healthcheck passes once the last attribute is listed, and services that waited for
+    `temporal-bootstrap` now wait for `temporal` to be healthy. The worker-deployment API check of `bootstrap-v0.sh`
+    is dropped. The namespace keeps the dev server's default retention, as before (the spec bootstrap never re-created
+    it).
+  - **e2e:** `replicant dev test e2e` reports e2e02 and e2e03 as SKIP unless slack-mock runs and Slack is enabled.
+- **SIMPLIFY-D2 Two images for the replicant services.** (Later: repo-mirror left `replicant-go` with SIMPLIFY-D40.)
+  - **`images/replicant-py`:** every Python service, worker, tool and `init`, installed from `uv.lock`
+    (`uv export --frozen`, so the image runs the versions the unit suites run). Each compose service picks its role
+    with `command:`. Targets `dev` (compose; adds `replicant_dev_auth`) and `prod`, as the former control-plane-api
+    image had. It sets both `REPLICANT_BUILD_ID` and `REPLICANT_IMAGE_BUILD_ID`. replicant-worker's image default
+    `REPLICANT_METRICS_BIND=0.0.0.0:9464` is gone (compose already set `off`). Python 3.12 on `python:3.12-slim`
+    (Debian trixie now). git is in the image for publisher-worker and `init`.
+  - **`images/replicant-go`:** runner-local, replicant-gateway-shim and repo-mirror on `debian:bookworm-slim` with git
+    and CA certificates. runner-local moved off Alpine and gateway-shim off distroless static; compose runs
+    gateway-shim as 65532:65532, its former user.
+  - **Removed:** the Dockerfiles of services/*, workers/*, tools/slack-mock, `replicant-db/Dockerfile.migrate`, and
+    `go/cmd/{runner-local,repo-mirror,replicant-gateway-shim}/Dockerfile`. `replicant dev up` builds each image once.
+    `replicant dev prune --images` also removes the retired per-service `:dev` images.
+  - **Smoke DB:** `replicant dev test unit` passes `MIGRATE_IMAGE=localhost/replicant/replicant-py:dev` to
+    control-plane-api's `tests/smoke/env.sh`, and rebuilds that image when replicant-db, `images/replicant-py` or
+    `uv.lock` changed.
+- **SIMPLIFY-D3 One `init` one-shot replaces `migrate`, `s3-init` and `gitea-bootstrap`.** It runs
+  `images/replicant-py/init.py`, which is idempotent and takes steps `migrate`, `s3` and `gitea` (all by default).
+  - **migrate:** the same `replicant-db migrate ... --ensure-roles` command. `replicant dev status` reads the
+    revision from init's log.
+  - **s3:** `config/s3/init.sh` ported to boto3, with the same buckets and the same WS-10 configs.
+  - **gitea:** the API part of `bootstrap-v0.sh` (PLATFORM-D6), through the Gitea API. `alice` is now created with
+    the admin API and a random password, not the Gitea CLI. The webhook now targets
+    `http://control-plane-api:8401/webhooks/gitea`.
+  - **Gitea CLI steps:** the site admin and `replicant-bot` need the Gitea CLI, so the gitea service runs the spec
+    `bootstrap.sh` itself, through `config/gitea/entrypoint-v0.sh`. It reports healthy only after that, and now
+    mounts `gitea_admin_password` and `gitea_bot_password`.
+  - **Secrets:** init mounts the union of the three former services' secrets.
+  - **Kept:** `config/gitea/bootstrap-v0.sh` stays for control-plane-api's `tests/smoke/smoke.sh`.
+- **SIMPLIFY-D20 A local run has six containers, not eight.** In start order: `sandbox-init`, `pause`,
+  `replicant-agentd`, `prepare`, `agent` and `uploader`.
+  - **`sandbox-init`** replaces `volume-init` and `workspace-guard`. It is a one-shot `sandbox-sidecars sandbox-init`
+    with no network and the privileges `volume-init` had (root, `CHOWN`/`FOWNER`/`DAC_OVERRIDE`, all else dropped). It
+    sets the volume ownership first, then runs the guard check. It exits 1 if ownership fails and 84 if the hard
+    limit is not enforced. Under `watchdog` enforcement it checks only that the workspace is writable, as the guard
+    did.
+  - **The guard check now runs as root before `pause` starts**, not as uid 10001 inside the group. Its probe write
+    therefore shows that the volume is mounted writable. Writability for 10001 follows from the ownership and mode
+    set just before.
+  - **On a non-zero exit, `pause` is not started.** `sandbox-init` is kept, and Derive fails the run from its status:
+    ControllerError, with "workspace hard limit not enforced (guard exit 84)" for exit 84 and "sandbox-init exit N"
+    otherwise.
+  - **`controller.CWorkspaceGuard` and `CWatchdog` are replaced by `CSandboxInit`.**
+- **SIMPLIFY-D21 The disk watchdog runs inside the uploader.** The uploader starts it as a goroutine. Both run as
+  uid 10003, and the uploader now mounts the workspace read-only.
+  - **Unchanged:** the status files, the `disk-warn`/`disk-exceeded` markers and the 85 %/98 % thresholds. These now
+    live in `internal/runner/sandbox/disk.go`.
+  - **Gap before the agent:** the uploader starts with the agent, so nothing samples the workspace during `prepare`.
+    `prepare` therefore measures the workspace after the checkout and any applied diffs. At or above 98 % of the
+    limit it exits 30, as the agent does, which maps to WorkspaceDiskExceeded.
+  - **Lost:** the old watchdog's on-failure restart policy.
+- **SIMPLIFY-D22 `pause` is a `sandbox-sidecars` subcommand.** The Dockerfile's `pause` target and the
+  `localhost/replicant/pause:3.10` image are gone. `RUNNER_PAUSE_IMAGE` (or `sandbox.pod_group.pause_image`) now
+  defaults to the sidecars image, which runner-local starts as uid 65535 with `sandbox-sidecars pause`. A different
+  image keeps its own entrypoint.
+- **SIMPLIFY-D10 One `core` process.** (Later: the run-grant listener :8403 was removed by SIMPLIFY-D50.) `control-plane-api serve` now runs control-plane-api,
+  github-integration, slack-integration (opt-in) and the replicant-projector worker in one asyncio loop
+  (`control_plane_api/core.py`). The three packages stay workspace packages that control-plane-api depends on.
+  - **Listeners:**
+    - `REPLICANT_HTTP_PORT` (8401) serves the API plus the modules' ingress routes: `/webhooks/gitea`,
+      `/github/webhook` and `/v1/admin/scm-installations`, and `/slack/events|interactions|commands` when Slack
+      is on. These routes still authenticate requests themselves (Gitea HMAC over the raw body, Slack signatures, the
+      dev seed token). `check_route_permissions` exempts them by name (`SELF_AUTHENTICATED_PATHS`).
+    - `REPLICANT_GRANTS_PORT` (8403) serves the run-grant app (SIMPLIFY-D12).
+  - **Not on any listener:** the modules' `/internal/v1/**` routes, their `/healthz` and `/readyz`, and
+    github-integration's `/metrics`.
+  - **Background loops:** control-plane-api's loops; github-integration's consumer (`REPLICANT_GITHUB_CONSUMER_WORKERS`)
+    and inventory scanner; Slack's `auth.test` loop and decision retrier.
+  - **Shutdown:** one SIGTERM handler stops both listeners. If either listener stops, the other stops too.
+  - **Calls between modules:** they keep their HTTP contracts but run in process.
+    - **Transport:** `control_plane_api/in_process.py` dispatches each call to the callee's ASGI app through
+      `httpx.ASGITransport`, so each route's validation and authorization checks run unchanged. Rewriting the
+      handlers as plain functions would have duplicated those checks.
+    - **Caller identity:** the transport puts the caller's service principal in the ASGI scope under
+      `replicant.in_process_caller`. uvicorn never sets that key from a network request.
+    - **Which principals control-plane-api accepts:** only principals registered with
+      `AuthContext.allow_in_process()`: `svc_github-integration` and `svc_slack-integration`.
+    - **Which caller the modules accept:** only `svc_control-plane-api`, in addition to the token checks they
+      still have for standalone use.
+    - **Routing:** control-plane-api's outbound URLs keep their defaults (`http://github-integration:8080`,
+      `http://slack-integration:8080`). A URL whose host names a module running in this process is dispatched
+      in process; any other URL goes over the network.
+  - **Caller tokens no longer needed in core:** `github_integration_cp_token` and `slack_integration_cp_token`
+    (the modules calling control-plane-api), and `notify_delivery_token` (control-plane-api calling the
+    modules).
+  - **Kept:** the standalone `github-integration`, `slack-integration` and `replicant-projector` entrypoints, and
+    their token paths.
+  - **Running modules:**
+    - github-integration runs when `REPLICANT_GITHUB_INTEGRATION_DB_DSN` is set, and the projector when
+      `REPLICANT_PROJECTOR_DB_DSN` is set. `REPLICANT_<GITHUB_INTEGRATION|PROJECTOR|GRANTS>_ENABLED=true|false`
+      overrides either.
+    - Slack is opt-in: `REPLICANT_SLACK_ENABLED=true`, plus `REPLICANT_SLACK_INTEGRATION_DB_DSN`. While it is
+      off, the notify dispatcher records Slack deliveries and gate-resolved updates as `suppressed`
+      (`slack_disabled`) instead of retrying them against a service that is not there.
+  - **Credentials added to the process:** the Gitea webhook secret, github-integration's broker caller token and
+    database login, and the Slack bot token, signing secret and database login when Slack is on. This is the
+    trade-off the plan accepted.
+- **SIMPLIFY-D11 One database pool per module, each with the module's existing login.** No role, grant or
+  migration changed.
+  - **Logins:**
+    - control-plane-api keeps `REPLICANT_DB_DSN` / `REPLICANT_DB_PASSWORD_FILE` (`svc_control_plane_api`).
+    - github-integration uses `REPLICANT_GITHUB_INTEGRATION_DB_DSN` / `_DB_PASSWORD_FILE` (`svc_github_integration`).
+    - slack-integration uses `REPLICANT_SLACK_INTEGRATION_DB_DSN` / `_DB_PASSWORD_FILE` (`svc_slack_integration`).
+    - The projector uses `REPLICANT_PROJECTOR_DB_DSN` / `_DB_PASSWORD_FILE` (`svc_replicant_projector`). Its
+      `db.conninfo()` prefers these and falls back to `REPLICANT_DB_*` when running standalone.
+  - **Least privilege is still the database's:** for example, the core API's login cannot write `jobs_read`.
+  - **Ownership test:** `tests/test_core.py` adds a module-ownership check. No `INSERT`, `UPDATE` or `DELETE` on
+    `jobs_read.` or `approvals.` may appear outside `replicant_projector`. No import or lint rule for this
+    existed before.
+- **SIMPLIFY-D12 The run-grant app is a second listener of the core process.** (Superseded by SIMPLIFY-D50: run grants and the :8403 listener are removed.) It is unchanged, apart from where it
+  runs.
+  - **Where it runs:** core starts `create_grants_app` on `REPLICANT_GRANTS_PORT` (8403) when
+    `REPLICANT_RUN_GRANT_JWKS_FILE` is set. The app has its own database pool, with control-plane-api's login, as
+    before.
+  - **Route table:** a test asserts that it is exactly `GET /.well-known/jwks.json`, `GET /grants/revoked`,
+    `GET /healthz` and `GET /readyz`, and that none of these is on the API listener.
+  - **Back-compat:** `control-plane-api serve-grants --port P` still serves it alone.
+- **SIMPLIFY-D13 The projector worker runs in process.** `replicant_projector.cli.serve_in_process()` runs the same
+  activities on `replicant-projections`, under the same Worker Deployment (`replicant-projector`) and build ID
+  (`REPLICANT_WORKER_BUILD_ID`). It sets its version current when `REPLICANT_WORKER_SET_CURRENT_ON_START=true`.
+  It differs from the standalone `replicant-projector run` in three ways:
+  - it leaves signal handling to the host process;
+  - when Temporal is unreachable or the worker fails fatally, it restarts after 5 s instead of ending the process;
+  - it is not started when `REPLICANT_CPA_BACKGROUND_TASKS=false`.
+
+  There is no separate projector healthcheck any more. Core's `/readyz` reports the database and Temporal, as
+  before.
+- **SIMPLIFY-D30 No sandbox DNS server: static hosts on the pause container.** `sbx-dns` (CoreDNS) is gone. runner-local
+  gives the pause container, which owns the run's network namespace, `/etc/hosts` and `resolv.conf`, one `ExtraHosts`
+  entry per name, all pointing at sbx-edge (`sandbox.edge_ip` in runner-local.yaml, or `RUNNER_SANDBOX_EDGE_IP`;
+  v0 `172.31.250.10`):
+  - the `*.sbx.local` names sbx-edge serves (`RUNNER_SANDBOX_EDGE_HOSTS`, default gateway, memory-mcp, context-mcp,
+    runner-sandbox, runner-sandbox-k8s, git, s3, otlp);
+  - the TLS egress allowlist (`RUNNER_SANDBOX_EGRESS_HOSTS`, default `proxy.golang.org,sum.golang.org`).
+
+  Its only nameserver is sbx-edge, which has no DNS listener, so every other lookup fails at once (ICMP refused, no
+  timeout). Joined containers inherit the entries: both Docker and Podman give a `container:` network member the
+  owner's hosts and resolv.conf and reject `ExtraHosts` on it (checked on Podman 6.1 through the Docker-compatible
+  API). With direct egress (`RUNNER_SANDBOX_DIRECT_EGRESS`, M1) the edge IP is ignored and the engine's resolver
+  stays. `RUNNER_SANDBOX_DNS` and `sandbox.dns` are gone. The kind profile's cluster CoreDNS answers the same
+  `*.sbx.local` names with a `hosts` block (dev/compose/kind/bootstrap.sh) instead of forwarding to sbx-dns.
+- **SIMPLIFY-D31 sbx-edge replaces the squid egress proxy with an SNI allowlist.** `egress-proxy` and its cache
+  volume are gone. sbx-edge's nginx gains a `stream` server on :443 with `ssl_preread`: a `map` from the exact SNI to
+  `<name>:443` (v0: `proxy.golang.org`, `sum.golang.org`, as squid allowed for sandboxes), resolved through the
+  container's DNS. Any other SNI, or none, goes to a closed local port, so the session ends without a byte sent. TLS
+  is not terminated.
+  - **No proxy variables.** runner-local.yaml's `sandbox.env` drops `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`; clients
+    connect to the allowlisted name, which resolves to sbx-edge (SIMPLIFY-D30). RC-ENV-03 now expects them unset.
+  - **Plain HTTP egress is refused.** An allowlisted name on :80 reaches sbx-edge's HTTP `default_server` (444).
+  - **Adding a destination** takes the name in both lists: the nginx `map` and `RUNNER_SANDBOX_EGRESS_HOSTS`.
+  - **Services lose squid too.** repo-mirror reached github.com through `HTTPS_PROXY=http://egress-proxy:3128`; it
+    now connects directly on the egress network (until Phase 5 removes it).
+  - **Tests.** tests/security/egress/egress-probe.sh drops the CONNECT checks and adds SEC-EGRESS-09 (only the mapped
+    names resolve, all to sbx-edge), SEC-EGRESS-10 (TLS with a non-allowlisted SNI or no SNI is closed; plain HTTP
+    to an allowlisted name is refused) and SEC-EGRESS-11 (no route to public IPs). The driver requires 01..07 and
+    09..11. Residual risk, as with the CONNECT allowlist: the SNI is the client's claim, so domain fronting through
+    an allowlisted front is not stopped, but the session always goes to the real allowlisted host.
+- **SIMPLIFY-D40 The repository reaches the sandbox as a git bundle in the run inputs; repo-mirror is gone.**
+  `context.stage_inputs` (replicant_worker/activities/repo_bundle.py) fetches the commits `prepare` needs from the SCM
+  with a read-only github-token-broker token (caller `replicant-worker`, `contents:read`/`metadata:read`, purpose
+  `worker.repo_bundle`, as pr_inspect), and writes one `git bundle` whose refs are `refs/replicant/base` (the run
+  plan's `workspace.base_sha`) and, when the plan has `config_base_sha`, `refs/replicant/config` (the default-branch
+  commit repoconfig.go restores the agent configuration from). The manifest lists it as object `repo_bundle`
+  (place `repo_bundle`, type `run_inputs`, content type `application/x-git-bundle`, key `inputs/repo.bundle`).
+  - **Fetch.** `git fetch <sha>:<ref>` (protocol v2), falling back to every branch, tag and `refs/pull/*` when the
+    server serves only advertised tips. The token is passed with `-c http.extraHeader` and scrubbed from errors. An
+    unknown commit fails the activity with non-retryable `RepoCommitNotFound`; other git failures (`RepoFetchFailed`)
+    retry under `IO_SLOW`. Git output heartbeats every 20 s; one git command is capped at 15 min.
+  - **Reuse.** A job builds a bundle once per (repo, commit set) at `tenants/<t>/jobs/<j>/repo-bundles/<digest>.bundle`
+    (write-once, digest in `x-amz-meta-sha256`; a concurrent writer's object wins on 412) and each run gets a
+    server-side copy under its own `inputs/` prefix, because agentd and the run's S3 session read only the run's own
+    inputs (C-RUNNER). A new base commit (base_check after the base moved, a repair on a new base) gets a new bundle.
+  - **Repo identity.** Workflows send the primary repo (`h.primary_repo()`) as `repo` behind
+    `workflow.patched("repo-bundle-v1")`; histories without the marker replay unchanged and the activity then takes
+    the repo from the task packet.
+  - **prepare** (replicant-entrypoint) streams the object through agentd's inputs route (:7803, now streamed:
+    `s3x.GetStream`) to `/workspace/.replicant-repo.bundle` with size and digest checks (not the 512 MiB `/tmp`
+    tmpfs), runs `git bundle verify`, fetches `refs/replicant/*`, checks `refs/replicant/base` equals `base_sha`,
+    checks out `base_sha` detached and creates the job branch, then deletes the file. The checkout is unchanged for
+    collect*.go (diffs against `base_sha`) apart from: full history instead of a blobless fetch, no `origin` remote,
+    and the two `refs/replicant/*` refs. A manifest without `repo_bundle` fails prepare with exit 43
+    (RepoFetchFailed). `restoreBaseConfig` no longer fetches; the config commit must be in the bundle.
+  - **Removed.** `go/cmd/repo-mirror`; agentd's git route (:7802, `sandbox.LoopbackGit`) and its rate limiter;
+    bootstrap `endpoints.repo_mirror`; runner-local `RUNNER_SANDBOX_REPO_MIRROR_URL` and `git.sbx.local` in the
+    `RUNNER_SANDBOX_EDGE_HOSTS` default (SIMPLIFY-D30); the `repo-mirror` run-token
+    audience (`api.AudMirror`) and the `repo:fetch` scope in worker run plans and grants. runner-local mints no token
+    for an audience it does not know, so grants of in-flight jobs that still list `repo-mirror` get the others only.
+    The frozen contracts (run-plan, runner-api.openapi) keep `repo-mirror` in their audience enums, unused.
+  - **Trade-offs.** No `git fetch` during a run (the sandbox has no git endpoint at all). A bundle carries the whole
+    history of its commits: very large repositories pay for one bundle per job and base commit (a shallow or
+    partial bundle would fix that if needed; `repo.fetchDepth` is not applied). The bundle passes through the
+    workspace volume during prepare, so the disk check after the clone counts the checkout only.
+  - **Smoke.** The runner-local smoke driver stages the bundle itself (from the fake Gitea's bare repo, or the real
+    Gitea in v0 mode); RC-AUD-01 and RC-REV-03 use the gateway and runner-sandbox tokens instead of a mirror token.
+- **SIMPLIFY-D41 setgid and sticky bits are really set.** Go's `os.Chmod` ignores the raw bits 0o2000/0o1000, so
+  `sandbox-init` left the run volumes 0775 without setgid and the status directory 0777 without sticky.
+  `sandbox.FileMode` converts Unix modes to `os.ModeSetgid`/`os.ModeSticky`; `sandbox-init` (volume ownership), the
+  uploader's watchdog and the entrypoint's `mkStatusDir` use it. New files in the run volumes now get group 10002,
+  as kubelet's fsGroup does in production.
+- **SIMPLIFY-D50 No run grants: the runner checks each run against core and is the only issuer and revocation source.**
+  C-RUNNER 4.0.0 / C-CRD 4.0.0 / C-ARCH 3.0.0 (spec ADR-015, superseding ADR-007, ADR-09-001 and ADR-09-005).
+  - **Worker.** `runner.start_run` no longer signs anything: `activities/grants.py`, the `REPLICANT_RUN_GRANT_*`
+    settings and `replicant-worker grant-jwks` are gone. It sends `RunSpec.run_scope` = {repo_ids, audiences, scopes,
+    acting_for} built from the activity's existing `grant` input. The workflow command is unchanged (same activity,
+    same input, the key keeps its name), so no `workflow.patched` marker is needed and the replay histories pass
+    as recorded. `run_scope` is a per-attempt field: `spec_digest` excludes it (and `trace_context`), so digests of
+    runs created before the change are unchanged. `run_scope_invalid` (422) is non-retryable; the old
+    "re-sign once on run_grant_invalid" path is gone.
+  - **Runner (runner-local).** Admission A-5b asks core `GET /internal/v1/jobs/{job_id}/run-scope?tenant_id=T`
+    (`RUNNER_CORE_URL`, default `http://control-plane-api:8401`, caller token `RUNNER_CORE_TOKEN_FILE`, default
+    `/run/secrets/runner_cp_token`, principal `svc_runner-local`) and requires: the job exists for that tenant and is
+    not cancelled/failed/taken over; `run_scope.repo_ids` ⊆ the job's targets; `repo` and `additional_repos` ⊆
+    `run_scope.repo_ids`; `run_scope.acting_for` = the job's requester (`on_behalf_of` or `principal_id`, as the
+    worker computes it). Mismatch: 422 `run_scope_invalid`; core unreachable or 5xx: 503 `runner_unavailable`
+    (retryable). A replay of an existing run returns it without re-checking. The admitted scope is stored as
+    `spec.runScope` and `Record.local.scope` (records written before are migrated on read). Tokens are signed with the
+    runner's own key from that scope (scopes ∩ audience table, `budget_usd` = `limits.max_cost_usd`,
+    `exp` ≤ creation + startup + active + finalize + 300 s) and carry no `grant`/`grant_jti`. The runner serves
+    `/.well-known/jwks.json` on both listeners (as before) and polls core's `GET /internal/v1/revocations` every
+    `RUNNER_CORE_REVOCATION_POLL_SECONDS` (60): every local run of a listed job (reason `job_revoked`) or a listed run
+    (`run_revoked`) is added to its feed `GET /v1/revocations`, which also ends those runs at their next heartbeat.
+  - **Core.** `grants.py`, the 8403 listener, `serve-grants`, `REPLICANT_GRANTS_PORT`/`_ENABLED`,
+    `REPLICANT_RUN_GRANT_JWKS_*` and `REPLICANT_EXEC_REVOCATIONS_*` are gone. New `routes_runner.py`:
+    `GET /internal/v1/jobs/{job_id}/run-scope` (tenant-scoped read of `intake.job_requests` + `jobs_read.jobs`;
+    404 for another tenant's job) and `GET /internal/v1/revocations` (from `jobs_read`, 48 h, ETag, no
+    `generated_at`), both `service:runner-local|service:runner-api`.
+  - **Verifiers.** gateway-shim verifies the token against `REPLICANT_RUN_TOKEN_JWKS_URLS` only and polls only
+    `REPLICANT_EXEC_REVOCATIONS_URLS` (the runner feed); a `job_revoked` entry closes every run of the job. The
+    `REPLICANT_RUN_GRANT_*` variables and the `auth.run_grant` config block are ignored; usage events no longer carry
+    `caller.grant_jti` (optional in the frozen schema). replicant-agentd's token-set consistency check drops
+    `grant_jti`. memory-service has no run-token verifier in v0 (MEM-D2, no memory MCP), so nothing changes there;
+    whoever adds the MCP port uses `authz.TokenVerifier` semantics: runner JWKS + runner feed.
+  - **Mitigation and its limit.** A compromised worker cannot obtain tokens for a repo outside a job's targets, a job
+    of another tenant under a forged tenant, or another requester. It can still start runs for any live job it can
+    name (on that job's repos, for that job's requester): the grant never bounded this either, since the worker held
+    the grant key. A compromised runner can mint anything; it now runs with core's trust (ADR-015).
+  - **Frozen-contract leftovers.** `repo-mirror` stays in the run_scope audience enum (ignored, SIMPLIFY-D40);
+    gateway-usage-event keeps optional `caller.grant_jti`; gateway-interface and run-plan descriptions still say
+    "grant" (read: run scope). The `rgr_` id prefix stays reserved in replicant-ids.
+- **SIMPLIFY-D51 Smoke and contract-case changes.** runner-local's smoke driver fakes core (run-scope + revocations on
+  :8403) instead of a grants host and records each staged job's intake record there. RC-GRANT-01..05 become
+  RC-SCOPE-01..06 (missing scope 400; repo outside the job, acting_for, uncovered additional repo, another tenant's
+  job, revoked job: 422 `run_scope_invalid`); RC-GRANT-06 becomes RC-SCOPE-07 (a different `run_scope` keeps the
+  digest) and RC-GRANT-07 becomes RC-IDEM-05 (traceparent). SMOKE_TARGET=v0 talks to the live core, so jobs the
+  driver invents are unknown there: v0-mode creates now fail with `run_scope_invalid` until run-v0.sh seeds intake
+  records for them (done: SIMPLIFY-D54).
+- **SIMPLIFY-D52 One cluster, hardened sandbox pool (production design).** spec ADR-015: the four-endpoint invariant
+  (egress proxy, runner sandbox listener, gateway-shim, memory/MCP port) and the sandbox node-pool hardening (taint,
+  own subnets and security groups, IMDS blocked, ECR-pull-only node role, no Pod Identity, Cilium host firewall,
+  gVisor or Kata). The local stacks already have this shape; nothing in v0 code depends on the second cluster. The
+  kind profile's runner-api chart (dev/compose/kind, external) still expects grants and is out of date.
+- **SIMPLIFY-D53 AgentRun is a bare Pod plus a write-once S3 record; the notifier is in the Runner.** controller.md
+  and agentrun-crd.md now open with this design note (runner-local's shape); the controller detail below them is
+  kept and read as the Runner's executor.
+- **SIMPLIFY-D54 Dev-only intake records for test jobs (closes the SIMPLIFY-D51 follow-up).** replicant_dev_auth
+  (dev image only; `install()` refuses outside REPLICANT_ENV=local, and the route also answers 404 when not local)
+  adds `POST /v1/admin/dev/job-requests` `{job_id, tenant_id, repo_ids[1..5], requester_principal_id,
+  release_bundle_id?}`, dev seed token (`dev:seed`) only. It writes a minimal C-JOBREQ-shaped `intake.job_requests` row
+  (channel `api`, dedupe key `dev:test-job:<job_id>`, requester = acting_for, targets = repo_ids, born `started` so
+  the intake retrier never starts a workflow; release bundle defaults to `rb_000…`), which `run-scope` reads like any
+  job's. Idempotent for the same tenant (targets and requester replaced); 409 `job_exists` for another tenant's job or
+  a job a channel submitted. The runner contract driver in SMOKE_TARGET=v0 records each job id it stages there before
+  the first create (first tenant wins, as in the fake core; SMOKE_CORE_URL, SMOKE_DEV_SEED_TOKEN_FILE), and
+  tests/runner-contract/run-v0.sh passes them and drops GRANT_KEY_FILE. Isolated mode keeps the fake core.
+- **SIMPLIFY-D55 RC-ENV-03 allows a loopback-only NO_PROXY.** The sandbox has no proxy variables (SIMPLIFY-D30), but
+  runner-local (executor_pods.go) and the entrypoint (cliEnv) still append `127.0.0.1,localhost` to NO_PROXY so
+  agentd's loopback endpoints (gateway 127.0.0.1:7800) stay direct if an operator ever sets a proxy through
+  sandbox.env. Harmless, so kept; RC-ENV-03 now requires HTTPS_PROXY/HTTP_PROXY unset and NO_PROXY unset or exactly
+  `127.0.0.1,localhost`.
+- **SIMPLIFY-D56 RC-RUN-09 stages a bundle that does not hold base_sha.** With bundles (SIMPLIFY-D40) the driver's
+  own bundle build failed on the nonexistent base_sha (`upload-pack: not our ref`) before any run existed. The worker
+  fails the same way when it builds a run's bundle; the runner-side contract is that a bundle whose
+  refs/replicant/base differs from the plan's base_sha fails the run RepoFetchFailed (prepare exit 43). The driver
+  (runOpts.bundleBaseSHA) now bundles the real base for that case; the C-IDS vector key (RC-ID-01) and RC-MSG-04 are
+  unchanged. The case is also repeatable now: a second pass within runner-local's record retention used to stop at
+  422 `idempotency_key_reuse` (the vector run exists and the new spec differs: inputs `created_at`, current main);
+  it now checks RC-ID-01 on the existing vector run (GET) and runs the RepoFetchFailed path on a fresh job.
+- **SIMPLIFY-D57 CLI structured-output retry exhaustion is AgentResultInvalid (closes the open RC-RUN-13).** Not a
+  regression: RC-RUN-13 was the open X0-4 case. claude-code validates StructuredOutput against `--json-schema` itself
+  and, after 5 failed attempts, ends with a result event `subtype: error_max_structured_output_retries`, `is_error`,
+  no structured_output; the entrypoint classified that as AgentExitedNonZero ("CLI exited 1"). It now exits 12
+  (AgentResultInvalid, message = the CLI's last validation error), outputs collected as for a report that fails the
+  entrypoint's own validation. The driver also expected `retryable=true`; agentrun-crd.md §4 and cli-invocation.md
+  (exit 12) say non-retryable, which is what the runner reports, so RC-RUN-13 now expects `retryable=false`.
+- **SIMPLIFY-D58 RC-RUN-14 checks the committed manifest, not the Finalizing phase.** Not a regression: phases are
+  derived level-based from container state every second, and the uploader finalizes within about a second of the
+  agent's exit, so Finalizing is observed or skipped by chance (the same run shape went either way for other cases).
+  The case's intent, a finalized failure rather than a destroyed pod, is now checked from the run's manifest:
+  committed, `producer.exit_code` 30 (the agent stopped by the uploader's disk watchdog).
+- **SIMPLIFY-D59 RC-CAN-01 is SKIPPED unless runner-local has its test hook.** Pre-existing (FIX-D4: the hold hook is
+  off by default). run-v0.sh reads runner-local's RUNNER_TEST_HOOKS and passes it to the driver, which reports
+  RC-CAN-01 as SKIP (not counted, exit 0) when it is not `true`. The driver gained a SKIP result (`Skipped` in the
+  results file). To run it: `RUNNER_TEST_HOOKS=true replicant dev up --profile v0`, `run-v0.sh --only RC-CAN-01`,
+  then `dev up` again without the variable.

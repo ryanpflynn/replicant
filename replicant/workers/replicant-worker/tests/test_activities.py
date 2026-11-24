@@ -1,6 +1,6 @@
 """Unit tests of the v0 activities against contract fakes (no network, no containers).
 
-Each peer is faked from its contract: runner-local from C-RUNNER 3.0.0 (RunSpec, RunGrantClaims, Problem codes),
+Each peer is faked from its contract: runner-local from C-RUNNER 4.0.0 (RunSpec with run_scope, Problem codes),
 the gateway shim from gateway-interface.openapi.yaml (RunPolicy), control-plane-api from its OpenAPI
 (postNotification), S3 from C-ART write-once semantics. Run: uv run pytest workers/replicant-worker/tests/test_activities.py
 """
@@ -19,32 +19,38 @@ import fakes
 import httpx
 import pytest
 import zstandard
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
 from replicant_worker import ids, local_bundle, resources
-from replicant_worker.activities import base, bundle, config, core, gates, grants, notify, qa, runner, s3, staging
+from replicant_worker.activities import (
+    base,
+    bundle,
+    config,
+    core,
+    gates,
+    notify,
+    qa,
+    repo_bundle,
+    runner,
+    s3,
+    staging,
+)
 
 JOB = ids.derived("job", "test", "activities")
 T = "payments"
 RB = "rb_ds5p3wmcj4dag2e9a8ncp4py6k"
 ART = "local-replicant-local-artifacts"
 REQ = json.loads((resources.CONTRACTS / "job-request.schema.json").read_text())["examples"][0]
+_REAL_BUILD = repo_bundle.build
 REPO = {"provider": "gitea", "host": "git.replicant.localhost:3300", "owner": "acme-payments", "name": "ledger-api", "repo_id": "1"}
 
 
 @pytest.fixture(autouse=True)
 def env(tmp_path, monkeypatch):
-    key = ec.generate_private_key(ec.SECP256R1())
-    kf = tmp_path / "rg.pem"
-    kf.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
     for f, v in (("runner", "runner-secret"), ("gw", "gw-secret"), ("cp", "cp-secret")):
         (tmp_path / f).write_text(v)
     monkeypatch.setenv("REPLICANT_ENV", "local")
-    monkeypatch.setenv("REPLICANT_RUN_GRANT_KEY_FILE", str(kf))
     monkeypatch.setenv("REPLICANT_RUNNER_URL", "http://runner.test")
     monkeypatch.setenv("REPLICANT_RUNNER_TOKEN_FILE", str(tmp_path / "runner"))
     monkeypatch.setenv("REPLICANT_GATEWAY_URL", "http://gw.test")
@@ -54,17 +60,21 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("REPLICANT_GATEWAY_SCRIPT_SET", "ledger-api-v0")
     monkeypatch.delenv("REPLICANT_GATEWAY_CASSETTE_SET", raising=False)
     config.settings.cache_clear()
-    grants.signer.cache_clear()
     bundle._cache.clear()
     fs3 = fakes.FakeS3()
     s3.set_client(fs3)
     router = fakes.Router()
     base.set_http(router.client())
-    yield {"s3": fs3, "router": router, "key": key}
+    builds: list[dict[str, Any]] = []
+
+    async def fake_build(repo, refs, dest, *, job_id):  # the SCM fetch is covered by test_repo_bundle_real_git
+        builds.append({"repo": dict(repo), "refs": dict(refs), "job_id": job_id})
+        dest.write_bytes(b"# v2 git bundle\n" + json.dumps(refs, sort_keys=True).encode())
+    monkeypatch.setattr(repo_bundle, "build", fake_build)
+    yield {"s3": fs3, "router": router, "builds": builds}
     s3.set_client(None)
     base.set_http(None)
     config.settings.cache_clear()
-    grants.signer.cache_clear()
 
 
 def run(fn, arg, *, activity_id: str = "1", workflow_id: str = JOB) -> Any:
@@ -85,35 +95,30 @@ def diff_bundle(paths_content: dict[str, str]) -> bytes:
     return zstandard.ZstdCompressor().compress(buf.getvalue())
 
 
-# ------------------------------------------------------------------------------------------------ JCS, grants
+# ------------------------------------------------------------------------------------------------ JCS, run scope
 def test_spec_digest_matches_c_runner_test_vector() -> None:
     import yaml
     d = yaml.safe_load((resources.CONTRACTS / "runner-api.openapi.yaml").read_text())
     ex = d["components"]["examples"]["ImplementerRunSpec"]["value"]
-    assert grants.spec_digest(ex) == "sha256:a05ea6bc4aea3f59a4b8f7a20dea9badc8e8d1dcbb8f21b696224337bbabde06"
+    assert runner.spec_digest(ex) == "sha256:a05ea6bc4aea3f59a4b8f7a20dea9badc8e8d1dcbb8f21b696224337bbabde06"
     ex2 = copy.deepcopy(ex)
-    ex2["run_grant"] = "x.y.z"
+    ex2["run_scope"] = {**ex["run_scope"], "scopes": ["gateway:invoke"]}
     ex2["trace_context"] = {"traceparent": "00-fc0575170c8597ce9805552723c08d6e-7f3e9d2c1b0a4958-01"}
-    assert grants.spec_digest(ex2) == grants.spec_digest(ex)
+    assert runner.spec_digest(ex2) == runner.spec_digest(ex)
     ex2["limits"]["max_cost_usd"] = 14
-    assert grants.spec_digest(ex2) != grants.spec_digest(ex)
+    assert runner.spec_digest(ex2) != runner.spec_digest(ex)
 
 
-def _verify(tok: str, key: ec.EllipticCurvePrivateKey) -> dict[str, Any]:
-    h, c, sig, signing_input = fakes.jwt_parts(tok)
-    assert h == {"alg": "ES256", "typ": "replicant-run-grant+jwt", "kid": "rg-local-1"}
-    der = encode_dss_signature(int.from_bytes(sig[:32], "big"), int.from_bytes(sig[32:], "big"))
-    key.public_key().verify(der, signing_input, ec.ECDSA(hashes.SHA256()))
-    v = fakes.openapi_validator("00-contracts/runner-api.openapi.yaml", "RunGrantClaims")
-    assert not fakes.errors(v, c), fakes.errors(v, c)
-    return c
-
-
-def test_grant_jwks_matches_key(env) -> None:
-    jwk = grants.signer().public_jwk()
-    n = env["key"].public_key().public_numbers()
-    assert jwk["kid"] == "rg-local-1" and jwk["crv"] == "P-256"
-    assert jwk["x"] == grants.b64u(n.x.to_bytes(32, "big"))
+def test_no_run_grant_signing_left() -> None:
+    """SIMPLIFY-D50: the worker holds no signing key and sends no run grant; the activity input keeps its `grant` key
+    so recorded workflow histories replay unchanged."""
+    import importlib.util
+    assert importlib.util.find_spec("replicant_worker.activities.grants") is None
+    assert not any(f.name.startswith("grant") for f in dataclasses.fields(config.Settings))
+    sc = runner.run_scope({"repo_ids": ["1", "2"], "audiences": ["runner-sandbox", "ai-gateway", "ai-gateway"],
+                           "scopes": ["gateway:invoke"], "acting_for": "usr_x", "budget_usd": 3, "lifetime_seconds": 9})
+    assert sc == {"repo_ids": ["1", "2"], "audiences": ["ai-gateway", "runner-sandbox"], "scopes": ["gateway:invoke"],
+                  "acting_for": "usr_x"}
 
 
 # ------------------------------------------------------------------------------------------------ bundle, router
@@ -237,16 +242,14 @@ def _runner(env, *, first_status: int = 201, problem: dict[str, Any] | None = No
         key = json.loads(req.headers["idempotency-key"])  # RFC 9651 sf-string
         spec = json.loads(req.content)
         assert not fakes.errors(v, spec), fakes.errors(v, spec)
-        claims = _verify(spec["run_grant"], env["key"])
-        assert claims["spec_digest"] == grants.spec_digest(spec)
+        assert "run_grant" not in spec
         run_id = ids.run_id_for(spec["tenant_id"], key)
-        assert claims["run_id"] == run_id and claims["budget_usd"] == spec["limits"]["max_cost_usd"]
-        seen.append({"key": key, "spec": spec, "claims": claims})
+        seen.append({"key": key, "spec": spec, "digest": runner.spec_digest(spec)})
         if problem and state["n"] == 1:
             return httpx.Response(problem.pop("status"), json=problem, headers={"Retry-After": "7"})
         return httpx.Response(first_status if state["n"] == 1 else 200,
                               json={"run_id": run_id, "phase": "Pending", "terminal": False, "idempotency_key": key,
-                                    "spec_digest": claims["spec_digest"]})
+                                    "spec_digest": runner.spec_digest(spec)})
     env["router"].on("POST", "/v1/runs", post)
     return seen
 
@@ -336,14 +339,13 @@ def test_runner_call_sequence_end_to_end(env) -> None:
     places = [o["place"] for o in s["manifest"]["objects"]]
     assert places.count("run_plan") == 1 and "first_message" in places and "system_append" in places
     st = run(runner.runner_start_run, s["start"], activity_id=s["lid"])
-    st2 = run(runner.runner_start_run, s["start"], activity_id=s["lid"])  # retry: new grant (jti), same spec_digest
+    st2 = run(runner.runner_start_run, s["start"], activity_id=s["lid"])  # retry: same body, same spec_digest
     assert st["run_id"] == st2["run_id"] == s["run_id"]
-    assert runner_seen[0]["claims"]["jti"] != runner_seen[1]["claims"]["jti"]
-    assert runner_seen[0]["claims"]["spec_digest"] == runner_seen[1]["claims"]["spec_digest"]
+    assert runner_seen[0]["digest"] == runner_seen[1]["digest"]
     assert runner_seen[0]["key"] == f"ik1:{JOB}:implement.c0.n1.run"
-    c = runner_seen[0]["claims"]
-    assert c["iss"] == "replicant-local-core" and c["acting_for"] == REQ["requester"]["principal_id"]
-    assert c["exp"] - c["iat"] == s["start"]["grant"]["lifetime_seconds"]
+    sc = runner_seen[0]["spec"]["run_scope"]   # C-RUNNER 4.0.0: what the Runner checks against core's intake record
+    assert sc["acting_for"] == REQ["requester"]["principal_id"] and sc["repo_ids"] == ["1"]
+    assert sc["audiences"] == sorted(s["plan"]["audiences"]) and sc["scopes"] == sorted(s["plan"]["scopes"])
     # read_result: outputs become physical URIs in their bucket classes
     pre = f"tenants/{T}/jobs/{JOB}/runs/{s['run_id']}/"
     env["s3"].objs[(ART, pre + "run_result/result.json")] = json.dumps({
@@ -369,9 +371,11 @@ def test_runner_error_mapping(env) -> None:
         run(runner.runner_start_run, s["start"], activity_id=s["lid"])
     assert ei.value.type == "admission_denied" and ei.value.non_retryable
     env["router"].routes.clear()
-    seen = _runner(env, problem={"status": 422, "code": "run_grant_invalid", "retryable": False})
-    assert run(runner.runner_start_run, s["start"], activity_id=s["lid"])["run_id"] == s["run_id"]  # re-signed once
-    assert len(seen) == 2
+    seen = _runner(env, problem={"status": 422, "code": "run_scope_invalid", "retryable": False})
+    with pytest.raises(ApplicationError) as ei:  # the run is not what core accepted for the job: never retried
+        run(runner.runner_start_run, s["start"], activity_id=s["lid"])
+    assert ei.value.type == "run_scope_invalid" and ei.value.non_retryable and len(seen) == 1
+    env["router"].routes.clear()
     env["router"].on("GET", "/v1/runs/", lambda r: httpx.Response(503, json={"code": "runner_unavailable", "retryable": True}))
     with pytest.raises(ApplicationError) as ei:
         run(runner.runner_get_run, {"run_id": s["run_id"]})
@@ -391,6 +395,92 @@ def test_reviewer_and_qa_inputs_carry_the_diff(env) -> None:
     assert objs["plan"]["path"] == "plan.md"
     q = _sequence(env, role="qa", agent="qa-runner", node="qa", refs=refs)
     assert {o["place"] for o in q["manifest"]["objects"]} >= {"apply_diff", "run_plan"}
+
+
+# ------------------------------------------------------------------------------------------------ repo bundle (SIMPLIFY-D40)
+def test_repo_bundle_staged_per_run_and_reused_per_job(env) -> None:
+    """Every run's manifest carries one repo_bundle under its own inputs/ prefix; the job builds it once per commit set."""
+    _gateway(env)
+    a = _sequence(env)
+    b = _sequence(env, role="reviewer", agent="reviewer-codex", node="review")
+    for s_ in (a, b):
+        rb = [o for o in s_["manifest"]["objects"] if o["place"] == "repo_bundle"]
+        assert len(rb) == 1 and rb[0]["name"] == "repo_bundle" and rb[0]["content_type"] == repo_bundle.CONTENT_TYPE
+        assert rb[0]["key"] == f"tenants/{T}/jobs/{JOB}/runs/{s_['run_id']}/inputs/repo.bundle"
+        body = env["s3"].objs[(ART, rb[0]["key"])]
+        assert hashlib.sha256(body).hexdigest() == rb[0]["sha256"] and len(body) == rb[0]["size_bytes"]
+    assert len(env["builds"]) == 1, env["builds"]  # second run: the job's cached bundle, server-side copied
+    assert env["builds"][0]["refs"] == {repo_bundle.REF_BASE: "8" * 40} and env["builds"][0]["job_id"] == JOB
+    assert env["builds"][0]["repo"]["name"] == REQ["targets"][0]["repo"]["name"]  # from the task packet (no patch)
+
+
+def test_repo_bundle_refs_and_patched_repo(env) -> None:
+    """config_base_sha (repo_config use) adds refs/replicant/config; the workflow's `repo` (repo-bundle-v1) wins."""
+    assert repo_bundle.wanted_refs({"workspace": {"base_sha": "a" * 40}, "config_base_sha": "b" * 40}) == \
+        {repo_bundle.REF_BASE: "a" * 40, repo_bundle.REF_CONFIG: "b" * 40}
+    assert repo_bundle.wanted_refs({"workspace": {"base_sha": "a" * 40}, "config_base_sha": "a" * 40}) == {repo_bundle.REF_BASE: "a" * 40}
+    assert repo_bundle.wanted_refs({"workspace": {}}, "c" * 40) == {repo_bundle.REF_BASE: "c" * 40}
+    assert repo_bundle.wanted_refs({"workspace": {}}) == {}
+    k1 = repo_bundle.cache_key(T, JOB, REPO, {repo_bundle.REF_BASE: "a" * 40})
+    assert k1.startswith(f"tenants/{T}/jobs/{JOB}/repo-bundles/") and k1 != \
+        repo_bundle.cache_key(T, JOB, REPO, {repo_bundle.REF_BASE: "b" * 40})
+    out = asyncio.run(repo_bundle.stage(tenant=T, job=JOB, run_prefix=f"tenants/{T}/jobs/{JOB}/runs/run_x/", repo=REPO,
+                                        refs={repo_bundle.REF_BASE: "a" * 40}))
+    assert out and env["builds"][-1]["repo"] == REPO
+    assert asyncio.run(repo_bundle.stage(tenant=T, job=JOB, run_prefix="p/", repo=None, refs={repo_bundle.REF_BASE: "a" * 40})) is None
+    assert asyncio.run(repo_bundle.stage(tenant=T, job=JOB, run_prefix="p/", repo=REPO, refs={})) is None
+
+
+def _git(cwd, *args: str) -> str:
+    import subprocess
+    return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main", *args],
+                          cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+
+@pytest.mark.skipif(__import__("shutil").which("git") is None, reason="git not on PATH")
+def test_repo_bundle_real_git(env, tmp_path, monkeypatch) -> None:
+    """The real build: broker read token, fetch of the wanted commits (tip and non-tip) from the SCM, `git bundle`
+    with exactly the replicant refs; an unknown commit is non-retryable."""
+    from replicant_worker.activities import pr_inspect
+    pr_inspect._tokens.clear()
+    up = tmp_path / "scm" / "acme-payments" / "ledger-api.git"
+    work = tmp_path / "work"
+    work.mkdir()
+    _git(work, "init", "-q")
+    (work / "a.txt").write_text("one\n")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-qm", "one")
+    first = _git(work, "rev-parse", "HEAD")
+    (work / "a.txt").write_text("two\n")
+    _git(work, "commit", "-qam", "two")
+    second = _git(work, "rev-parse", "HEAD")
+    _git(tmp_path, "clone", "-q", "--bare", str(work), str(up))
+    (tmp_path / "broker").write_text("caller-secret")
+    monkeypatch.setenv("REPLICANT_TOKEN_BROKER_TOKEN_FILE", str(tmp_path / "broker"))
+    monkeypatch.setenv("REPLICANT_TOKEN_BROKER_URL", "http://broker.test")
+    monkeypatch.setenv("REPLICANT_GITEA_BASE_URL", f"file://{tmp_path / 'scm'}")
+    asks: list[dict[str, Any]] = []
+
+    def mint(req: httpx.Request) -> httpx.Response:
+        assert req.headers["authorization"] == "Bearer caller-secret"
+        asks.append(json.loads(req.content))
+        return httpx.Response(200, json={"token": "scm-read-token", "expires_at": "2099-01-01T00:00:00Z"})
+    env["router"].on("POST", "/v1/installation-tokens", mint)
+    dest = tmp_path / "out.bundle"
+    refs = {repo_bundle.REF_BASE: second, repo_bundle.REF_CONFIG: first}
+    asyncio.run(_REAL_BUILD(REPO, refs, dest, job_id=JOB))
+    assert asks and asks[0]["permissions"] == {"contents": "read", "metadata": "read"} and asks[0]["purpose"] == repo_bundle.PURPOSE
+    heads = dict(reversed(line.split()) for line in _git(tmp_path, "bundle", "list-heads", str(dest)).splitlines())
+    assert heads == refs
+    clone = tmp_path / "sandbox"
+    clone.mkdir()
+    _git(clone, "init", "-q")
+    _git(clone, "fetch", "-q", str(dest), "+refs/replicant/*:refs/replicant/*")
+    assert _git(clone, "rev-list", "--count", repo_bundle.REF_BASE) == "2"
+    with pytest.raises(ApplicationError) as ei:
+        asyncio.run(_REAL_BUILD(REPO, {repo_bundle.REF_BASE: "f" * 40}, tmp_path / "x.bundle", job_id=JOB))
+    assert ei.value.type == "RepoCommitNotFound" and ei.value.non_retryable
+    assert "scm-read-token" not in str(ei.value)
 
 
 # ------------------------------------------------------------------------------------------------ QA, risk, verifier

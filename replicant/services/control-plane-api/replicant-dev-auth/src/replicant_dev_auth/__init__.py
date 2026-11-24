@@ -1,7 +1,8 @@
 """LOCAL ONLY (identity.md §9.3, L-1..L-7). Installed only in the `dev` image target of control-plane-api.
 
 * Dev seed token: `Authorization: Bearer <dev_seed_token>` -> principal `svc_dev-seeder` with permission `dev:seed`
-  (scope L-5: seed status, tenants, settings, platform caps, local bundle registration and bootstrap).
+  (scope L-5: seed status, tenants, settings, platform caps, local bundle registration and bootstrap, test-job intake
+  records for the Runner contract driver, SIMPLIFY-D54).
 * Static dev users (M1 stand-in for Dex + identity-service): `X-Replicant-Dev-User: <login>` -> `usr_` principal
   `derived("usr", "replicant-dev-user", login)` with the roles below (or `REPLICANT_DEV_PRINCIPALS_FILE`, YAML
   `{login: {groups: [...], platform_roles: [...], tenant_roles: {tenant: [roles]}}}`).

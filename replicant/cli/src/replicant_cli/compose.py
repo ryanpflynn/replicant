@@ -15,38 +15,27 @@ from replicant_cli import engine
 from replicant_cli.paths import Paths
 
 PROJECT = "replicant"
-ONE_SHOT = frozenset({"migrate", "s3-init", "temporal-bootstrap", "gitea-bootstrap", "temporal-schema", "k8s-provisioner"})
+ONE_SHOT = frozenset({"init"})
+ALL_PROFILES = "v0,slack,observability"   # the v0 stack plus every opt-in profile of compose.v0.yaml
 OWNERS = {
-    "postgres-replicant": "PLATFORM", "temporal": "PLATFORM", "temporal-bootstrap": "PLATFORM", "temporal-ui": "PLATFORM",
-    "s3": "PLATFORM", "s3-init": "PLATFORM", "migrate": "PLATFORM", "gitea": "PLATFORM", "gitea-bootstrap": "PLATFORM",
-    "control-plane-api": "CONTROL", "run-grants": "CONTROL", "github-integration": "CONTROL",
-    "github-token-broker": "CONTROL", "replicant-worker": "WORKER", "publisher-worker": "WORKER",
-    "replicant-projector": "WORKER", "runner-local": "RUNNER", "repo-mirror": "RUNNER", "gateway-shim": "GATEWAY",
-    "gateway-state": "GATEWAY",
+    "postgres-replicant": "PLATFORM", "temporal": "PLATFORM", "s3": "PLATFORM", "init": "PLATFORM", "gitea": "PLATFORM",
+    "control-plane-api": "CONTROL", "github-token-broker": "CONTROL", "memory-service": "MEM",
+    "replicant-worker": "WORKER", "publisher-worker": "WORKER", "runner-local": "RUNNER", "gateway-shim": "GATEWAY",
 }
 # Images runner-local starts sandboxes from (RUNNER-06/07). They are not compose services, and runner-local never
-# pulls `localhost/` images, so `replicant dev up` builds them whenever runner-local is started.
+# pulls `localhost/` images, so `replicant dev up` builds them whenever runner-local is started. The pod-group pause
+# container runs from the sandbox-sidecars image (`sandbox-sidecars pause`, SIMPLIFY-D2).
 # (image, dockerfile relative to the repo root, target or None); context = repo root.
 SANDBOX_IMAGES = (
-    ("localhost/replicant/pause:3.10", "go/cmd/sandbox-sidecars/Dockerfile", "pause"),
     ("localhost/replicant/sandbox-sidecars:dev", "go/cmd/sandbox-sidecars/Dockerfile", "sidecars"),
     ("localhost/replicant/cli-claude-code:dev", "images/cli-claude-code/Dockerfile", None),
     ("localhost/replicant/env-go-service:dev", "images/env-go-service/Dockerfile", None),
     ("localhost/replicant/env-python-service:dev", "images/env-python-service/Dockerfile", None),  # design §8c
     ("localhost/replicant/env-node-service:dev", "images/env-node-service/Dockerfile", None),
 )
+# The one image every Python service, worker, tool and the `init` one-shot run from (images/replicant-py).
+PY_IMAGE = "localhost/replicant/replicant-py:dev"
 _VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::?-([^}]*))?\}")
-
-
-class _Loader(yaml.SafeLoader):
-    pass
-
-
-for _tag in ("!reset", "!override"):
-    _Loader.add_constructor(_tag, lambda loader, node: (
-        loader.construct_mapping(node) if isinstance(node, yaml.MappingNode)
-        else loader.construct_sequence(node) if isinstance(node, yaml.SequenceNode)
-        else loader.construct_scalar(node)))
 
 
 def env_values(p: Paths) -> dict[str, str]:
@@ -84,38 +73,18 @@ class Service:
 
 
 def profile_list(profile: str) -> list[str]:
-    """`v0`, `core` or a comma list such as `v0,observability`."""
-    out = [x.strip() for x in profile.split(",") if x.strip()]
-    if "core" in out and "s3-seaweedfs" not in out:
-        out.append("s3-seaweedfs")
-    return out
+    """`v0` (the services without a `profiles:` key) plus opt-in profiles, as a comma list such as `v0,slack`."""
+    return [x.strip() for x in profile.split(",") if x.strip()]
 
 
 def load_services(p: Paths, profile: str) -> dict[str, Service]:
+    """Services of compose.v0.yaml active under `profile`: those without `profiles:` plus the selected opt-in ones."""
     env = env_values(p)
-    doc = yaml.load(p.compose_file.read_text(), Loader=_Loader)
-    services = dict(doc.get("services") or {})
-    if "v0" in profile_list(profile):
-        # The override files are part of the v0 stack (compose_cmd passes them too): their `profiles`, `image`,
-        # `build` and `depends_on` win, and services defined only there are included (RENAME-D6).
-        for f in (p.v0_file, p.compose_dir / "compose.v0.deps.yaml"):
-            if not f.is_file():
-                continue
-            over = yaml.load(f.read_text(), Loader=_Loader) or {}
-            for name, o in (over.get("services") or {}).items():
-                base = dict(services.get(name) or {})
-                for k in ("profiles", "image", "build"):
-                    if k in o:
-                        base[k] = o[k]
-                if "depends_on" in o:
-                    d = o["depends_on"]
-                    base["depends_on"] = {**(base.get("depends_on") or {}), **d} if f.name.endswith("deps.yaml") \
-                        and isinstance(d, dict) and isinstance(base.get("depends_on"), dict) else d
-                services[name] = base
+    doc = yaml.safe_load(p.compose_file.read_text())
     out: dict[str, Service] = {}
-    for name, svc in services.items():
+    for name, svc in (doc.get("services") or {}).items():
         profiles = svc.get("profiles") or []
-        if not set(profile_list(profile)) & set(profiles):
+        if profiles and not set(profile_list(profile)) & set(profiles):
             continue
         image = interpolate(svc.get("image", ""), env)
         if image and "/" in image.split(":")[0] and not image.startswith(("localhost/", "docker.io/", "ghcr.io/", "quay.io/")):
@@ -169,12 +138,9 @@ def build_plain(p: Paths, image: str, dockerfile: str, target: str | None, env: 
 
 
 def compose_cmd(p: Paths, profile: str) -> list[str]:
-    files = ["-f", str(p.compose_file)]
-    profs = profile_list(profile)
-    if "v0" in profs:
-        files += ["-f", str(p.v0_file), "-f", str(p.compose_dir / "compose.v0.deps.yaml")]
-    prof = [a for x in profs for a in ("--profile", x)]
-    return [*engine.compose_bin(), "--project-name", PROJECT, *files, "--env-file", str(p.env_file), *prof]
+    prof = [a for x in profile_list(profile) for a in ("--profile", x)]
+    return [*engine.compose_bin(), "--project-name", PROJECT, "-f", str(p.compose_file), "--env-file", str(p.env_file),
+            *prof]
 
 
 def run_compose(p: Paths, profile: str, args: list[str], timeout: float | None = None,

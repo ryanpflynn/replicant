@@ -43,8 +43,8 @@ type Server struct {
 	SELinux  bool
 	S3       *s3x.Client
 	Registry *Registry
-	Grants   *authz.GrantVerifier
-	Core     *revoke.Core
+	Scope    *CoreScope   // run-scope check against core's intake record (SIMPLIFY-D50)
+	Core     *revoke.Core // core's job revocation list, folded into Feed
 	Feed     *Feed
 	Kill     *KillSwitches
 	Creds    *Creds
@@ -324,12 +324,6 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "", "jcs", err.Error())
 		return
 	}
-	// RS-10 / A-5b: verify the grant (also on a replay, where the retry's grant is verified then discarded).
-	g, gerr := s.Grants.Verify(ctx, rs.RunGrant)
-	if gerr == nil {
-		gerr = grantMatches(g, &rs, runID, digest)
-	}
-
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
 	existing, err := s.Store.Get(runID)
@@ -337,11 +331,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		api.WriteProblem(w, api.NewProblem("internal", err.Error()))
 		return
 	}
-	if existing != nil {
-		if gerr != nil {
-			s.grantProblem(w, gerr)
-			return
-		}
+	if existing != nil { // a replay returns the run admitted earlier (run_scope is not compared)
 		if existing.Local.SpecDigest != digest {
 			p := api.NewProblem("idempotency_key_reuse", "a run with this key exists with a different spec")
 			p.RunID = runID
@@ -412,9 +402,24 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		s.admissionDenied(w, field, "kill switch engaged (starts)")
 		return
 	}
-	// A-5b.
-	if gerr != nil {
-		s.grantProblem(w, gerr)
+	// A-5b (C-RUNNER 4.0.0, SIMPLIFY-D50): the run scope must match core's intake record of the job.
+	js, err := s.Scope.Get(ctx, rs.TenantID, rs.JobID)
+	switch {
+	case errors.Is(err, errJobUnknown):
+		s.scopeProblem(w, err)
+		return
+	case err != nil:
+		p := api.NewProblem("runner_unavailable", "core run-scope: "+err.Error())
+		p.RetryAfterSeconds = 10
+		api.WriteProblem(w, p)
+		return
+	}
+	if err := checkScope(js, &rs); err != nil {
+		s.scopeProblem(w, err)
+		return
+	}
+	if ok, why := s.Core.Revoked(rs.JobID, runID); ok {
+		s.scopeProblem(w, fmt.Errorf("job on core's revocation list (%s)", why))
 		return
 	}
 	// A-6 .. A-8.
@@ -453,7 +458,8 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		api.WriteProblem(w, p)
 		return
 	}
-	rec := s.newRecord(&rs, runID, key, digest, g, res, r.Header.Get("traceparent"))
+	scope := runAuthz(&rs, runID, time.Now())
+	rec := s.newRecord(&rs, runID, key, digest, &scope, res, r.Header.Get("traceparent"))
 	if err := s.Store.Create(rec); err != nil {
 		if errors.Is(err, ErrExists) {
 			cur, _ := s.Store.Get(runID)
@@ -479,30 +485,8 @@ func (s *Server) admissionDenied(w http.ResponseWriter, field, msg string) {
 	api.WriteProblem(w, p)
 }
 
-func (s *Server) grantProblem(w http.ResponseWriter, err error) {
-	p := api.NewProblem("run_grant_invalid", err.Error())
-	api.WriteProblem(w, p)
-}
-
-func grantMatches(g *api.RunGrantClaims, rs *api.RunSpec, runID, digest string) error {
-	switch {
-	case g.SpecDigest != digest:
-		return fmt.Errorf("grant spec_digest %s != %s", g.SpecDigest, digest)
-	case g.RunID != runID:
-		return fmt.Errorf("grant run_id mismatch")
-	case g.TenantID != rs.TenantID || g.JobID != rs.JobID || g.Role != rs.Role:
-		return fmt.Errorf("grant tenant/job/role mismatch")
-	}
-	need := []string{rs.Repo.RepoID}
-	for _, a := range rs.AdditionalRepos {
-		need = append(need, a.RepoID)
-	}
-	for _, id := range need {
-		if !slices.Contains(g.RepoIDs, id) {
-			return fmt.Errorf("grant repo_ids do not cover %s", id)
-		}
-	}
-	return nil
+func (s *Server) scopeProblem(w http.ResponseWriter, err error) {
+	api.WriteProblem(w, api.NewProblem("run_scope_invalid", err.Error()))
 }
 
 func (s *Server) evidence(ctx context.Context, rs *api.RunSpec) (bool, error) {
@@ -535,7 +519,7 @@ func (s *Server) activeRuns(tenant string) int {
 	return n
 }
 
-func (s *Server) newRecord(rs *api.RunSpec, runID, key, digest string, g *api.RunGrantClaims, res *Resolved, traceparent string) *Record {
+func (s *Server) newRecord(rs *api.RunSpec, runID, key, digest string, scope *api.RunAuthz, res *Resolved, traceparent string) *Record {
 	now := time.Now().UTC()
 	body := ids.Body(runID)
 	fetch := rs.Repo.FetchDepth
@@ -577,7 +561,7 @@ func (s *Server) newRecord(rs *api.RunSpec, runID, key, digest string, g *api.Ru
 			PriorityClassName: priorityClass(rs),
 			Timeouts:          v1.RunTimeouts{StartupSeconds: rs.Timeouts.StartupSeconds, ActiveDeadlineSeconds: rs.Timeouts.ActiveDeadlineSeconds, FinalizeSeconds: rs.Timeouts.FinalizeSeconds},
 			Callback:          v1.RunCallback{Namespace: rs.Callback.Namespace, WorkflowID: rs.Callback.WorkflowID, SignalName: "run.status_changed"},
-			RunGrant:          rs.RunGrant,
+			RunScope:          v1.RunScope{RepoIDs: rs.RunScope.RepoIDs, Audiences: rs.RunScope.Audiences, Scopes: rs.RunScope.Scopes, ActingFor: rs.RunScope.ActingFor},
 		},
 	}
 	for _, a := range rs.AdditionalRepos {
@@ -616,7 +600,7 @@ func (s *Server) newRecord(rs *api.RunSpec, runID, key, digest string, g *api.Ru
 		mem = s.Cfg.MaxMemoryBytes
 	}
 	return &Record{AgentRun: ar, Local: Local{
-		SpecDigest: digest, IdempotencyKey: key, Grant: *g, Isolation: string(s.Cfg.Runtime), Runtime: s.Cfg.Runtime,
+		SpecDigest: digest, IdempotencyKey: key, Scope: *scope, Isolation: string(s.Cfg.Runtime), Runtime: s.Cfg.Runtime,
 		AgentImage: res.Env.Image.Resolved.Image, CLIImage: res.Agent.CLIImage.Image, CPUs: cpus, MemoryBytes: mem,
 		WorkspaceBytes: parseBytes(res.Profile.Workspace.SizeLimit), SteeringLive: steering, Repo: rs.Repo,
 		EnvDefaults: res.Env.Env, Generation: 1, Stage: "accepted", TraceParent: traceparent,

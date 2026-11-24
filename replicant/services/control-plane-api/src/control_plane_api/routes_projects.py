@@ -25,7 +25,7 @@ import httpx
 from fastapi import APIRouter, Body, Header, Request
 from sqlalchemy import text
 
-from control_plane_api import audit, derived
+from control_plane_api import audit, derived, in_process
 from control_plane_api import projects as P
 from control_plane_api.auth import check, require
 from control_plane_api.authz import Principal
@@ -442,7 +442,8 @@ async def sync_triggers(request: Request, row: Any, actor: str) -> list[dict[str
         body = {"provider": r["provider"], "host": r["host"], "tenant_id": row.tenant_id, "repo_id": r["repo_id"],
                 "settings": {"repo_id": r["repo_id"], **trigger_settings(eff, r["full_name"])}, "actor": actor}
         try:
-            async with httpx.AsyncClient(timeout=10) as c:
+            async with in_process.client(getattr(request.app.state, "in_process", None), ns.github_integration_url,
+                                         timeout=10) as c:
                 resp = await c.put(f"{ns.github_integration_url}/internal/v1/repo-settings", json=body,
                                    headers={"Authorization": f"Bearer {tok}"} if tok else {})
             out.append({"repo_id": r["repo_id"], "status": resp.status_code})

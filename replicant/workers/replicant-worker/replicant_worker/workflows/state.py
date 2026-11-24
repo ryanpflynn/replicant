@@ -156,7 +156,7 @@ class JobState:
     # shadow_of_job_id, publish_to_eval_git, eval_run_id, review_rounds_key}
     evaluation: dict[str, Any] | None = None
     acting_for: str = ""  # requester, or on_behalf_of for service-triggered jobs (CCR-09-03)
-    repo_ids: list[str] = field(default_factory=list)  # authorized targets (run grant repo_ids)
+    repo_ids: list[str] = field(default_factory=list)  # authorized targets (RunSpec run_scope.repo_ids)
     # QA routing (WS-05 XD-05-03): per-cycle counters and the risk floor QA imposes (D-19: only raises)
     qa_fix_used: int = 0
     qa_env_retries: int = 0

@@ -17,18 +17,20 @@ from temporalio.exceptions import ApplicationError
 
 from replicant_worker import local_bundle, tiers
 from replicant_worker.activities import bundle as bundles
-from replicant_worker.activities import s3
+from replicant_worker.activities import repo_bundle, s3
 from replicant_worker.activities.base import http, implements, info_ids, parse_lid, retryable_http
 from replicant_worker.activities.config import read_secret, settings
 
-RUN_AUDIENCES = {  # RUNNER-02 per role; ai-gateway + runner-sandbox + repo-mirror always (agentd needs them)
-    "implementer": ["ai-gateway", "repo-mirror", "runner-sandbox"],
-    "repair": ["ai-gateway", "repo-mirror", "runner-sandbox"],
-    "planner": ["ai-gateway", "repo-mirror", "runner-sandbox"],
-    "reviewer": ["ai-gateway", "repo-mirror", "runner-sandbox"],
-    "qa": ["ai-gateway", "repo-mirror", "runner-sandbox"],
+# RUNNER-02 per role; ai-gateway + runner-sandbox always (agentd needs them). No repo-mirror audience or repo:fetch
+# scope: the repository arrives as a git bundle in the run inputs (repo_bundle, SIMPLIFY-D40).
+RUN_AUDIENCES = {
+    "implementer": ["ai-gateway", "runner-sandbox"],
+    "repair": ["ai-gateway", "runner-sandbox"],
+    "planner": ["ai-gateway", "runner-sandbox"],
+    "reviewer": ["ai-gateway", "runner-sandbox"],
+    "qa": ["ai-gateway", "runner-sandbox"],
 }
-BASE_SCOPES = ["gateway:invoke", "repo:fetch", "credentials:aws"]
+BASE_SCOPES = ["gateway:invoke", "credentials:aws"]
 
 
 def run_prefix(tenant: str, job: str, run_id: str) -> str:
@@ -286,7 +288,9 @@ def _pr_review_block(triage_uri: str | None) -> str:
 async def context_stage_inputs(a: dict[str, Any]) -> dict[str, Any]:
     """WS-04 context.stage_inputs, v0: stages system-append.md, first-message.md, the task packet, the briefing, the
     plan (implementer/reviewer), the latest diff bundle as `apply_diff` (qa, reviewer) and its patch as a context
-    file (reviewer), then writes inputs/manifest.json once (replicant.run-inputs/v1)."""
+    file (reviewer), the repository as a git bundle (`repo_bundle`, SIMPLIFY-D40; the repo comes from `repo`, sent
+    by workflows with the repo-bundle-v1 patch, else from the task packet), then writes inputs/manifest.json once
+    (replicant.run-inputs/v1)."""
     tenant, job, run_id, role = a["tenant_id"], a["job_id"], a["run_id"], a["role"]
     pre = run_prefix(tenant, job, run_id)
     mref = s3.ref("artifacts", pre + "inputs/manifest.json")
@@ -344,6 +348,10 @@ async def context_stage_inputs(a: dict[str, Any]) -> dict[str, Any]:
             patch = read_diff_bundle(diff)["patch"]
             objects.append(_obj("changes_patch", "diff_bundle", _reuse_or_put(s3.ref("artifacts", pre + "inputs/changes.patch"),
                                 patch, "text/x-diff"), "text/x-diff", "context_file", "changes.patch"))
+    rb = await repo_bundle.stage(tenant=tenant, job=job, run_prefix=pre, repo=a.get("repo") or task.get("repo"),
+                                 refs=repo_bundle.wanted_refs(plan_doc, (a.get("repo") or {}).get("base_sha")))
+    if rb:
+        objects.append(rb)
     # MEM: select + render this run's memory block (memory-service records memory.injections); staged as
     # inputs/memory-injection.json, place system_append_memory (the entrypoint appends `.rendered`)
     from replicant_worker.activities import memory as memact

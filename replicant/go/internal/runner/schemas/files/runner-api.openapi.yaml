@@ -2,10 +2,19 @@ openapi: 3.1.1
 jsonSchemaDialect: https://spec.openapis.org/oas/3.1/dialect/base
 info:
   title: Replicant Runner API
-  version: 3.0.0
+  version: 4.0.0
   summary: The only interface between orchestration (Temporal workers) and the execution environment (D-04).
   description: |
-    Contract C-RUNNER v3.0.0 (WS-00).
+    Contract C-RUNNER v4.0.0 (WS-00).
+
+    Changelog 4.0.0 (breaking, SIMPLIFY-D50, ADR-015 "single cluster, hardened sandbox pool"): run grants are gone.
+    `RunSpec.run_grant` is replaced by the required `RunSpec.run_scope` (repo_ids, audiences, scopes, acting_for),
+    which the Runner checks against core's intake record (`GET /internal/v1/jobs/{job_id}/run-scope`) before it
+    accepts the run; `RunGrantClaims` and `RunTokenClaims.grant`/`grant_jti` are removed; error code
+    `run_grant_invalid` becomes `run_scope_invalid`. The Runner is the only signer and the only source verifiers
+    poll: its JWKS (`/.well-known/jwks.json`) and its revocation feed (`GET /v1/revocations`), which now also
+    carries core's job revocations (the Runner polls core's `GET /internal/v1/revocations`). `run_scope` is a
+    per-attempt field, so a run's `spec_digest` is unchanged.
 
     Changelog 3.0.0 (breaking, CCR-ORCH-02): Product rename to Replicant (CCR-ORCH-02). Every product-named identifier changes; there is no structural change. Domain `factory.example.com` (labels, annotations, schema `$id` host) becomes `replicant.example.com`; env prefix `FACTORY_` becomes `REPLICANT_`; headers `X-Factory-*` become `X-Replicant-*`; names `factory-*`/`factory_*` (services, task queues, Temporal namespace, roles, buckets, groups, hosts, networks) become `replicant-*`/`replicant_*`; CamelCase `Factory*` (workflow types, search attributes) becomes `Replicant*`. Headers `X-Replicant-*`, priority classes `replicant-run-*`/`replicant-eval`, schema `$id` host `schemas.replicant.example.com`. `$id` path majors are unchanged.
 
@@ -66,7 +75,7 @@ info:
 
       | Field | Why it changes per attempt | Copy kept on a 200 repeat |
       |---|---|---|
-      | `run_grant` | the retry re-signs the grant (new `jti`, `iat`) | the **first** create's grant (`spec.runGrant`). The retry's grant is verified, then discarded |
+      | `run_scope` | carried from the activity input, never compared: the Runner checks it against core's intake record instead | the **first** create's scope (`spec.runScope`). A repeat returns the existing run without re-checking |
       | `trace_context` (`traceparent`, `tracestate`) | each activity attempt runs in a new span (R2-002) | the **first** create's context (`spec.traceContext`). The Runner adds the retry's `traceparent` as a span **link** on its `runner.create_run` span, so the retry is still traceable |
 
     * **Decision fields (normative).** Every other RunSpec field is a decision field. The Runner-call
@@ -84,7 +93,7 @@ info:
       object, and returns 200.
     * **Test vector.** For the `ImplementerRunSpec` example, `spec_digest = sha256:a05ea6bc4aea3f59a4b8f7a20dea9badc8e8d1dcbb8f21b696224337bbabde06`.
       The same spec with `trace_context.traceparent = 00-fc0575170c8597ce9805552723c08d6e-7f3e9d2c1b0a4958-01`
-      and a different `run_grant` has the **same** digest. Changing `limits.max_cost_usd` from 15 to 14
+      and a different `run_scope` has the **same** digest. Changing `limits.max_cost_usd` from 15 to 14
       changes it. JCS here is RFC 8785. For this example it equals sorted-key, compact JSON (UTF-8,
       integers only).
     * A repeat with a different spec returns **422 `idempotency_key_reuse`**.
@@ -125,7 +134,7 @@ info:
     | run_expired | 410 | no |
     | idempotency_key_reuse | 422 | no |
     | admission_denied | 422 | no |
-    | run_grant_invalid | 422 | no |
+    | run_scope_invalid | 422 | no |
     | definition_not_resolvable | 422 | no |
     | tenant_quota_exceeded | 429 | yes |
     | rate_limited | 429 | yes |
@@ -145,29 +154,33 @@ info:
       published at `/.well-known/jwks.json` on both listeners. The token for run R authorizes only operations
       on R, and only while R is non-terminal (plus `finalize_seconds`).
 
-    ## Run grants and per-audience run tokens (CCR-09-01, CCR-09-02, CCR-09-03)
-    * **Run grant.** Before `POST /v1/runs`, the Runner-call activity (replicant-worker, core account) signs a
-      compact JWS (`typ: replicant-run-grant+jwt`, ES256, KMS key class `run-grant`, ECC_NIST_P256) with claims
-      `RunGrantClaims` and sends it as `RunSpec.run_grant`. runner-api verifies it at admission against the
-      core run-grant JWKS (`https://grants.<env>.replicant.internal/.well-known/jwks.json`, served by
-      control-plane-api, cached ≤ 10 min). It also checks that `grant.spec_digest` equals the request's
-      `spec_digest`, that `run_id`, `tenant_id`, `job_id`, and `role` match, and that `repo_ids` cover
-      `repo.repo_id` and `additional_repos`. Failure gives 422 `run_grant_invalid`. The grant is stored
-      immutably in `AgentRun.spec.runGrant`.
-    * **Per-audience tokens.** For each audience in `grant.audiences` the Runner mints a separate token,
-      `aud` a single string. Each token embeds the grant (`grant`, `grant_jti`) and claims a subset of it:
-      `aud ∈ audiences`, `scopes ⊆`, `repo_ids ⊆`, `budget_usd ≤`, `exp ≤ grant.exp`, `acting_for` equal. The
-      controller projects them as files `/run/replicant/tokens/<audience>` (`REPLICANT_RUN_TOKEN_DIR`).
-    * **Verifier obligations** (AI gateway, memory-mcp, context-mcp, repo-mirror, sandbox listener):
-      1. Verify the token signature (Runner JWKS) with `aud` **equal** to the verifier's own name.
-      2. Verify the embedded grant signature (core run-grant JWKS) and the subset relation above.
-      3. Reject tokens whose grant's `job_id` or `run_id` is on the core revocation list (`/grants/revoked`
-         on the grants host, polled every 60 s; entries are `job_id`s and `run_id`s, see C-STATE).
-      4. Authorize by `tenant_id`, `repo_ids`, `scopes`, and, for context and memory, `acting_for` (D-18).
-      5. Reject tokens whose `run_id` appears in the **exec revocation feed** (`GET /v1/revocations`,
-         CCR-02-09). The controller adds every run at its terminal phase through
-         `POST /internal/v1/runs/{run_id}:revoke`, so a partitioned sandbox cannot keep spending
-         while its retry runs (R2-030).
+    ## Run scope and per-audience run tokens (CCR-09-01, CCR-09-03; SIMPLIFY-D50 replaces CCR-09-02)
+    * **Run scope.** The Runner-call activity sends `RunSpec.run_scope` (repo_ids, audiences, scopes,
+      acting_for) built from workflow state. Before accepting a new run the Runner asks core
+      (`GET /internal/v1/jobs/{job_id}/run-scope?tenant_id=…`, Runner caller identity) for the job's intake
+      record and requires: the job exists **for that tenant** and is not revoked (cancelled, failed, taken
+      over); `run_scope.repo_ids` ⊆ the job's targets; `repo.repo_id` and every `additional_repos[].repo_id`
+      ∈ `run_scope.repo_ids`; `run_scope.acting_for` equals the job's requester (`on_behalf_of` or
+      `principal_id`). Any mismatch gives 422 `run_scope_invalid`; core unreachable gives 503
+      `runner_unavailable`. A compromised worker can therefore start runs only for jobs core accepted, only
+      on those jobs' repos, and only acting for those jobs' requesters. The scope is stored in
+      `AgentRun.spec.runScope`.
+    * **Per-audience tokens.** For each audience in `run_scope.audiences` the Runner mints a separate token
+      signed with its own key, `aud` a single string, claiming a subset of the admitted run:
+      scopes from the audience's scope table ∩ `run_scope.scopes`, `repo_ids` = `run_scope.repo_ids`,
+      `budget_usd` = `limits.max_cost_usd`, `exp` ≤ the run's overall deadline (startup + active deadline +
+      finalize + 300 s after creation). The controller projects them as files
+      `/run/replicant/tokens/<audience>` (`REPLICANT_RUN_TOKEN_DIR`).
+    * **Verifier obligations** (AI gateway, memory-mcp, context-mcp, sandbox listener):
+      1. Verify the token signature against the **Runner JWKS** (`/.well-known/jwks.json` on either
+         listener) with `aud` **equal** to the verifier's own name, a trusted `iss`, `exp` in the future and
+         `sub = run:<run_id>`.
+      2. Authorize by `tenant_id`, `repo_ids`, `scopes`, and, for context and memory, `acting_for` (D-18).
+      3. Reject tokens whose `run_id` appears in the Runner's **revocation feed** (`GET /v1/revocations`,
+         CCR-02-09, polled every 10 s). The Runner adds every run at its terminal phase (also through
+         `POST /internal/v1/runs/{run_id}:revoke`), and every run of a job that core revokes (it polls
+         core's `GET /internal/v1/revocations` every 60 s), so a partitioned sandbox cannot keep spending
+         while its retry runs (R2-030). Verifiers have no other key or revocation source.
   contact:
     name: WS-02 Execution (implementation), WS-00 (contract)
 servers:
@@ -466,7 +479,7 @@ paths:
       operationId: refreshRunToken
       summary: Exchange a valid (unexpired) `runner-sandbox` run token for a fresh token set (one token per audience).
       description: |
-        Tokens live 60 minutes and never beyond the grant's `exp`. **replicant-agentd**, the token custodian (the
+        Tokens live 60 minutes and never beyond the run's overall deadline. **replicant-agentd**, the token custodian (the
         agent container holds no token), refreshes when fewer than 15 minutes remain. It rewrites the token
         files in its private directory `$REPLICANT_RUN_TOKEN_DIR`, agentd's tmpfs copy of the projected Secret
         (CCR-03-08), and during the N/N+1 window also `$REPLICANT_RUN_TOKEN_FILE`, which points at the
@@ -985,7 +998,7 @@ components:
         - timeouts
         - priority
         - callback
-        - run_grant
+        - run_scope
       properties:
         schema:
           const: replicant.run-spec/v1
@@ -1119,11 +1132,36 @@ components:
             tracestate:
               type: string
               maxLength: 512
-        run_grant:
-          description: Compact JWS (ES256) signed by the core `run-grant` KMS key; payload `RunGrantClaims` (CCR-09-02). Excluded from `spec_digest`.
-          type: string
-          maxLength: 8192
-          pattern: '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+        run_scope:
+          description: What the run's tokens may claim (C-RUNNER 4.0.0, SIMPLIFY-D50). The Runner checks repo_ids and acting_for against core's intake record for (tenant_id, job_id) before it accepts the run. Excluded from `spec_digest`.
+          type: object
+          additionalProperties: false
+          required: [repo_ids, audiences, scopes, acting_for]
+          properties:
+            repo_ids:
+              description: The job's authorized targets (intake record); must cover repo and additional_repos.
+              type: array
+              minItems: 1
+              maxItems: 5
+              items:
+                type: string
+                maxLength: 64
+            audiences:
+              description: Run-token audiences (one token each). repo-mirror is accepted and ignored (SIMPLIFY-D40).
+              type: array
+              uniqueItems: true
+              items:
+                type: string
+                enum: [ai-gateway, memory-mcp, context-mcp, repo-mirror, runner-sandbox]
+            scopes:
+              type: array
+              uniqueItems: true
+              items:
+                type: string
+                enum: [gateway:invoke, memory:read, memory:search, context:read, code_search:read, repo:fetch, inbox:read, credentials:aws]
+            acting_for:
+              description: The job's requester (`on_behalf_of` or `principal_id`, CCR-09-03); must equal core's record.
+              $ref: '#/components/schemas/PrincipalId'
         callback:
           type: object
           additionalProperties: false
@@ -1155,7 +1193,7 @@ components:
           type: string
           maxLength: 255
         spec_digest:
-          description: sha256(JCS(RunSpec without its per-attempt fields run_grant and trace_context)); the idempotency comparison value.
+          description: sha256(JCS(RunSpec without its per-attempt fields run_scope and trace_context)); the idempotency comparison value.
           $ref: '#/components/schemas/Digest'
         agentrun:
           type: object
@@ -1320,7 +1358,7 @@ components:
       description: JWT claims of the per-run token (ES256). Consumers verify iss, aud, exp, and that run_id/tenant_id match the resource requested.
       type: object
       additionalProperties: false
-      required: [iss, sub, aud, exp, iat, jti, tenant_id, job_id, run_id, role, scopes, acting_for, grant, grant_jti]
+      required: [iss, sub, aud, exp, iat, jti, tenant_id, job_id, run_id, role, scopes, acting_for]
       properties:
         iss:
           type: string
@@ -1367,70 +1405,8 @@ components:
           type: number
           minimum: 0
         acting_for:
-          description: Requester principal, or `on_behalf_of` for service-triggered jobs (CCR-09-03). Equal to the grant's `acting_for`. memory-mcp and context-mcp filter content by what this principal may read (D-18).
+          description: Requester principal, or `on_behalf_of` for service-triggered jobs (CCR-09-03). Equal to `run_scope.acting_for`, checked against core's intake record. memory-mcp and context-mcp filter content by what this principal may read (D-18).
           $ref: '#/components/schemas/PrincipalId'
-        grant:
-          description: The run grant (compact JWS) this token was minted under (CCR-09-02).
-          type: string
-          maxLength: 8192
-        grant_jti:
-          type: string
-          pattern: '^rgr_[0-9a-hjkmnp-tv-z]{26}$'
-    RunGrantClaims:
-      description: Payload of the core-signed run grant (CCR-09-02; WS-09 ADR-09-005). JOSE header `alg` ES256, `typ` replicant-run-grant+jwt, `kid` from the core run-grant JWKS.
-      type: object
-      additionalProperties: false
-      required: [iss, typ, jti, iat, exp, tenant_id, job_id, run_id, role, repo_ids, audiences, scopes, budget_usd, acting_for, spec_digest]
-      properties:
-        iss:
-          type: string
-          pattern: '^replicant-(local|dev|staging|prod)-core$'
-        typ:
-          const: replicant-run-grant+jwt
-        jti:
-          type: string
-          pattern: '^rgr_[0-9a-hjkmnp-tv-z]{26}$'
-        iat:
-          type: integer
-        exp:
-          description: iat + startup_seconds + active_deadline_seconds + finalize_seconds + 300 (the workflow's overall run timer). Not refreshable.
-          type: integer
-        tenant_id:
-          $ref: '#/components/schemas/TenantId'
-        job_id:
-          $ref: '#/components/schemas/JobId'
-        run_id:
-          description: derived("run", tenant_id, idempotency_key), computed by the activity (C-IDS).
-          $ref: '#/components/schemas/RunId'
-        role:
-          $ref: '#/components/schemas/RunRole'
-        repo_ids:
-          description: The job's authorized targets and additional repos, from the intake record.
-          type: array
-          maxItems: 5
-          items:
-            type: string
-            maxLength: 64
-        audiences:
-          type: array
-          uniqueItems: true
-          items:
-            type: string
-            enum: [ai-gateway, memory-mcp, context-mcp, repo-mirror, runner-sandbox]
-        scopes:
-          type: array
-          uniqueItems: true
-          items:
-            type: string
-            enum: [gateway:invoke, memory:read, memory:search, context:read, code_search:read, repo:fetch, inbox:read, credentials:aws]
-        budget_usd:
-          type: number
-          minimum: 0
-        acting_for:
-          $ref: '#/components/schemas/PrincipalId'
-        spec_digest:
-          description: sha256(JCS(RunSpec without run_grant and trace_context)), equal to RunStatus.spec_digest.
-          $ref: '#/components/schemas/Digest'
     SandboxHeartbeatRequest:
       type: object
       additionalProperties: false
@@ -1595,7 +1571,7 @@ components:
             - run_expired
             - idempotency_key_reuse
             - admission_denied
-            - run_grant_invalid
+            - run_scope_invalid
             - definition_not_resolvable
             - tenant_quota_exceeded
             - rate_limited
@@ -1687,7 +1663,11 @@ components:
           namespace: replicant-prod
           workflow_id: job_01m5p7x7r0bt69j0h0fbxepw90
           signal_name: run.status_changed
-        run_grant: eyJhbGciOiJFUzI1NiIsImtpZCI6InJnLTIwMjYtMTAiLCJ0eXAiOiJmYWN0b3J5LXJ1bi1ncmFudCtqd3QifQ.eyJpc3MiOiJmYWN0b3J5LXByb2QtY29yZSIsInR5cCI6ImZhY3RvcnktcnVuLWdyYW50K2p3dCIsImp0aSI6InJncl8wMW01cDd4N3Mwa2QzbThxMnY2eDl6NGI3YyIsImlhdCI6MTc5MjgyMTY2MCwiZXhwIjoxNzkyODI2MTYwLCJ0ZW5hbnRfaWQiOiJwYXltZW50cyIsImpvYl9pZCI6ImpvYl8wMW01cDd4N3IwYnQ2OWowaDBmYnhlcHc5MCIsInJ1bl9pZCI6InJ1bl9najNoM2VwM3BoamZzOWUyM3Y3Njh6cmNhNSIsInJvbGUiOiJpbXBsZW1lbnRlciIsInJlcG9faWRzIjpbIlJfa2dET0syYTlYdyJdLCJhdWRpZW5jZXMiOlsiYWktZ2F0ZXdheSIsIm1lbW9yeS1tY3AiLCJjb250ZXh0LW1jcCIsInJlcG8tbWlycm9yIiwicnVubmVyLXNhbmRib3giXSwic2NvcGVzIjpbImdhdGV3YXk6aW52b2tlIiwibWVtb3J5OnJlYWQiLCJtZW1vcnk6c2VhcmNoIiwiY29udGV4dDpyZWFkIiwiY29kZV9zZWFyY2g6cmVhZCIsInJlcG86ZmV0Y2giLCJpbmJveDpyZWFkIiwiY3JlZGVudGlhbHM6YXdzIl0sImJ1ZGdldF91c2QiOjE1LCJhY3RpbmdfZm9yIjoidXNyXzAxa25rOGRmcjBmdmpjN3YwYjl2aHZremJwIiwic3BlY19kaWdlc3QiOiJzaGEyNTY6YzBmZmVlOGUxYjJkM2Y0YTViNmM3ZDhlOWYwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZjAwMTEyMiJ9.Ujo9BvRrDazllOKsi0UijvzBa1nE3Zcq0uz6M2HNzeJGLTPlJrHZ8ryuV4YyiQPxy8_vD1ujzwmLgYx5E_-CzA
+        run_scope:
+          repo_ids: [R_kgDOK2a9Xw]
+          audiences: [ai-gateway, memory-mcp, context-mcp, runner-sandbox]
+          scopes: ['gateway:invoke', 'memory:read', 'memory:search', 'context:read', 'code_search:read', 'inbox:read', 'credentials:aws']
+          acting_for: usr_01knk8dfr0fvjc7v0b9vhvkzbp
     PendingRunStatus:
       value:
         run_id: run_gj3h3ep3phjfs9e23v768zrca5

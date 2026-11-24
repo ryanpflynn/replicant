@@ -136,6 +136,12 @@ func (rc *runCtx) finalize(ctx context.Context, forced int, cliExit string) int 
 			}
 		}
 	}
+	if msg, ok := structuredOutputRejected(res); ok && code == 0 && report == nil && limitReason == "" {
+		// The CLI validates StructuredOutput against --json-schema itself and, after its retries, ends with
+		// error_max_structured_output_retries (is_error, no structured_output): the agent's result is invalid,
+		// not a crash (RC-RUN-13, SIMPLIFY-D57).
+		code, cfgErr = exitResultInvalid, msg
+	}
 	if code == 0 && report == nil && limitReason == "" {
 		// No structured output: a crash (no result event and a non-zero exit) or an errored result (API errors,
 		// error_during_execution: is_error) is AgentExitedNonZero; a clean result without one is AgentResultMissing.
@@ -286,4 +292,17 @@ func readInt(p string) int64 {
 	}
 	v, _ := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
 	return v
+}
+
+// structuredOutputRejected reports a result event that ended because every StructuredOutput attempt failed the
+// CLI's own --json-schema validation, with the CLI's last validation error as the message.
+func structuredOutputRejected(res map[string]any) (string, bool) {
+	if sub, _ := res["subtype"].(string); sub != "error_max_structured_output_retries" {
+		return "", false
+	}
+	msg := "structured output does not validate against the role-result schema"
+	if errs, ok := res["errors"].([]any); ok && len(errs) > 0 {
+		msg += ": " + truncate(fmt.Sprint(errs[len(errs)-1]), 800)
+	}
+	return msg, true
 }

@@ -54,6 +54,7 @@ def _plan(profile: str, build: bool, only: list[str] | None = None) -> tuple[dic
         svcs = {n: s for n, s in svcs.items() if n in keep}
     skipped: dict[str, str] = {}
     built: set[str] = set()
+    failed: set[str] = set()
     for s in svcs.values():
         if not s.build:
             continue
@@ -61,9 +62,13 @@ def _plan(profile: str, build: bool, only: list[str] | None = None) -> tuple[dic
             skipped[s.name] = f"no {s.dockerfile.relative_to(p.root) if s.dockerfile else 'Dockerfile'} yet " \
                               f"({compose.OWNERS.get(s.name, '?')})"
             continue
-        if build and s.image not in built:
+        if s.image in failed:
+            skipped[s.name] = "image build failed"
+            continue
+        if build and s.image not in built:  # one build per image, however many services share it (SIMPLIFY-D2)
             if not compose.build_image(p, s, env, log):
                 skipped[s.name] = "image build failed"
+                failed.add(s.image)
                 continue
             built.add(s.image)
         elif not compose.image_exists(s.image):
@@ -80,7 +85,7 @@ def _plan(profile: str, build: bool, only: list[str] | None = None) -> tuple[dic
             elif not compose.image_exists(image):
                 skipped["runner-local"] = f"sandbox image {image} missing (run without --no-build)"
                 break
-    for s in svcs.values():  # services that reuse another service's replicant image (run-grants)
+    for s in svcs.values():  # a replicant image no service in the plan builds
         if not s.build and s.replicant_image and s.name not in skipped and not compose.image_exists(s.image):
             skipped[s.name] = f"image {s.image} not built ({compose.OWNERS.get(s.name, '?')})"
     changed = True
@@ -98,7 +103,7 @@ def _plan(profile: str, build: bool, only: list[str] | None = None) -> tuple[dic
 
 @dev.command()
 def up(
-    profile: str = typer.Option("v0", help="compose profile: v0 (M1) or core"),
+    profile: str = typer.Option("v0", help="compose profiles: v0, plus opt-in slack (e.g. v0,slack)"),
     build: bool = typer.Option(True, "--build/--no-build", help="build replicant images first"),
     timeout: int = typer.Option(900, help="seconds to wait for health"),
     seed_after: bool = typer.Option(False, "--seed", help="run `replicant dev seed` when healthy"),
@@ -120,8 +125,10 @@ def up(
     if gateway == "passthrough" and not secrets.import_provider_key(p):
         log("--gateway passthrough needs ANTHROPIC_API_KEY in replicant/dev/.env (not found or empty)")
         raise typer.Exit(2)
+    # Core's Slack module follows the `slack` profile (slack-mock): on with it, off without it.
     secrets.set_env(p, {"REPLICANT_GATEWAY_MODE": gateway,
-                        "REPLICANT_OTEL_DISABLED": "false" if with_observability else "true"})
+                        "REPLICANT_OTEL_DISABLED": "false" if with_observability else "true",
+                        "REPLICANT_SLACK_ENABLED": "true" if "slack" in compose.profile_list(profile) else "false"})
     if with_observability and "observability" not in profile:
         profile = profile + ",observability"
     log(f"secrets: {len(created)} created under {p.dev_home.relative_to(p.root)}/ (values never printed)")
@@ -160,8 +167,8 @@ def up(
         raise typer.Exit(1)
     log(f"healthy in {int(time.monotonic() - t0)} s")
     log("URLs: temporal UI http://127.0.0.1:8233  gitea http://127.0.0.1:3300  s3 http://127.0.0.1:8333  "
-        "api http://127.0.0.1:8401" + ("  grafana http://127.0.0.1:3001  loki :3100  tempo :3200"
-                                        if "observability" in profile else ""))
+        "api http://127.0.0.1:8401" + ("  slack-mock http://127.0.0.1:8410" if "slack" in profile else "")
+        + ("  grafana http://127.0.0.1:3001  loki :3100  tempo :3200" if "observability" in profile else ""))
     log(f"gateway backend: {gateway}")
     if seed_after and "control-plane-api" in start:
         raise typer.Exit(seedmod.run(p, *seedmod.default_urls(), None, False, False, log))
@@ -172,11 +179,10 @@ def down(volumes: bool = typer.Option(False, "--volumes", "-v", help="also delet
     """Stop and remove every container of project `replicant` (and its volumes with --volumes)."""
     _guard()
     p = paths()
-    for prof in ("v0,observability", "core,observability"):
-        try:
-            compose.run_compose(p, prof, ["down", *(["-v"] if volumes else [])], timeout=300)
-        except subprocess.TimeoutExpired:
-            pass
+    try:
+        compose.run_compose(p, compose.ALL_PROFILES, ["down", *(["-v"] if volumes else [])], timeout=300)
+    except subprocess.TimeoutExpired:
+        pass
     left = compose.containers()
     if left:
         engine.rm_containers([c.name for c in left.values()], force=True, volumes_too=True)
@@ -211,12 +217,15 @@ def down(volumes: bool = typer.Option(False, "--volumes", "-v", help="also delet
 
 
 @dev.command()
-def status(profile: str = typer.Option("v0,observability")) -> None:
+def status(profile: str = typer.Option(None, help="default: v0 plus the opt-in profiles that have containers")) -> None:
     """Per-service state and health, migration revision, Temporal namespace."""
     _guard()
     p = paths()
-    svcs = compose.load_services(p, profile)
     cs = compose.containers()
+    if profile is None:
+        every = compose.load_services(p, compose.ALL_PROFILES)
+        profile = ",".join(["v0", *sorted({x for n in cs if n in every for x in every[n].profiles})])
+    svcs = compose.load_services(p, profile)
     log(f"{'SERVICE':22s} {'OWNER':9s} STATE")
     for n in sorted(svcs):
         s = svcs[n]
@@ -226,11 +235,11 @@ def status(profile: str = typer.Option("v0,observability")) -> None:
         else:
             st = compose.service_ok(s, c)[2]
         log(f"{n:22s} {compose.OWNERS.get(n, ''):9s} {st}")
-    mig = cs.get("migrate")
-    if mig:
-        out = subprocess.run(engine.cli("logs", mig.name), capture_output=True, text=True)
+    ini = cs.get("init")
+    if ini:  # `init` runs `replicant-db migrate` first; its migrate.succeeded event carries the revision
+        out = subprocess.run(engine.cli("logs", ini.name), capture_output=True, text=True)
         m = re.findall(r'"event": "migrate\.succeeded".*?"to": "([^"]+)"', out.stdout + out.stderr)
-        log(f"migration revision: {m[-1] if m else 'unknown (see replicant dev logs migrate)'}")
+        log(f"migration revision: {m[-1] if m else 'unknown (see replicant dev logs init)'}")
     tmp = cs.get("temporal")
     if tmp and tmp.status == "running":
         r = subprocess.run([*engine.cli("exec", tmp.name), "temporal", "operator", "namespace", "describe", "-n",
@@ -279,7 +288,7 @@ def test(
     slow: bool = typer.Option(False, "--slow", help="unit: all 44 worker scenarios (default: the fast five)"),
     keep_db: bool = typer.Option(False, "--keep-db", help="unit: leave the smoke Postgres (ctl-pg) running"),
     db: bool = typer.Option(True, "--db/--no-db", help="unit: run the DB-gated tests (smoke Postgres)"),
-    build: bool = typer.Option(False, "--build", help="unit: rebuild the migrate image first; m3: build images"),
+    build: bool = typer.Option(False, "--build", help="unit: rebuild the replicant-py image first; m3: build images"),
     jobs: int = typer.Option(4, "--jobs", "-j", help="unit: suites run in parallel"),
     yes: bool = typer.Option(False, "--yes", help="m3: confirm the destructive run (down -v)"),
 ) -> None:

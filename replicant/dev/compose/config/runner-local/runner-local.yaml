@@ -14,15 +14,13 @@ container_host: ${RUNNER_CONTAINER_HOST}   # Podman/Docker socket URL (XD-FIX-R1
 # leases/<run_id> (heartbeat timestamps), overrides.json (applied runtime overrides).
 state_dir: ${RUNNER_STATE_DIR}           # /var/lib/runner-local
 
-# Run grants (C-RUNNER 3.0.0, CCR-09-02). createRun verifies RunSpec.run_grant exactly as runner-api does:
-# signature against the core run-grant JWKS, iss, typ, exp, spec_digest equality (digest excludes run_grant and
-# trace_context), run_id/tenant_id/job_id/role match, repo_ids cover repo and additional_repos, and the
-# revocation list. Any failure: 422 run_grant_invalid. Tokens embed the grant and claim a subset of it.
-grants:
-  issuer: ${RUNNER_GRANTS_ISSUER}                    # replicant-local-core
-  jwks_url: ${RUNNER_GRANTS_JWKS_URL}                # http://grants.replicant.localhost:8403/.well-known/jwks.json
-  revocation_url: ${RUNNER_GRANTS_REVOCATION_URL}    # http://grants.replicant.localhost:8403/grants/revoked
-  jwks_cache_seconds: 600
+# Run admission (C-RUNNER 4.0.0, SIMPLIFY-D50, ADR-015): no run grants. createRun checks RunSpec.run_scope against
+# core's intake record (GET /internal/v1/jobs/{job_id}/run-scope): the job exists for the tenant and is live, the repos
+# are among its targets, acting_for is its requester. Any mismatch: 422 run_scope_invalid; core down: 503. Core's job
+# revocations (GET /internal/v1/revocations) are polled into this runner's feed.
+core:
+  url: ${RUNNER_CORE_URL}                            # http://control-plane-api:8401
+  token_file: ${RUNNER_CORE_TOKEN_FILE}              # svc_runner-local caller token
   revocation_poll_seconds: 60
 
 # Run lease and revocation (C-RUNNER 3.0.0, XD-FIX-R2-030): agentd POSTs /sandbox/v1/heartbeat every 30 s; a run whose
@@ -69,11 +67,11 @@ artifacts:
 
 sandbox:
   network: replicant-sbx
-  dns: [172.31.250.2]
+  # SIMPLIFY-D30: no sandbox DNS server and no egress proxy. The pause container maps the *.sbx.local names and the
+  # TLS egress allowlist (proxy.golang.org, sum.golang.org) to sbx-edge in /etc/hosts; nothing else resolves.
+  # sbx-edge passes allowlisted TLS through by SNI, so sandboxes connect directly (no HTTPS_PROXY).
+  edge_ip: 172.31.250.10
   env:
-    HTTPS_PROXY: http://egress.sbx.local:3128
-    HTTP_PROXY: http://egress.sbx.local:3128
-    NO_PROXY: .sbx.local,127.0.0.1,localhost
     NPM_CONFIG_REGISTRY: http://npm.sbx.local:4873/
     GOPROXY: http://goproxy.sbx.local:3000
     PIP_INDEX_URL: http://pypi.sbx.local:5000/index/
@@ -82,9 +80,10 @@ sandbox:
   # Pod-like group (WS-02 local-runner.md §1.2): a pause container owns the network namespace; agentd,
   # sidecars, QA services and stubs, and the QA builder are sibling containers in that namespace (XD-05-11).
   pod_group:
-    pause_image: ${REPLICANT_IMAGE_REGISTRY}/pause:3.10
+    # The pause container runs `sandbox-sidecars pause` from the sandbox-sidecars image (runner-local's default).
     # C-IDS §8 container names, WS-02 local-runner.md §1.1 order; no shipper (the uploader ships spool chunks, R1V-184).
-    containers: [workspace-guard, replicant-agentd, watchdog, prepare, svc-<name>, stub-<name>, builder, agent, uploader]
+    # sandbox-init replaces volume-init and workspace-guard; the watchdog runs inside the uploader (SIMPLIFY Phase 3).
+    containers: [sandbox-init, pause, replicant-agentd, prepare, svc-<name>, stub-<name>, builder, agent, uploader]
     # Container names are `ar-<26-char run body>-<container>` (XD-FIX-R1-209); WS-08 local.alloy derives
     # `container` from the name, so no container-role label is set.
     container_name_template: "ar-{run_body}-{container}"
@@ -101,8 +100,7 @@ sandbox:
       pids_limit: 4096
     overrides:
       replicant-agentd: {user: "10000:10000"}
-      uploader: {user: "10003:10003"}           # WS-02 uids (XD-FIX-R1-045): watchdog/uploader 10003, fsGroup 10002
-      watchdog: {user: "10003:10003"}
+      uploader: {user: "10003:10003"}           # WS-02 uids (XD-FIX-R1-045): uploader (+ watchdog) 10003, fsGroup 10002
       # Rootless BuildKit in qa_build runs (WS-05 stage-design.md §7). In prod this relaxation is allowed only in
       # Kata qa_build pods (WS-09 VAP: SETUID/SETGID and Unconfined seccomp), where the guest kernel is the
       # boundary. Locally under runc it relaxes the host-kernel boundary: parity.md P-33 (High).

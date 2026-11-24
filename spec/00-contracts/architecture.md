@@ -1,8 +1,8 @@
 # Reference Architecture
 
-**Contract ID:** `C-ARCH` · **Version:** 2.0.0 · **Owner:** WS-00
+**Contract ID:** `C-ARCH` · **Version:** 3.0.0 · **Owner:** WS-00
 
-**Changelog:** 2.0.0 (breaking). Product rename to Replicant (CCR-ORCH-02). Every product-named identifier changes; there is no structural change. Domain `factory.example.com` (labels, annotations, schema `$id` host) becomes `replicant.example.com`; env prefix `FACTORY_` becomes `REPLICANT_`; headers `X-Factory-*` become `X-Replicant-*`; names `factory-*`/`factory_*` (services, task queues, Temporal namespace, roles, buckets, groups, hosts, networks) become `replicant-*`/`replicant_*`; CamelCase `Factory*` (workflow types, search attributes) becomes `Replicant*`. Monorepo `replicant/`, CLI `replicant`, compose project `replicant`, networks `replicant-core`/`replicant-sbx`. 1.5.4 (wave 3). audit-exporter: 1 replica with a leader lease; it also calls `audit.emit` (reconciler) and has a column-limited `approvals` read (R1V-050, R1V-076). replicant-projector writes `qa`; core rows for `retention-sweeper` and `audit-indexer` (R1V-079). New §4.1 table of scale limits and 10x change paths, including `MaintenanceShard` (R1V-006, R2-046). 1.5.3. Break-glass role `replicant-<env>-killswitch-operator` (CCR-09-12). 1.5.2. The codec server language is fixed as Python; decode audit goes through control-plane-api (CCR-01-11). 1.5.1 (conflict resolution). runner-api gains a write to `ops` `exec-revocations/<env>/*` only, and no exec role writes `audit`. Legal-hold role `replicant-<env>-legal-hold`. 1.5.0 (wave 1). Merged `agentrun-controller` role (CCR-09-08, CCR-02-10). The temporal-codec key is replaced by tenant keys plus `replicant-system` (CCR-09-08b); `replicant-kata-fc` is marked disabled (CCR-09-08c). OTLP collector in invariant 2 (CCR-02-11). Shim on ElastiCache with its durable usage log and gateway callers (CCR-03-07). New workloads `audit-exporter`, `ops-worker`, `alloy-cloudwatch`, `langfuse-retention-sweeper` and their roles (CCR-08-06a). Local topology (CCR-11-04). Ownership: WS-09 keys, WS-02 subnets and firewall (R1-240). 1.4.0: the `agentrun-controller` role is aligned with WS-02's design, and a fourth exec role, `run-notifier` (tenant-key `kms:GenerateDataKey` only), is added (fix round, R1). 1.0.1 CCR-11-02, CCR-11-03 (applied by the orchestrator). 1.1.0 (additive): CCR-09-02 (run-grant signing in §6), CCR-09-06 (broker caller allowlist, §6 and decisions), CCR-09-07 (exec cluster in its own AWS account, §4 and decisions). 1.3.0: the cross-account policies name a third exec role, `agentrun-controller` (orchestrator decision on CCR-02-04 versus CCR-09-07; §4, decisions). 1.2.0 (additive): CCR-03-03 adds `replicant-gateway-shim`, the `replicant-agentd` sidecar, and the `profile-rightsizer` job; sandboxes and workers reach the enterprise AI gateway only through the shim (§1, §2, §4, §6).
+**Changelog:** 3.0.0 (breaking, SIMPLIFY Phase 6, [ADR-015](adr/015-single-cluster-hardened-sandbox-pool.md)). One EKS cluster and one AWS account per environment: the Runner (notifier included) runs on core nodes; sandboxes run on a tainted, hardened node pool with their own subnets and security groups, and reach exactly four named endpoints (egress proxy, runner sandbox listener, gateway-shim, memory/MCP). Run grants are gone (C-RUNNER 4.0.0): the Runner signs run tokens, checks each run against core's intake record and is the only JWKS and revocation source; core has no grants listener and no `run-grant` key. The two-account text in §4 is kept as the record of the superseded design (ADR-007, ADR-09-001). 2.0.0 (breaking). Product rename to Replicant (CCR-ORCH-02). Every product-named identifier changes; there is no structural change. Domain `factory.example.com` (labels, annotations, schema `$id` host) becomes `replicant.example.com`; env prefix `FACTORY_` becomes `REPLICANT_`; headers `X-Factory-*` become `X-Replicant-*`; names `factory-*`/`factory_*` (services, task queues, Temporal namespace, roles, buckets, groups, hosts, networks) become `replicant-*`/`replicant_*`; CamelCase `Factory*` (workflow types, search attributes) becomes `Replicant*`. Monorepo `replicant/`, CLI `replicant`, compose project `replicant`, networks `replicant-core`/`replicant-sbx`. 1.5.4 (wave 3). audit-exporter: 1 replica with a leader lease; it also calls `audit.emit` (reconciler) and has a column-limited `approvals` read (R1V-050, R1V-076). replicant-projector writes `qa`; core rows for `retention-sweeper` and `audit-indexer` (R1V-079). New §4.1 table of scale limits and 10x change paths, including `MaintenanceShard` (R1V-006, R2-046). 1.5.3. Break-glass role `replicant-<env>-killswitch-operator` (CCR-09-12). 1.5.2. The codec server language is fixed as Python; decode audit goes through control-plane-api (CCR-01-11). 1.5.1 (conflict resolution). runner-api gains a write to `ops` `exec-revocations/<env>/*` only, and no exec role writes `audit`. Legal-hold role `replicant-<env>-legal-hold`. 1.5.0 (wave 1). Merged `agentrun-controller` role (CCR-09-08, CCR-02-10). The temporal-codec key is replaced by tenant keys plus `replicant-system` (CCR-09-08b); `replicant-kata-fc` is marked disabled (CCR-09-08c). OTLP collector in invariant 2 (CCR-02-11). Shim on ElastiCache with its durable usage log and gateway callers (CCR-03-07). New workloads `audit-exporter`, `ops-worker`, `alloy-cloudwatch`, `langfuse-retention-sweeper` and their roles (CCR-08-06a). Local topology (CCR-11-04). Ownership: WS-09 keys, WS-02 subnets and firewall (R1-240). 1.4.0: the `agentrun-controller` role is aligned with WS-02's design, and a fourth exec role, `run-notifier` (tenant-key `kms:GenerateDataKey` only), is added (fix round, R1). 1.0.1 CCR-11-02, CCR-11-03 (applied by the orchestrator). 1.1.0 (additive): CCR-09-02 (run-grant signing in §6), CCR-09-06 (broker caller allowlist, §6 and decisions), CCR-09-07 (exec cluster in its own AWS account, §4 and decisions). 1.3.0: the cross-account policies name a third exec role, `agentrun-controller` (orchestrator decision on CCR-02-04 versus CCR-09-07; §4, decisions). 1.2.0 (additive): CCR-03-03 adds `replicant-gateway-shim`, the `replicant-agentd` sidecar, and the `profile-rightsizer` job; sandboxes and workers reach the enterprise AI gateway only through the shim (§1, §2, §4, §6).
 
 ## Purpose
 
@@ -16,7 +16,7 @@ here and in the sibling contracts.
 | Decision | Constraint | ADR |
 |---|---|---|
 | Four state planes, strictly separated: Temporal (workflow), etcd (execution), S3 (artifacts), Postgres (domain). The Runner API is the only path from orchestration to execution | D-01, D-04, D-05, D-08, D-09 | [state-ownership.md](state-ownership.md) |
-| **Two EKS clusters per environment, in two AWS accounts**: `core` (control plane, workers, Temporal, observability) in `replicant-<env>-core`, and `exec` (Runner, controller, notifier, sandboxes) in `replicant-<env>-exec`. They cross only through PrivateLink endpoint services and cross-account bucket and key policies naming exactly four exec roles (`sandbox-artifacts`, `runner-api`, `agentrun-controller`, `run-notifier`). A sandbox escape lands in a cluster and account that hold no Replicant secrets, no Temporal, and no Postgres credentials (CCR-09-07) | D-04, D-21, D-22 | [ADR-007](adr/007-separate-execution-cluster.md), WS-09 [ADR-09-001](../09-security/adr/001-confirm-adr-007-exec-cluster-separate-account.md) |
+| **One EKS cluster per environment, hardened sandbox pool** (supersedes the two-cluster, two-account design). The Runner (admission, executor, notifier, token signer) runs on core nodes. Sandboxes run on a tainted node pool with their own subnets and security groups, IMDS blocked, an ECR-pull-only node role, no Pod Identity, the Cilium host firewall and gVisor or Kata. A sandbox reaches exactly four named endpoints: egress proxy, runner sandbox listener, gateway-shim, memory/MCP port. Splitting into two clusters later is PrivateLink behind the same names | D-04, D-21, D-22 | [ADR-015](adr/015-single-cluster-hardened-sandbox-pool.md) (supersedes [ADR-007](adr/007-separate-execution-cluster.md), WS-09 [ADR-09-001](../09-security/adr/001-confirm-adr-007-exec-cluster-separate-account.md), [ADR-09-005](../09-security/adr/005-run-grants-bound-exec-side-minting.md)) |
 | Human gates and actions are Temporal **Updates**. Machine notifications are **Signals**. Runner completion is a Signal **hint** plus timer and polling | D-01, D-04, D-19 | [ADR-001](adr/001-gates-updates-vs-signals.md), [ADR-002](adr/002-runner-completion-callback-vs-poll.md) |
 | The Release Bundle is the unit of versioning. Bundle assignment, per percentage **or** tenant, decides the pinned worker deployment version at start | D-02, D-03 | [ADR-005](adr/005-release-bundle-unit-of-versioning.md), [ADR-006](adr/006-bundle-assignment-drives-version-pinning.md), [ADR-013](adr/013-behavioral-vs-operational-config-tenant-derived-bundles.md) |
 | A job stays open (as one workflow ID) through PR review and repair until merge, close, or expiry | D-15, D-19 | [ADR-009](adr/009-job-lifetime-spans-pr-review.md) |
@@ -60,7 +60,7 @@ managed).
 | `zoekt` (zoekt-indexer + webserver) | Lexical and structural code search index and webserver. The indexer fetches opted-in repos with broker tokens (`contents:read`) | WS-04 | Go (upstream OSS) | `StatefulSet` (indexer + webserver, gp3 PVC) | core / `replicant-context` | own index volume |
 | `usage-ingestor` | Cost ledger: ingests shim usage events (`gwu_…`) and sandbox compute usage; rollups; budget queries; nightly cost reconciliation (`rec_…`) | WS-03 (WS-08 reviews) | Python | `Deployment` (2) | core / `replicant-control` | PG `cost` |
 | `profile-rightsizer` | Proposes resource-profile changes (`rsp_…`) from observed usage, as PRs to the config repo that a human approves (D-12) | WS-03 | Python (job in usage-ingestor) | `CronJob` (`0 5 * * 1` UTC) plus event triggers | core / `replicant-control` | PG `cost` (proposals); config-repo PRs |
-| `replicant-gateway-shim` | Sole path to the enterprise AI gateway (D-11). Verifies `ai-gateway`-audience run tokens (with run grant) and worker service tokens; enforces run, job, and tenant budgets and rate limits; injects the enterprise credential; streams pass-through; emits usage events to usage-ingestor. **Never connects to Postgres** | WS-03 | Go | `Deployment` (3+) + Amazon ElastiCache for Valkey `gateway-state` (1 primary + 1 replica, Multi-AZ, IAM AUTH, no snapshots; ephemeral) (CCR-03-07). Callers: sandboxes (run tokens through agentd), and replicant-worker, memory-service, and eval-worker (projected SA tokens, purpose-bound via `X-Replicant-Purpose`) | core / `replicant-gateway` | ElastiCache `gateway-state`; the durable usage log to S3 `artifacts` `platform/gateway-usage/` (`gateway_usage_log`); usage events → usage-ingestor |
+| `replicant-gateway-shim` | Sole path to the enterprise AI gateway (D-11). Verifies `ai-gateway`-audience run tokens (Runner JWKS and the Runner's revocation feed only; no run grant since ADR-015) and worker service tokens; enforces run, job, and tenant budgets and rate limits; injects the enterprise credential; streams pass-through; emits usage events to usage-ingestor. **Never connects to Postgres** | WS-03 | Go | `Deployment` (3+) + Amazon ElastiCache for Valkey `gateway-state` (1 primary + 1 replica, Multi-AZ, IAM AUTH, no snapshots; ephemeral) (CCR-03-07). Callers: sandboxes (run tokens through agentd), and replicant-worker, memory-service, and eval-worker (projected SA tokens, purpose-bound via `X-Replicant-Purpose`) | core / `replicant-gateway` | ElastiCache `gateway-state`; the durable usage log to S3 `artifacts` `platform/gateway-usage/` (`gateway_usage_log`); usage events → usage-ingestor |
 | `eval-worker` | Temporal worker for `EvalSuite` / `EvalCase` workflows; scoring; result storage | WS-06 | Python, `temporalio` | Worker Deployment `eval-worker` | core / `replicant-eval` | PG `evals`; S3 `eval`; Langfuse scores |
 | `migrate` | Alembic migrations for database `replicant`, holding a Postgres advisory lock | WS-10 | Python, Alembic | `Job` (Argo CD PreSync or Helm pre-upgrade; WS-10 decides) | core / `replicant-control` | PG all schemas (DDL), `ops` |
 | `audit-exporter` | Exports audit events and partitions, and workflow history skeletons and full exports (C-ART), using a read-only Temporal identity (CCR-08-06) | WS-08 | Python | `Deployment` (**1 replica, leader lease**; the single writer of audit exports, XD-FIX-R1-194) | core / `replicant-system`; IAM role `replicant-<env>-audit-exporter` | S3 `audit` (exports, skeletons, and reconciled `approval_record`s, C-ART), S3 `artifacts` (full history exports); PG `audit` via `audit.record_partition_export` **and** `audit.emit` (approval-record reconciler events, for example `approval_record.reconciled`); a column-limited read of `approvals` (C-PG) |
@@ -78,6 +78,28 @@ managed).
 | Sandbox pod: `replicant-agentd` | Native sidecar and sole in-pod holder of the run tokens (`REPLICANT_RUN_TOKEN_DIR`). Loopback auth proxy for gateway, MCP, git, and inputs; token refresh; steering long-poll. The agent container never sees a credential | WS-03 | Go (static) | native sidecar (`initContainers[]`, `restartPolicy: Always`) | exec / `sbx-<tenant>` | — |
 | Sandbox pod: sidecars | Artifact uploader, log/transcript shipper (redaction, WS-08), disk watchdog | WS-02 (redaction rules WS-08) | Go | sidecar containers | exec / `sbx-<tenant>` | S3 run prefixes |
 | Egress control | Default-deny egress; FQDN allowlists; package mirror and proxy path | WS-02 (WS-09 reviews) | Cilium FQDN policies and/or Envoy/Squid egress proxy (WS-02 decides) | DaemonSet / `Deployment` | exec / `kube-system`, `replicant-egress` | — |
+
+**Note (SIMPLIFY Phase 2, 2026-11-23): one `core` process.** `control-plane-api serve` runs the
+following components as modules of one process:
+
+- control-plane-api;
+- the Runner's internal routes (`GET /internal/v1/jobs/{job_id}/run-scope`, `GET /internal/v1/revocations`) on the API
+  listener; the run-grant app and its port 8403 are gone (ADR-015);
+- github-integration: its webhook and admin ingress on the API listener, plus its consumer and inventory scanner;
+- slack-integration, only when Slack is enabled;
+- the replicant-projector activity worker, on `replicant-projections`.
+
+The rows above still describe each component's responsibility and its writes. What changes is the
+deployment unit, and the calls between these modules, which no longer cross the network.
+
+- **Database logins:** each module keeps its own login and pool (postgres-ownership.md §2 note).
+- **Calls between modules:** they keep their HTTP contracts and authorization checks, but are dispatched in
+  process. The caller's identity comes from the in-process transport, not from a static caller token.
+- **Credentials:** the merge adds the integrations' credentials to the core process: the webhook secret, the
+  github-integration broker token, and the Slack tokens when Slack is on. It adds no new kind of
+  untrusted input: webhook HMAC and Slack signature verification are unchanged.
+
+Details: replicant/docs/v0/DEVIATIONS.md SIMPLIFY-D10 to D13.
 
 ### 1.2 Platform components (self-hosted)
 
@@ -112,7 +134,7 @@ managed).
 `s3` (S3-compatible server: SeaweedFS by default, MinIO built from source as profile `s3-minio`; CCR-11-02), `dex` or `keycloak` (stub IdP), `gitea` or `forgejo` (local Git with webhooks and PRs),
 `slack-mock`, `replicant-gateway-shim` with local upstream backends `passthrough`, `record`, `replay`,
 and `script` plus a `gateway-state` Valkey (CCR-11-04), `runner-local` (Runner API over Docker/Podman),
-`run-grants` (core run-grant JWKS and `/grants/revoked`), `ops-worker` (`replicant-ops`),
+`ops-worker` (`replicant-ops`),
 `retention-sweeper` (`replicant-retention`), `ecosystem-stubs`, `egress-proxy` plus local package
 mirror, and a Cloudflare quick tunnel (`cloudflared`) behind `webhook-ingress` for the dev GitHub
 App (WS-07 ADR-07-004).
@@ -264,7 +286,6 @@ flowchart TB
       CML["context-mcp + zoekt<br/>+ ecosystem-stubs"]
       USGL[usage-ingestor]
       GWS["replicant-gateway-shim<br/>(backends passthrough / record / replay / script)<br/>+ gateway-state Valkey"]
-      RGR["run-grants<br/>(grant JWKS + /grants/revoked)"]
       OPSW["ops-worker (replicant-ops)"]
       RSW["retention-sweeper (replicant-retention)"]
       RL["runner-local<br/>(Runner API over Docker/Podman;<br/>includes notifier)"]
@@ -301,7 +322,7 @@ flowchart TB
   FWL -.->|"k8s profile: Runner API"| KRA
   RL --> SBXL
   SBXL -->|"CLI → replicant-agentd → shim"| GWS
-  RL --> RGR
+  RL -->|"run-scope, revocations"| CPAL
   OPSW --> TS
   RSW --> MINIO
   SBXL --> MINIO
@@ -332,6 +353,21 @@ Local rules (WS-11 owns details):
 ---
 
 ## 4. Production composition (AWS, one environment)
+
+**Since C-ARCH 3.0.0 ([ADR-015](adr/015-single-cluster-hardened-sandbox-pool.md)) this section is partly historical.**
+Production is one EKS cluster in one account per environment:
+
+- core node pools run everything except sandboxes, including the Runner (runner-api with its executor, in-process
+  notifier and run-token signer; there is no separate agentrun-controller or run-notifier deployment, and no
+  repo-mirror);
+- the sandbox node pool is tainted and hardened as ADR-015 lists (own subnets and security groups with no default
+  route, IMDS blocked, ECR-pull-only node role, no Pod Identity, Cilium host firewall, gVisor or Kata);
+- sandboxes reach exactly four named endpoints: the egress proxy, the runner sandbox listener, gateway-shim and the
+  memory/MCP port (plus their run prefixes in S3 with per-run STS credentials);
+- core holds no `run-grant` KMS key and serves no grants host; the Runner's signing key is the only run-token key.
+
+Read the two-account text and diagram below as the superseded design (ADR-007, ADR-09-001). The rest (databases,
+KMS keys other than `run-grant`, scale limits) still applies.
 
 Per CCR-09-07 (C-ARCH 1.1.0), each environment uses **two AWS accounts**: `replicant-<env>-core`
 and `replicant-<env>-exec`. The exec cluster lives in its own account. The accounts cross only at
@@ -387,9 +423,9 @@ flowchart TB
           NS_OBS["ns observability: Grafana, Loki, Tempo, Mimir, Alloy gateway"]
         end
         subgraph NPapps["node pool apps: m7i.xlarge (Karpenter, 6–20 nodes)"]
-          NS_CTL["ns replicant-control: control-plane-web, control-plane-api<br/>(also serves run-grant JWKS + revocation list),<br/>identity-service, usage-ingestor, migrate Job"]
+          NS_CTL["ns replicant-control: control-plane-web, control-plane-api<br/>(also the Runner's run-scope + revocation routes),<br/>identity-service, usage-ingestor, migrate Job"]
           NS_INT["ns replicant-integrations: github-integration,<br/>github-token-broker, slack-integration, jira-integration"]
-          NS_WRK["ns replicant-workers: replicant-worker (per build ID, signs run grants),<br/>publisher-worker, replicant-projector"]
+          NS_WRK["ns replicant-workers: replicant-worker (per build ID),<br/>publisher-worker, replicant-projector"]
           NS_CTX["ns replicant-context: memory-service, context-mcp,<br/>ecosystem-indexer, zoekt (indexer + webserver)"]
           NS_EVAL["ns replicant-eval: eval-worker"]
           NS_GW["ns replicant-gateway: replicant-gateway-shim,<br/>Valkey gateway-state"]
@@ -679,16 +715,16 @@ sequenceDiagram
 | identity-service | Installation token from broker | `metadata:read` (collaborator permission, one repo), `members:read` (org membership) | ≤ 1 h |
 | zoekt-indexer, ecosystem-indexer | Installation token from broker | `contents:read`, `metadata:read`, opted-in repos only | ≤ 1 h |
 | *(no caller)* | — | `workflows`, `administration`, `secrets`, `actions` are never requested, and the App registration does not hold them | — |
-| runner-api (exec account) | KMS sign permission on the exec-account run-token key; STS AssumeRole into `sandbox-artifacts`. Can mint run tokens only for runs whose core-signed run grant it holds (CCR-09-02) | per run, within the grant | — |
-| sandbox | One run token per audience (JWT, embedding the run grant, CCR-09-01/02); STS session credentials scoped to its run prefixes and tenant KMS key | one run, within its grant | ≤ 60 min, refreshed until terminal |
-| replicant-worker | DB role (read registry, …); S3 role (job prefixes); gateway service credential for in-worker LLM calls (router, triage, extraction); `kms:Sign` on the core-account `run-grant` key (ECC_NIST_P256), used by the Runner-call activity to sign run grants (CCR-09-02) | — | IRSA or Pod Identity |
-| replicant-gateway-shim | Enterprise AI gateway service credential (Secrets Manager, core account); ElastiCache IAM AUTH; S3 `PutObject` on `artifacts` `platform/gateway-usage/*`. Verifies `ai-gateway`-audience run tokens and grants, plus worker service tokens (projected SA token, audience `ai-gateway`) | all model traffic | rotated per WS-09 |
+| runner-api (core nodes, ADR-015) | KMS sign permission on the run-token key; STS AssumeRole into `sandbox-artifacts`; an internal caller identity for core's `GET /internal/v1/jobs/{job_id}/run-scope` and `GET /internal/v1/revocations`. Mints run tokens only for runs whose `run_scope` matches core's intake record of the job (tenant, target repos, acting_for, not revoked) | per run, within its admitted scope | — |
+| sandbox | One run token per audience (JWT, CCR-09-01; no embedded grant since C-RUNNER 4.0.0); STS session credentials scoped to its run prefixes and tenant KMS key | one run, within its scope | ≤ 60 min, refreshed until terminal |
+| replicant-worker | DB role (read registry, …); S3 role (job prefixes); gateway service credential for in-worker LLM calls (router, triage, extraction). No signing key (run grants removed, ADR-015) | — | IRSA or Pod Identity |
+| replicant-gateway-shim | Enterprise AI gateway service credential (Secrets Manager, core account); ElastiCache IAM AUTH; S3 `PutObject` on `artifacts` `platform/gateway-usage/*`. Verifies `ai-gateway`-audience run tokens (Runner JWKS, Runner revocation feed), plus worker service tokens (projected SA token, audience `ai-gateway`) | all model traffic | rotated per WS-09 |
 | audit-exporter | IAM role `replicant-<env>-audit-exporter`; Temporal identity `audit-exporter`, read-only (`ListWorkflowExecutions`, `GetWorkflowExecutionHistory`); PG login `svc_audit_exporter` | audit exports per C-ART; `audit.record_partition_export` | IRSA or Pod Identity |
 | ops-worker | IAM role `replicant-<env>-leak-purge` (service account `leak-purge-worker`); Temporal worker identity `ops-worker` on `replicant-ops`; PG login `svc_ops_worker` (`EXECUTE audit.emit` only) | C-ART rule 4a deletions | — |
 | legal team (`replicant-<env>-legal-hold`, assumed through WS-09's approval flow) | IAM role `replicant-<env>-legal-hold` | the only principal that places or removes legal holds, and only on `audit` and the legal bucket `<org>-replicant-<env>-legal`; writes the litigation copies there. `replicant-leak-purge` may also supersede and delete un-held legal-bucket objects (C-ART 1.10.3, CCR-ORCH-01) | time-boxed session |
 | kill-switch break-glass (`replicant-<env>-killswitch-operator`, assumed through the access broker with a ticket tag, second approver, and session expiry) | IAM role `replicant-<env>-killswitch-operator` | CAS `PutObject` on `ops` `kill-switches/v1/state.json` only; every use audited, mirror-drift alert (CCR-09-12) | time-boxed session |
 | Okta System Log stream | Firehose delivery role `replicant-<env>-okta-log-firehose` | writes `okta_system_log_export` to `audit` | — |
-| control-plane-api (grants) | Publishes the run-grant JWKS (`https://grants.<env>.replicant.internal/.well-known/jwks.json`) and the grant revocation list (`/grants/revoked`), per WS-09 [agent-capabilities.md §2.2](../09-security/agent-capabilities.md) | public keys and revoked grant IDs only | — |
+| control-plane-api (Runner routes) | Answers the Runner's run-scope and job-revocation reads (`service:runner-api` only); publishes no keys (ADR-015 removed the run-grant JWKS and `/grants/revoked`) | intake records and revoked job/run IDs | — |
 
 ---
 
@@ -696,15 +732,16 @@ sequenceDiagram
 
 | Question | Who decides | Options | Recommendation |
 |---|---|---|---|
-| Two EKS clusters or one? | WS-02 / WS-09 / WS-10 | separate exec cluster; one cluster with isolated node pools | Separate clusters ([ADR-007](adr/007-separate-execution-cluster.md)) |
+| Two EKS clusters or one? | WS-02 / WS-09 / WS-10 | separate exec cluster; one cluster with isolated node pools | **Decided:** one cluster with a hardened sandbox pool ([ADR-015](adr/015-single-cluster-hardened-sandbox-pool.md), superseding ADR-007) |
 | Publisher owner | Orchestrator | WS-07 (GitHub surface) / WS-01 (graph node) | WS-07 owns `publisher-worker` and its GitHub semantics. WS-01 owns where the publish node sits in graphs |
 | Sandbox entrypoint language | WS-03 | Go static binary / Python | Go static binary: no interpreter dependency in diverse base images |
 | Does the AI gateway exist with per-run credentials and usage events? | WS-03 plus the platform owner | existing gateway / build a thin Replicant gateway (for example LiteLLM proxy) | WS-03 states the minimum interface. If the existing gateway lacks per-run tokens, put a replicant-owned thin gateway in front of it |
 
 ## Risks
 
-- Two clusters cost more (control-plane fees, duplicate add-ons) and add cross-cluster networking.
-  This is accepted for isolation (priority 1).
+- One cluster (ADR-015) means a sandbox escape lands in the same cluster and VPC as core; the node-pool hardening is
+  what stands between it and core. A compromised worker can still start runs for any live job (on that job's repos,
+  for its requester). Both are accepted risks owned by WS-09; splitting back is PrivateLink behind the four names.
 - `temporalio-langgraph` is public preview / beta [verified:
   https://docs.temporal.io/develop/python/integrations/langgraph and PyPI `temporalio-langgraph`
   0.1.0, 2026-10-24]. WS-01's adapter layer and fallback interpreter are mandatory, not optional.

@@ -137,11 +137,13 @@ func dirOf(p string) string {
 
 func nowRFC() string { return time.Now().UTC().Format(time.RFC3339) }
 
-// mkStatusDir creates /run/replicant/ipc/status world-writable (sticky): the watchdog (10003), the entrypoint
+// mkStatusDir creates /run/replicant/ipc/status world-writable (sticky): the uploader's watchdog (10003), the entrypoint
 // (10001) and agentd (10000) all write marker files there.
-func mkStatusDir() {
-	_ = os.MkdirAll(sandbox.StatusDir, 0o777)
-	_ = os.Chmod(sandbox.StatusDir, 0o1777)
+func mkStatusDir() { mkStatusDirAt(sandbox.StatusDir) }
+
+func mkStatusDirAt(dir string) {
+	_ = os.MkdirAll(dir, 0o777)
+	_ = os.Chmod(dir, sandbox.FileMode(0o1777)) // a raw 0o1777 would drop the sticky bit
 }
 
 // emitSandboxRun exports span `sandbox.run` (C-IDS T-5b: span ID = sha256("replicant.run.span.v1:"+run_id)[:16]) for the

@@ -11,6 +11,11 @@ Routes:
 * `POST /slack/events|interactions|commands` - v0 signature verification (approvals.md §4.2), 401 otherwise.
   Events: url_verification challenge, everything else acked. Interactions and commands: acked with an ephemeral
   "not available locally yet" answer (gate decisions from Slack are not implemented in v0).
+
+In the `core` process (control_plane_api.core, SIMPLIFY-D10; only when Slack is enabled) the `/slack/*` routes
+(`app.state.ingress_router`) are served on control-plane-api's listener and the `/internal/v1/**` routes are reached
+in process only, by control-plane-api through an ASGI transport that marks the caller in the ASGI scope
+(`IN_PROCESS_CALLER`) instead of the notify caller token.
 """
 from __future__ import annotations
 
@@ -22,7 +27,7 @@ import time
 import urllib.parse
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import ValidationError
 
@@ -44,6 +49,7 @@ from slack_integration.slack import SlackFailure, SlackGateway
 log = logging.getLogger("slack_integration")
 MAX_SLACK_BODY = 1024 * 1024
 MAX_DELIVER_BODY = 256 * 1024
+IN_PROCESS_CALLER = "replicant.in_process_caller"   # control_plane_api.in_process (never set from a network request)
 NOT_LOCAL_TEXT = ("Decisions from Slack are not available locally yet. "
                   "Open the approval in Replicant to decide.")
 
@@ -69,13 +75,14 @@ def _json(status: int, body: dict[str, Any], headers: dict[str, str] | None = No
 
 
 def create_app(settings: Settings | None = None, *, repo: Repo | None = None, slack: Any = None,
-               auth_check_interval_s: float = 300.0) -> FastAPI:
+               auth_check_interval_s: float = 300.0, cp_transport: Any = None) -> FastAPI:
+    """`cp_transport`: how gate decisions and App Home lists reach control-plane-api (core: in process)."""
     s = settings or Settings.from_env()
     repo = repo or PgRepo(make_engine(s))
     slack = slack or SlackGateway(s)
     status = SlackStatus()
     locks: dict[str, asyncio.Lock] = {}
-    decisions = Decisions(s, repo, slack, lambda: status.team_id)
+    decisions = Decisions(s, repo, slack, lambda: status.team_id, transport=cp_transport)
     background: set[asyncio.Task[Any]] = set()
 
     def spawn(coro: Any) -> None:
@@ -140,6 +147,8 @@ def create_app(settings: Settings | None = None, *, repo: Repo | None = None, sl
     app.state.decisions = decisions
 
     def caller_ok(request: Request) -> Response | None:
+        if request.scope.get(IN_PROCESS_CALLER) == "svc_control-plane-api":
+            return None
         expected = read_secret(s.notify_caller_token_file)
         if not expected:
             return _json(503, {"state": "error", "reason": "caller_token_not_configured"})
@@ -164,12 +173,10 @@ def create_app(settings: Settings | None = None, *, repo: Repo | None = None, sl
     # --- NOTIFY delivery ----------------------------------------------------------------------------------------
     @app.post("/internal/v1/notifications/deliver")
     async def deliver(request: Request) -> Response:
-        expected = read_secret(s.notify_caller_token_file)
-        if not expected:
-            log.error(json.dumps({"msg": "notify caller token not configured"}))
-            return _json(503, {"state": "error", "reason": "caller_token_not_configured"})
-        if not bearer_ok(request, expected):
-            return _json(401, {"state": "error", "reason": "unauthenticated"})
+        if (bad := caller_ok(request)) is not None:
+            if bad.status_code == 503:
+                log.error(json.dumps({"msg": "notify caller token not configured"}))
+            return bad
         raw = await request.body()
         if len(raw) > MAX_DELIVER_BODY:
             return _json(413, {"state": "rejected", "reason": "body_too_large"})
@@ -282,6 +289,8 @@ def create_app(settings: Settings | None = None, *, repo: Repo | None = None, sl
         return _json(200, {"state": "sent", "external_ref": f"updated:{n}"})
 
     # --- Slack ingress ------------------------------------------------------------------------------------------
+    ingress = APIRouter()     # served by core on control-plane-api's listener; the rest is in-process only there
+
     async def verified_body(request: Request) -> bytes | None:
         body = await request.body()
         if len(body) > MAX_SLACK_BODY:
@@ -295,7 +304,7 @@ def create_app(settings: Settings | None = None, *, repo: Repo | None = None, sl
             return None
         return body
 
-    @app.post("/slack/events")
+    @ingress.post("/slack/events")
     async def events(request: Request) -> Response:
         body = await verified_body(request)
         if body is None:
@@ -313,7 +322,7 @@ def create_app(settings: Settings | None = None, *, repo: Repo | None = None, sl
             spawn(guarded("home_publish", publish_home(str(inner["user"]))))
         return Response(status_code=200)
 
-    @app.post("/slack/interactions")
+    @ingress.post("/slack/interactions")
     async def interactions(request: Request) -> Response:
         body = await verified_body(request)
         if body is None:
@@ -332,7 +341,7 @@ def create_app(settings: Settings | None = None, *, repo: Repo | None = None, sl
             return Response(status_code=200)      # URL buttons need no answer
         return _json(200, {"response_type": "ephemeral", "replace_original": False, "text": NOT_LOCAL_TEXT})
 
-    @app.post("/slack/commands")
+    @ingress.post("/slack/commands")
     async def commands(request: Request) -> Response:
         body = await verified_body(request)
         if body is None:
@@ -341,4 +350,6 @@ def create_app(settings: Settings | None = None, *, repo: Repo | None = None, sl
         _log("slack_command", command=(form.get("command") or [""])[0], user_id=(form.get("user_id") or [""])[0])
         return _json(200, {"response_type": "ephemeral", "text": NOT_LOCAL_TEXT})
 
+    app.include_router(ingress)
+    app.state.ingress_router = ingress
     return app

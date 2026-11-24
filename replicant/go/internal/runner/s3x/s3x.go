@@ -224,6 +224,18 @@ func (c *Client) Get(ctx context.Context, bucket, key string) ([]byte, string, e
 	return b, aws.ToString(out.ETag), err
 }
 
+// GetStream opens an object for streaming (large inputs such as the repo bundle). The caller closes the body.
+func (c *Client) GetStream(ctx context.Context, bucket, key string) (io.ReadCloser, int64, error) {
+	out, err := c.S3.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
+	if err != nil {
+		if IsNotFound(err) {
+			return nil, 0, ErrNotFound
+		}
+		return nil, 0, err
+	}
+	return out.Body, aws.ToInt64(out.ContentLength), nil
+}
+
 // Head reports existence and size.
 func (c *Client) Head(ctx context.Context, bucket, key string) (bool, int64, error) {
 	out, err := c.S3.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})

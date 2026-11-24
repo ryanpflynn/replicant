@@ -1,6 +1,9 @@
 # ADR-007: Separate EKS cluster for execution
 
-- **Status:** Accepted (WS-00, 2026-10-24). **Amended by CCR-09-07 (C-ARCH 1.1.0):** the exec
+> **Superseded** by [ADR-015: Single cluster, hardened sandbox pool](015-single-cluster-hardened-sandbox-pool.md) (SIMPLIFY Phase 6, 2026-11-23;
+> C-RUNNER 4.0.0, C-CRD 4.0.0). Kept for the record; do not implement.
+
+- **Status:** Superseded by ADR-015 (2026-11-23). Was: Accepted (WS-00, 2026-10-24). **Amended by CCR-09-07 (C-ARCH 1.1.0):** the exec
   cluster lives in its own AWS account. WS-09 [ADR-09-001](../../09-security/adr/001-confirm-adr-007-exec-cluster-separate-account.md)
   confirms this ADR with 2026 escape advisories for every candidate runtime, and strengthens it.
 - **Constraints:** D-04, D-06, D-21, D-22

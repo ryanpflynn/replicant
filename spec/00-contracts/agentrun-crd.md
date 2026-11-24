@@ -1,8 +1,18 @@
 # AgentRun CRD: Semantics and Lifecycle
 
-**Contract ID:** `C-CRD` · **Version:** 3.0.0 · **Schema:** [agentrun-crd.yaml](agentrun-crd.yaml) · **Owner:** WS-00 (contract), WS-02 (controller)
+**Contract ID:** `C-CRD` · **Version:** 4.0.0 · **Schema:** [agentrun-crd.yaml](agentrun-crd.yaml) · **Owner:** WS-00 (contract), WS-02 (controller)
 
-**Changelog:** 3.0.0 (breaking). Product rename to Replicant (CCR-ORCH-02). Every product-named identifier changes; there is no structural change. Domain `factory.example.com` (labels, annotations, schema `$id` host) becomes `replicant.example.com`; env prefix `FACTORY_` becomes `REPLICANT_`; headers `X-Factory-*` become `X-Replicant-*`; names `factory-*`/`factory_*` (services, task queues, Temporal namespace, roles, buckets, groups, hosts, networks) become `replicant-*`/`replicant_*`; CamelCase `Factory*` (workflow types, search attributes) becomes `Replicant*`. API group `replicant.example.com`, CRD `agentruns.replicant.example.com`, labels and annotations `replicant.example.com/*`, priority classes `replicant-run-*`. 2.4.0 (wave 1). `priorityClassName` gains `replicant-eval` (CCR-02-06). After a security cancel, every terminal path derives `SecurityViolation`, including node loss (CCR-09-09). 2.3.1 (fix, R2-002): the spec-digest annotation also excludes `trace_context`; `spec.traceContext` keeps the first create's value. 2.3.0 (additive). CCR-08-03 adds optional, immutable `spec.workflowType`; the controller also sets the pod labels `workflow-type` and `acting-for` (from the verified `spec.runGrant`). 2.2.0 (additive). CCR-02-05 adds failure reason `DefinitionUnavailable`. 2.1.0 (additive). CCR-03-01 adds failure reason `EnvironmentSetupFailed`. 2.0.0 (breaking: new required spec field). CCR-09-02 adds the required, immutable `spec.runGrant`. CCR-09-04 adds failure reason `SecurityViolation` and cancel reason `security`. The API version stays `v1alpha1`, since no AgentRun objects exist yet; once objects exist, a change of this kind needs a new served version.
+**Changelog:** 4.0.0 (breaking, SIMPLIFY-D50, [ADR-015](adr/015-single-cluster-hardened-sandbox-pool.md)). `spec.runGrant` is replaced by the required, immutable `spec.runScope` {repoIds, audiences, scopes, actingFor}: the run scope the Runner admitted after checking it against core's intake record (C-RUNNER 4.0.0). The pod label `acting-for` comes from `spec.runScope.actingFor`. 3.0.0 (breaking). Product rename to Replicant (CCR-ORCH-02). Every product-named identifier changes; there is no structural change. Domain `factory.example.com` (labels, annotations, schema `$id` host) becomes `replicant.example.com`; env prefix `FACTORY_` becomes `REPLICANT_`; headers `X-Factory-*` become `X-Replicant-*`; names `factory-*`/`factory_*` (services, task queues, Temporal namespace, roles, buckets, groups, hosts, networks) become `replicant-*`/`replicant_*`; CamelCase `Factory*` (workflow types, search attributes) becomes `Replicant*`. API group `replicant.example.com`, CRD `agentruns.replicant.example.com`, labels and annotations `replicant.example.com/*`, priority classes `replicant-run-*`. 2.4.0 (wave 1). `priorityClassName` gains `replicant-eval` (CCR-02-06). After a security cancel, every terminal path derives `SecurityViolation`, including node loss (CCR-09-09). 2.3.1 (fix, R2-002): the spec-digest annotation also excludes `trace_context`; `spec.traceContext` keeps the first create's value. 2.3.0 (additive). CCR-08-03 adds optional, immutable `spec.workflowType`; the controller also sets the pod labels `workflow-type` and `acting-for` (from the verified `spec.runGrant`). 2.2.0 (additive). CCR-02-05 adds failure reason `DefinitionUnavailable`. 2.1.0 (additive). CCR-03-01 adds failure reason `EnvironmentSetupFailed`. 2.0.0 (breaking: new required spec field). CCR-09-02 adds the required, immutable `spec.runGrant`. CCR-09-04 adds failure reason `SecurityViolation` and cancel reason `security`. The API version stays `v1alpha1`, since no AgentRun objects exist yet; once objects exist, a change of this kind needs a new served version.
+
+## AgentRun is a bare Pod plus a write-once S3 record (design note, 2026-11-23)
+
+Since [ADR-015](adr/015-single-cluster-hardened-sandbox-pool.md) the Runner is one process on core nodes: it admits
+the run (checking `run_scope` against core), owns the AgentRun object, creates exactly one bare Pod `ar-<body>`,
+derives the phase from observations, delivers `run.status_changed` itself (the notifier is in the Runner), and at the
+terminal phase writes the AgentRun once to `<artifacts>agentrun_record/agentrun.json`. "Controller" and
+"run-notifier" below name functions of that process, not separate deployments; runner-local implements exactly this
+([local-runner.md](../02-execution/local-runner.md)). The observable behavior this contract fixes (phases,
+conditions, failure reasons, at-most-once, recovery by recomputation) is unchanged.
 
 ## Purpose
 
@@ -20,7 +30,7 @@ produce exactly the observable behavior below.
 | An AgentRun runs the agent process **at most once**. The controller never retries a run. Retrying is a workflow decision with a new `ordinal`, which means a new idempotency key and a new `run_id` | D-04; [ADR-008](adr/008-deterministic-run-identity.md) |
 | Phase `Succeeded` means the sandbox executed and the artifacts were committed (the manifest is written). It does **not** mean the task succeeded. Task outcome is in the run result (`result_uri`) | this doc |
 | The spec is immutable except `cancelRequested` (false → true) and `cancelReason`. CEL enforces this. Verified against kube-apiserver v1.34.1 (envtest) on 2026-10-24: the CRD applied, and the immutability, one-way cancel, terminal-phase finality, name-derivation, prefix-consistency, and selectable-field rules all behaved as specified | D-05 |
-| The controller emits completion events to run-notifier. It holds no Temporal credentials | D-04; [ADR-002](adr/002-runner-completion-callback-vs-poll.md) |
+| The controller emits completion events to run-notifier (since ADR-015 both are the Runner process, which signals Temporal itself). It holds no other Temporal credentials | D-04; [ADR-002](adr/002-runner-completion-callback-vs-poll.md) |
 | Validated against Kubernetes 1.34. Target EKS 1.36 or 1.37 (1.37 is the newest EKS version; 1.34 reaches upstream end of life on 2026-10-27) [verified: https://kubernetes.io/releases/ and https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html, 2026-10-24] | WS-02, WS-10 |
 
 ```mermaid
@@ -108,14 +118,14 @@ Transition rules:
 | `steering.enabled` | `steering.enabled` | AND with agent definition `steering.live` |
 | `trace_context` | `traceContext` | the Runner replaces the parent span ID with its own `runner.create_run` span |
 | `callback` | `callback` | drop `kind` |
-| `run_grant` | `runGrant` | Copied after the Runner verifies it (C-RUNNER, CCR-09-02). Immutable. On an idempotent repeat, the original grant is kept |
+| `run_scope` | `runScope` | `repo_ids`→`repoIds`, `acting_for`→`actingFor`; copied after the Runner checks it against core's intake record (C-RUNNER 4.0.0). Immutable. On an idempotent repeat, the original scope is kept |
 
 The Runner sets the labels and annotations in [ids-and-naming.md](ids-and-naming.md) §8.
 `replicant.example.com/spec-digest` is `sha256(JCS(RunSpec without its per-attempt fields))` of the
-request body, where the per-attempt fields are `run_grant` and `trace_context` (C-RUNNER 2.4.1). It is
-the idempotency comparison value. An activity retry re-signs the grant and runs in a new span, and
-neither may turn a retry into `idempotency_key_reuse`. On a repeat, the AgentRun keeps the first
-create's `spec.runGrant` and `spec.traceContext`; both fields are immutable.
+request body, where the per-attempt fields are `run_scope` and `trace_context` (C-RUNNER 4.0.0). It is
+the idempotency comparison value. An activity retry runs in a new span, and that may not turn a retry into
+`idempotency_key_reuse`. On a repeat, the AgentRun keeps the first create's `spec.runScope` and
+`spec.traceContext`; both fields are immutable.
 
 ## 3. Conditions
 

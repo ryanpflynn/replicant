@@ -4,9 +4,9 @@
 #
 #   go/cmd/replicant-gateway-shim/smoke/claude-smoke.sh [workdir]
 #
-# Needs: podman, the image localhost/replicant/replicant-gateway-shim:dev, `claude` (2.1.310) and git on the host.
-# Contract fakes instead of neighbours: dev ES256 keys + file:// JWKS (devtool mint) stand in for runner-local and
-# run-grants; the run token goes straight into ANTHROPIC_AUTH_TOKEN with the X-Replicant-* headers that agentd would
+# Needs: podman, the image localhost/replicant/replicant-go:dev (images/replicant-go), `claude` (2.1.310) and git on the host.
+# Contract fakes instead of neighbours: a dev ES256 key + file:// JWKS (devtool mint) stand in for runner-local (the
+# only run-token issuer, SIMPLIFY-D50); the run token goes straight into ANTHROPIC_AUTH_TOKEN with the X-Replicant-* headers that agentd would
 # add (ANTHROPIC_CUSTOM_HEADERS). Tokens are written to files and never printed. Containers are named gw-*.
 set -euo pipefail
 ENGINE="${REPLICANT_CONTAINER_CLI:-podman}"
@@ -16,7 +16,7 @@ root=$(cd "$here/../../../.." && pwd)            # monorepo root (replicant/)
 spec_cfg=${GATEWAY_CONFIG_DIR:-$root/dev/compose/config/gateway-shim}
 W=${1:-$(mktemp -d)}
 PORT=${GW_PORT:-18420}
-IMG=localhost/replicant/replicant-gateway-shim:dev
+IMG=localhost/replicant/replicant-go:dev
 mkdir -p "$W/keys" "$W/secrets" "$W/usage" "$W/evidence"; chmod 777 "$W/usage"
 cleanup() { "$ENGINE" rm -f -v gw-smoke-shim >/dev/null 2>&1 || true; }
 trap cleanup EXIT
@@ -34,12 +34,11 @@ chmod 644 "$W/secrets/"*
   -v "$W/keys:/keys:ro" -v "$W/secrets:/run/secrets:ro" -v "$W/usage:/usage" \
   -e REPLICANT_ENV=local \
   -e REPLICANT_RUN_TOKEN_ISSUERS=http://runner-local:8480 -e REPLICANT_RUN_TOKEN_JWKS_URLS=file:///keys/runner-jwks.json \
-  -e REPLICANT_RUN_GRANT_ISSUER=replicant-local-core -e REPLICANT_RUN_GRANT_JWKS_URL=file:///keys/grant-jwks.json \
   -e REPLICANT_GATEWAY_SERVICE_TOKENS_FILE=/run/secrets/gateway_service_tokens \
   -e REPLICANT_GATEWAY_CASSETTE_ROOTS=scripts=/cassettes/scripts \
   -e REPLICANT_GATEWAY_LOCAL_QUOTA=monthly=100,daily=50,platform_daily=500,platform_monthly=2000 \
   -e REPLICANT_GATEWAY_USAGE_S3_URI=file:///usage \
-  "$IMG" replicant-gateway-shim --config=/etc/gateway-shim/gateway-shim.yaml --upstream-backend=script >/dev/null
+  "$IMG" /usr/local/bin/replicant-gateway-shim --config=/etc/gateway-shim/gateway-shim.yaml --upstream-backend=script >/dev/null
 for _ in $(seq 1 20); do curl -sf "http://127.0.0.1:$PORT/readyz" >/dev/null && break; sleep 0.5; done
 "$ENGINE" exec gw-smoke-shim replicant-gateway-shim devtool register --dir /keys --url http://127.0.0.1:8420 \
   --service-token-file /run/secrets/svc_token --stub tests/walkthrough-ledger-api/implementer.c0.n1 >/dev/null

@@ -127,3 +127,16 @@ func TestRepoConfigSteersEditsToEditTools(t *testing.T) {
 		t.Fatalf("read-only role: read guidance only: %q", g)
 	}
 }
+
+func TestStructuredOutputRejected(t *testing.T) {
+	msg, ok := structuredOutputRejected(map[string]any{"type": "result", "subtype": "error_max_structured_output_retries", "is_error": true,
+		"errors": []any{"Failed to provide valid structured output after 5 attempts"}})
+	if !ok || !strings.Contains(msg, "after 5 attempts") {
+		t.Fatalf("got %q %v", msg, ok)
+	}
+	for _, res := range []map[string]any{nil, {"subtype": "success"}, {"subtype": "error_during_execution", "is_error": true}} {
+		if _, ok := structuredOutputRejected(res); ok {
+			t.Fatalf("%v classified as rejected structured output", res)
+		}
+	}
+}

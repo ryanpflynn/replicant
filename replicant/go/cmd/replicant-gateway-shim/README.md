@@ -16,8 +16,8 @@ replicant-gateway-shim devtool mint|register ...      # local tests only (dev ke
 | Area | Status |
 |---|---|
 | `POST /anthropic/v1/messages` (stream + JSON), `/anthropic/v1/messages/count_tokens`, `/openai/v1/responses`, `/embeddings/v1/embeddings` | yes (script backend: Anthropic only) |
-| Run token (`aud == ai-gateway`, ES256 vs `REPLICANT_RUN_TOKEN_JWKS_URLS` paired with issuers) + embedded run grant (core JWKS, subset checks), header/claim match | yes |
-| Revocation: `self:close`, `POST /internal/v1/revocations`, `/grants/revoked` poll (60 s, ETag), exec feed `GET /v1/revocations` (10 s, cursor) | yes |
+| Run token (`aud == ai-gateway`, ES256 vs `REPLICANT_RUN_TOKEN_JWKS_URLS` paired with issuers) , header/claim match (no run grant since SIMPLIFY-D50: the runner JWKS is the only trust anchor) | yes |
+| Revocation: `self:close`, `POST /internal/v1/revocations`, the runner's feed `GET /v1/revocations` (10 s, cursor; `job_revoked` entries close the whole job) | yes |
 | `PUT/GET /internal/v1/runs/{run_id}/policy` (idempotent, 409 on change, `stub` only on local backends), `PUT /internal/v1/jobs/{job_id}/budget`, `PUT /internal/v1/budgets/jobs/{job_id}`, `GET /internal/v1/models`, `GET /v1/budget` | yes |
 | Budgets: reservation + settlement at run / job / tenant month+day (or account) / platform day+month; 402 + `X-Replicant-Budget-Exceeded`; budget headers; run concurrency 429 | yes |
 | Tenant quota from control-plane-api `GET /internal/v1/tenants/{t}/gateway-quota` (60 s cache, 404 ⇒ `tenant_quota_unset`) | yes; local fallback `REPLICANT_GATEWAY_LOCAL_QUOTA` |
@@ -51,10 +51,10 @@ Fixtures: `tests/fixtures/gateway-scripts/walkthrough-ledger-api/{implementer,re
 
 ```sh
 # from the monorepo root
-podman build -f go/cmd/replicant-gateway-shim/Dockerfile -t localhost/replicant/replicant-gateway-shim:dev .
+podman build -f images/replicant-go/Dockerfile -t localhost/replicant/replicant-go:dev .   # shared Go image (SIMPLIFY-D2)
 podman run --rm -v "$PWD":/replicant:ro -w /replicant/go/cmd/replicant-gateway-shim -e GOWORK=off -e GOFLAGS=-buildvcs=false \
   docker.io/library/golang:1.26 sh -c 'go vet ./... && go test -race ./...'
-# real `claude -p` (host install) fixes ledger-api through the shim (script mode, contract fakes for runner/grants):
+# real `claude -p` (host install) fixes ledger-api through the shim (script mode, a contract fake for the runner):
 go/cmd/replicant-gateway-shim/smoke/claude-smoke.sh [workdir]
 ```
 

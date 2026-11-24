@@ -22,7 +22,7 @@ func (s *Server) terminateIfNeeded(ctx context.Context, r *Record) error {
 		// After agent and uploader exited, stop the sidecars.
 		agent, up := s.inspect(ctx, r, cAgent), s.inspect(ctx, r, cUploader)
 		if (agent == nil || exited(agent)) && (up == nil || exited(up)) {
-			go s.stopContainers(context.Background(), r, []string{cAgentd, cWatchdog, cPause}, 5)
+			go s.stopContainers(context.Background(), r, []string{cAgentd, cPause}, 5)
 		}
 		return nil
 	}
@@ -46,7 +46,7 @@ func (s *Server) terminateIfNeeded(ctx context.Context, r *Record) error {
 	if err != nil {
 		return err
 	}
-	go s.stopContainers(context.Background(), r, []string{cAgent, cUploader, cPrepare, cGuard}, grace)
+	go s.stopContainers(context.Background(), r, []string{cAgent, cUploader, cPrepare, cSandboxInit}, grace)
 	return nil
 }
 
@@ -89,7 +89,7 @@ func (s *Server) reconcileTerminal(ctx context.Context, r *Record) (bool, error)
 			return false, err
 		}
 		// Containers still running when the run is terminal are stopped now (R1-040).
-		go s.stopContainers(context.Background(), r, []string{cAgent, cUploader, cPrepare, cGuard, cAgentd, cWatchdog, cPause}, 2)
+		go s.stopContainers(context.Background(), r, []string{cAgent, cUploader, cPrepare, cSandboxInit, cAgentd, cPause}, 2)
 		// Per-run log flush (M3, B-LOG-01 local stand-in): every line of every sandbox container, pushed once the pod
 		// group has stopped, so short-lived containers are never missed by the collector's tailer.
 		go s.flushLogs(context.Background(), r)
@@ -114,7 +114,6 @@ func (s *Server) reconcileTerminal(ctx context.Context, r *Record) (bool, error)
 
 func (s *Server) writeAgentRunRecord(ctx context.Context, r *Record) error {
 	ar := copyAR(&r.AgentRun)
-	ar.Spec.RunGrant = ""
 	for i := range ar.Status.Conditions {
 		ar.Status.Conditions[i].Message = truncate(ar.Status.Conditions[i].Message, 256)
 	}
@@ -125,7 +124,7 @@ func (s *Server) writeAgentRunRecord(ctx context.Context, r *Record) error {
 }
 
 func (s *Server) gcContainers(ctx context.Context, r *Record) {
-	for _, c := range []string{cAgent, cUploader, cPrepare, cGuard, cAgentd, cWatchdog, cVolumeInit, cPause} {
+	for _, c := range append(append([]string{}, podContainers...), legacyContainers...) {
 		_ = s.Engine.Remove(ctx, cname(r, c))
 	}
 	for _, v := range volumeNames {

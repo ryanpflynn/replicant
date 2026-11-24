@@ -31,7 +31,7 @@ func m3Cases() []tcase {
 	return []tcase{
 		{"RC-CAN-01", "cancel while Pending (test hook holds the run before the sandbox starts)", false, true, caseCancelPending},
 		{"RC-RUN-13", "scenario invalid_result", false, true, func(ctx context.Context, e *env) (string, error) {
-			return e.failCase(ctx, runOpts{scriptSet: "runner-contract", scriptKey: "invalid_result"}, "AgentResultInvalid", true, 6*time.Minute)
+			return e.failCase(ctx, runOpts{scriptSet: "runner-contract", scriptKey: "invalid_result"}, "AgentResultInvalid", false, 6*time.Minute) // non-retryable: agentrun-crd.md §4, cli-invocation.md exit 12
 		}},
 		{"RC-RUN-14", "scenario disk_exceeded", false, true, caseDisk},
 		{"RC-RUN-15", "scenario oom", false, true, func(ctx context.Context, e *env) (string, error) {
@@ -96,6 +96,12 @@ func httpStatus(method, url, token string, hdr map[string]string) int {
 }
 
 func caseCancelPending(ctx context.Context, e *env) (string, error) {
+	// The hold is runner-local's RUNNER_TEST_HOOKS=true hook (off by default, never in shared environments): the
+	// launcher passes the runner's setting through (SIMPLIFY-D59).
+	if os.Getenv("RUNNER_TEST_HOOKS") != "true" {
+		return "", skipError{"runner-local runs without RUNNER_TEST_HOOKS=true (the Pending hold hook); to run RC-CAN-01: " +
+			"RUNNER_TEST_HOOKS=true replicant dev up --profile v0, then run-v0.sh --only RC-CAN-01, then dev up again without it"}
+	}
 	st, err := e.stage(ctx, runOpts{lai: "holdpending.c0.n1.run"})
 	if err != nil {
 		return "", err
@@ -119,11 +125,29 @@ func caseCancelPending(ctx context.Context, e *env) (string, error) {
 }
 
 func caseDisk(ctx context.Context, e *env) (string, error) {
-	detail, err := e.failCase(ctx, runOpts{scriptSet: "runner-contract", scriptKey: "disk_exceeded"}, "WorkspaceDiskExceeded", false, 10*time.Minute)
+	detail, st, err := e.failCaseRun(ctx, runOpts{scriptSet: "runner-contract", scriptKey: "disk_exceeded"}, "WorkspaceDiskExceeded", false, 10*time.Minute)
 	if err != nil {
 		return detail, err
 	}
-	return detail, expect(strings.Contains(detail, "Finalizing"), "not via Finalizing")
+	// Disk overrun is a finalized failure (the agent stops with exit 30 and the uploader commits the manifest), not a
+	// destroyed pod. Whether the 1 s reconcile observes Finalizing between the agent's exit and the uploader's is a
+	// race (the uploader finishes within about a second), so check the committed manifest instead (SIMPLIFY-D58).
+	ab, ak, _ := s3x.ParseURI(st.prefixes.Artifacts)
+	mb, _, err := e.s3.Get(ctx, ab, ak+"manifest.json")
+	if err != nil {
+		return detail, fmt.Errorf("no manifest: %v", err)
+	}
+	var m struct {
+		Producer struct {
+			ExitCode *int `json:"exit_code"`
+		} `json:"producer"`
+	}
+	_ = json.Unmarshal(mb, &m)
+	if m.Producer.ExitCode == nil || *m.Producer.ExitCode != 30 {
+		e.dumpRun(ctx, st)
+		return detail, fmt.Errorf("manifest producer.exit_code %v, want 30 (agent stopped by the disk watchdog)", m.Producer.ExitCode)
+	}
+	return detail + "; manifest committed, agent exit 30", nil
 }
 
 func caseDefinitionGone(ctx context.Context, e *env) (string, error) {
@@ -141,7 +165,7 @@ func caseDefinitionGone(ctx context.Context, e *env) (string, error) {
 		return "", err
 	}
 	st.spec["agent_definition"] = api.DefinitionRef{Kind: "agent", Name: "implementer-claude", Version: 1, Digest: dig}
-	e.resign(st, runOpts{jobID: st.jobID})
+	e.rescope(st, runOpts{jobID: st.jobID})
 	if _, err := e.s3.S3.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(e.bucket("registry")), Key: aws.String(key)}); err != nil {
 		return "", err
 	}
@@ -304,17 +328,20 @@ func caseProbeEnv(ctx context.Context, e *env) (string, error) {
 	}
 	e.record("RC-ENV-02", "TRACEPARENT carries the RunSpec trace; OTEL_RESOURCE_ATTRIBUTES per C-IDS §5",
 		len(tp) == 4 && tp[1] == wantTrace && okRA, fmt.Sprintf("traceparent=%s resource=%s", m["TRACEPARENT"], ra))
-	// RC-ENV-03 proxy and mirror passthrough (runner-local.yaml sandbox.env)
-	want := map[string]string{"HTTPS_PROXY": "http://egress.sbx.local:3128", "HTTP_PROXY": "http://egress.sbx.local:3128",
+	// RC-ENV-03 mirror passthrough (runner-local.yaml sandbox.env); no proxy variables: sandboxes reach the
+	// allowlisted hosts directly through sbx-edge's SNI passthrough (SIMPLIFY-D30). NO_PROXY may carry exactly
+	// the loopback names: the runner and the entrypoint keep 127.0.0.1,localhost in it so that agentd's loopback
+	// endpoints (gateway, messaging) stay direct should an operator ever configure a proxy (SIMPLIFY-D55)
+	want := map[string]string{"HTTPS_PROXY": "", "HTTP_PROXY": "",
 		"NPM_CONFIG_REGISTRY": "http://npm.sbx.local:4873/", "GOPROXY": httpx_env("EXPECT_GOPROXY", "https://proxy.golang.org"), "PIP_INDEX_URL": "http://pypi.sbx.local:5000/index/"}
-	okEnv := strings.Contains(m["NO_PROXY"], "127.0.0.1") && strings.Contains(m["NO_PROXY"], "localhost")
+	okEnv := m["NO_PROXY"] == "" || m["NO_PROXY"] == "127.0.0.1,localhost"
 	for k, v := range want {
 		if m[k] != v {
 			okEnv = false
 		}
 	}
-	e.record("RC-ENV-03", "proxy and mirror variables equal runner-local.yaml sandbox.env; NO_PROXY has 127.0.0.1,localhost", okEnv,
-		fmt.Sprintf("HTTPS_PROXY=%s GOPROXY=%s NPM=%s PIP=%s NO_PROXY=%s", m["HTTPS_PROXY"], m["GOPROXY"], m["NPM_CONFIG_REGISTRY"], m["PIP_INDEX_URL"], m["NO_PROXY"]))
+	e.record("RC-ENV-03", "mirror variables equal runner-local.yaml sandbox.env; no HTTPS_PROXY/HTTP_PROXY; NO_PROXY loopback only", okEnv,
+		fmt.Sprintf("HTTPS_PROXY=%s HTTP_PROXY=%s GOPROXY=%s NPM=%s PIP=%s NO_PROXY=%s", m["HTTPS_PROXY"], m["HTTP_PROXY"], m["GOPROXY"], m["NPM_CONFIG_REGISTRY"], m["PIP_INDEX_URL"], m["NO_PROXY"]))
 	// RC-ENV-04 deterministic mode
 	dates := strings.Split(m["GIT_DATES"], "|")
 	wantSess := uuid5URL("replicant:" + st.runID)
@@ -323,7 +350,7 @@ func caseProbeEnv(ctx context.Context, e *env) (string, error) {
 	e.record("RC-ENV-04", "deterministic: commit dates = the job's received_at; session id = uuid5(URL, replicant:<run_id>)", okDet,
 		fmt.Sprintf("dates=%s session=%s want=%s", m["GIT_DATES"], m["CLI_SESSION"], wantSess))
 	// RC-RUN-08 repo at base_sha
-	e.record("RC-RUN-08", "workspace HEAD equals base_sha (fetched through agentd → git.sbx.local → repo-mirror)", m["HEAD"] == e.gitea.baseSHA,
+	e.record("RC-RUN-08", "workspace HEAD equals base_sha (checked out from the repo bundle in the run inputs)", m["HEAD"] == e.gitea.baseSHA,
 		fmt.Sprintf("HEAD=%s base_sha=%s", m["HEAD"], e.gitea.baseSHA))
 	if len(bad) > 0 || !okRA || !okEnv || !okDet || m["HEAD"] != e.gitea.baseSHA {
 		fmt.Printf("  probe output:\n%s\n", indent(text))
@@ -415,29 +442,22 @@ func caseAudRev(ctx context.Context, e *env) (string, error) {
 	if err := e.waitPhase(st, "Running", 5*time.Minute); err != nil {
 		return "", err
 	}
-	gw, mir := e.readToken(st.runID, api.AudGateway, time.Minute), e.readToken(st.runID, api.AudMirror, time.Minute)
-	mirror := httpx_env("MIRROR_URL", "http://repo-mirror:8080")
-	gitPath := mirror + "/git/" + fmt.Sprint(e.gitea.id) + "/info/refs?service=git-upload-pack"
-	repoHdr := map[string]string{"X-Replicant-Repo-Provider": "gitea", "X-Replicant-Repo-Host": "git.replicant.localhost:3300",
-		"X-Replicant-Repo-Owner": e.gitea.owner, "X-Replicant-Repo-Name": e.gitea.name}
-	// positive controls while the run is live
+	gw, sbx := e.readToken(st.runID, api.AudGateway, time.Minute), e.readToken(st.runID, api.AudSandbox, time.Minute)
+	// positive control while the run is live (repo-mirror and its audience are gone, SIMPLIFY-D40)
 	posShim := httpStatus("GET", e.shim+"/v1/budget", gw, nil)
-	posMir := httpStatus("GET", gitPath, mir, repoHdr)
 	// RC-AUD-01: tokens presented to the wrong audience
 	aud := map[string]int{
-		"repo-mirror token → shim":           httpStatus("GET", e.shim+"/v1/budget", mir, nil),
-		"ai-gateway token → repo-mirror":     httpStatus("GET", gitPath, gw, repoHdr),
-		"ai-gateway token → runner-sandbox":  httpStatus("POST", e.runnerSbx+"/sandbox/v1/token:refresh", gw, nil),
-		"repo-mirror token → runner-sandbox": httpStatus("POST", e.runnerSbx+"/sandbox/v1/token:refresh", mir, nil),
+		"runner-sandbox token → shim":       httpStatus("GET", e.shim+"/v1/budget", sbx, nil),
+		"ai-gateway token → runner-sandbox": httpStatus("POST", e.runnerSbx+"/sandbox/v1/token:refresh", gw, nil),
 	}
-	okAud := true
+	okAud := sbx != ""
 	for _, c := range aud {
 		if c != 401 {
 			okAud = false
 		}
 	}
 	e.record("RC-AUD-01", "cross-audience replay → 401 everywhere (aud equality)", okAud && posShim == 200,
-		fmt.Sprintf("%v (positive controls: shim %d, mirror %d)", aud, posShim, posMir))
+		fmt.Sprintf("%v (positive control: shim %d)", aud, posShim))
 	// RC-RUN-19: security cancel while Running
 	c, _, _ := e.do("POST", "/v1/runs/"+st.runID+":cancel", e.workerToken, "", map[string]any{"reason": "security"})
 	final, phases, err := e.wait(st, 4*time.Minute)
@@ -453,22 +473,21 @@ func caseAudRev(ctx context.Context, e *env) (string, error) {
 		time.Sleep(time.Second)
 	}
 	// RC-REV-03: the still-unexpired tokens are rejected by the verifiers within one feed poll (10 s)
-	var shimC, mirC int
+	var shimC int
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		shimC, mirC = httpStatus("GET", e.shim+"/v1/budget", gw, nil), httpStatus("GET", gitPath, mir, repoHdr)
-		if shimC == 401 && mirC == 401 {
+		if shimC = httpStatus("GET", e.shim+"/v1/budget", gw, nil); shimC == 401 {
 			break
 		}
 		time.Sleep(2 * time.Second)
 	}
 	took := time.Since(t0).Round(time.Second)
 	e.record("RC-RUN-19", "security cancel → Failed/SecurityViolation (C-RUNNER), run on the revocation feed, tokens rejected ≤ 60 s",
-		c == 202 && final["phase"] == "Failed" && got == "SecurityViolation" && onFeed && shimC == 401 && mirC == 401,
-		fmt.Sprintf("cancel %d → %v/%s via %s; feed=%v; shim %d mirror %d after %s", c, final["phase"], got, strings.Join(phases, " → "), onFeed, shimC, mirC, took))
-	e.record("RC-REV-03", "verifiers honor the exec revocation feed (shim, repo-mirror) within one poll", shimC == 401 && mirC == 401 && took <= 30*time.Second,
-		fmt.Sprintf("shim %d repo-mirror %d within %s of terminal", shimC, mirC, took))
-	return "", expect(okAud && got == "SecurityViolation" && onFeed && shimC == 401 && mirC == 401, "checks failed")
+		c == 202 && final["phase"] == "Failed" && got == "SecurityViolation" && onFeed && shimC == 401,
+		fmt.Sprintf("cancel %d → %v/%s via %s; feed=%v; shim %d after %s", c, final["phase"], got, strings.Join(phases, " → "), onFeed, shimC, took))
+	e.record("RC-REV-03", "verifiers honor the exec revocation feed (shim) within one poll", shimC == 401 && took <= 30*time.Second,
+		fmt.Sprintf("shim %d within %s of terminal", shimC, took))
+	return "", expect(okAud && got == "SecurityViolation" && onFeed && shimC == 401, "checks failed")
 }
 
 func httpx_env(k, d string) string {

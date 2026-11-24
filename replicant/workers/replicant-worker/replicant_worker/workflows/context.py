@@ -110,12 +110,12 @@ class NodeContext:
                         raise_on_failure: bool = True) -> RunOutcome:
         """The Runner-call sequence (graphs/README.md section 2). Per attempt:
         agents.build_run_plan -> budget.allocate_run -> memory.create_snapshot(revocation_filter)
-        -> context.stage_inputs -> agents.stage_inputs -> runner.start_run (signs the run grant)
+        -> context.stage_inputs -> agents.stage_inputs -> runner.start_run (adds run_scope)
         -> wait (Signal hint + timer + runner.get_run) -> runner.read_result -> cost.record_run.
 
         RunSpec decision fields (C-RUNNER 2.4.1) are built here, in workflow code, from activity results
         recorded in history (graphs/README.md section 2.1). runner.start_run adds only the per-attempt fields
-        `run_grant` and `trace_context`, and computes `spec_digest` from the decision fields it was given."""
+        `run_scope` and `trace_context` (C-RUNNER 4.0.0); the Runner computes `spec_digest` from the decision fields."""
         h, s = self.host, self.s
         pol = h.policy("runner_polling")
         limits = h.policy("repair_limits")
@@ -177,8 +177,11 @@ class NodeContext:
                     "base_snapshot_id": s.memory_snapshot_id, "run_id": run_id, "role": role, "node_key": self.node_key,
                     "cycle": s.cycle, "parent_job_id": s.parent_job_id}, effect=f"{p}resnap", ordinal=ordinal)
                 s.memory_snapshot_id = snap["memory_snapshot_id"]
+            stage_in: dict[str, Any] = {}
+            if workflow.patched("repo-bundle-v1"):  # SIMPLIFY-D40: the repo whose git bundle the run's inputs carry
+                stage_in["repo"] = h.primary_repo()
             staged = await self.act("context.stage_inputs", {
-                **base, "refs": dict(s.refs), "memory_snapshot_id": s.memory_snapshot_id,
+                **base, **stage_in, "refs": dict(s.refs), "memory_snapshot_id": s.memory_snapshot_id,
                 "working_memory": s.working_memory, "steering": list(s.steering_queue),
                 "steering_refs": list(s.steering_refs),
                 # R2-019: request_changes comments, staged as <untrusted_input source="approver_feedback">
@@ -238,7 +241,7 @@ class NodeContext:
                     "idempotency_key": key, "logical_activity_id": lid, "role": role, "run_id": run_id,
                     "workflow_id": workflow.info().workflow_id,
                     "tenant_id": s.tenant_id, "job_id": s.job_id, "run_spec": run_spec,
-                    # RunGrantClaims inputs (CCR-09-02); iat, exp = iat + timeouts + 300 and jti are set at signing
+                    # run_scope inputs (C-RUNNER 4.0.0, SIMPLIFY-D50; the key keeps its name for replay). Unused since: budget_usd, lifetime_seconds
                     "grant": {"role": role, "repo_ids": list(s.repo_ids), "audiences": list(plan.get("audiences", [])),
                               "scopes": list(plan.get("scopes", [])), "budget_usd": max_cost, "acting_for": s.acting_for,
                               "lifetime_seconds": t["startup_seconds"] + t["active_deadline_seconds"]
@@ -348,7 +351,7 @@ class NodeContext:
 
     def _run_spec(self, *, lid: str, role: str, workload_class: str, plan: dict[str, Any], staged: dict[str, Any],
                   max_cost: float, steering: bool, resource_profile: str, network_profile: str) -> dict[str, Any]:
-        """C-RUNNER 3.0.0 RunSpec without the per-attempt fields (run_grant, trace_context). Every value comes
+        """C-RUNNER 4.0.0 RunSpec without the per-attempt fields (run_scope, trace_context). Every value comes
         from workflow state or an activity result already recorded in history (graphs/README.md 2.1)."""
         s, h = self.s, self.host
         r = h.primary_repo()

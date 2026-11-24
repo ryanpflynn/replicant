@@ -81,7 +81,9 @@ func TestDerive(t *testing.T) {
 		{"bound", Observation{Now: t0, Run: run(v1.PhasePending, false), Pod: pod("n1", nil, nil)}, v1.PhaseProvisioning, ""},
 		{"repo fetch failed", Observation{Now: t0, Run: run(v1.PhaseProvisioning, false), Pod: pod("n1", []corev1.ContainerStatus{term(CPrepare, PrepRepoFetchFailed, "Error")}, nil)}, v1.PhaseFailed, v1.ReasonRepoFetchFailed},
 		{"diff apply failed", Observation{Now: t0, Run: run(v1.PhaseProvisioning, false), Pod: pod("n1", []corev1.ContainerStatus{term(CPrepare, PrepDiffApplyFailed, "Error")}, nil)}, v1.PhaseFailed, v1.ReasonDiffApplyFailed},
-		{"limit not enforced", Observation{Now: t0, Run: run(v1.PhaseProvisioning, false), Pod: pod("n1", []corev1.ContainerStatus{term(CWorkspaceGuard, GuardLimitNotEnforced, "Error")}, nil)}, v1.PhaseFailed, v1.ReasonControllerError},
+		{"limit not enforced", Observation{Now: t0, Run: run(v1.PhaseProvisioning, false), Pod: pod("n1", []corev1.ContainerStatus{term(CSandboxInit, GuardLimitNotEnforced, "Error")}, nil)}, v1.PhaseFailed, v1.ReasonControllerError},
+		{"sandbox-init ownership failed", Observation{Now: t0, Run: run(v1.PhasePending, false), Pod: pod("", []corev1.ContainerStatus{term(CSandboxInit, 1, "Error")}, nil)}, v1.PhaseFailed, v1.ReasonControllerError},
+		{"clone over disk limit", Observation{Now: t0, Run: run(v1.PhaseProvisioning, false), Pod: pod("n1", []corev1.ContainerStatus{term(CSandboxInit, 0, "Completed"), term(CPrepare, ExitWorkspaceDiskExceeded, "Error")}, nil)}, v1.PhaseFailed, v1.ReasonWorkspaceDiskExceeded},
 		{"startup timeout", Observation{Now: t0.Add(301 * time.Second), Run: run(v1.PhaseProvisioning, false), Pod: pod("n1", nil, nil)}, v1.PhaseFailed, v1.ReasonSandboxStartTimeout},
 		{"running", Observation{Now: t0, Run: run(v1.PhaseProvisioning, false), Pod: pod("n1", []corev1.ContainerStatus{prepOK}, []corev1.ContainerStatus{running(CAgent, true), running(CUploader, true)})}, v1.PhaseRunning, ""},
 		{"agent exited -> finalizing", Observation{Now: t0, Run: run(v1.PhaseRunning, false), Pod: pod("n1", []corev1.ContainerStatus{prepOK}, []corev1.ContainerStatus{term(CAgent, 0, "Completed"), running(CUploader, true)})}, v1.PhaseFinalizing, ""},
@@ -133,5 +135,15 @@ func TestDerive(t *testing.T) {
 	ev.Status.Message = "The node was low on resource: memory."
 	if d := Derive(Observation{Now: t0, Run: run(v1.PhaseRunning, false), Pod: ev}); d.Reason != v1.ReasonPodEvicted {
 		t.Errorf("node-pressure eviction: got %s", d.Reason)
+	}
+}
+
+// sandbox-init (volume ownership, then the workspace guard) keeps the guard's exit 84 distinguishable.
+func TestSandboxInitMessages(t *testing.T) {
+	for code, want := range map[int32]string{GuardLimitNotEnforced: "workspace hard limit not enforced (guard exit 84)", 1: "sandbox-init exit 1"} {
+		d := Derive(Observation{Now: t0, Run: run(v1.PhaseProvisioning, false), Pod: pod("", []corev1.ContainerStatus{term(CSandboxInit, code, "Error")}, nil)})
+		if d.Phase != v1.PhaseFailed || d.Reason != v1.ReasonControllerError || d.Message != want {
+			t.Errorf("exit %d: got %s/%s %q", code, d.Phase, d.Reason, d.Message)
+		}
 	}
 }

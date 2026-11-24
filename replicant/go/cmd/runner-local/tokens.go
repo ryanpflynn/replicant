@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"example.com/replicant/internal/runner/api"
+	"example.com/replicant/internal/runner/authz"
 	"example.com/replicant/internal/runner/ids"
 	"example.com/replicant/internal/runner/jose"
 )
@@ -17,23 +18,26 @@ var audienceScopes = map[string][]string{
 	api.AudGateway: {"gateway:invoke"},
 	api.AudMemory:  {"memory:read", "memory:search"},
 	api.AudContext: {"context:read", "code_search:read"},
-	api.AudMirror:  {"repo:fetch"},
 	api.AudSandbox: {"credentials:aws", "inbox:read"},
 }
 
-// signSet mints one ES256 token per audience in the grant (only those in `only` when non-empty), each
-// embedding the grant and claiming a subset of it, exp = min(now + 60 min, grant.exp) (C-RUNNER, CCR-09-01/02).
-func signSet(s *jose.Signer, issuer, grant string, g *api.RunGrantClaims, steeringLive bool, now time.Time, only []string) (map[string]api.TokenEntry, error) {
+// signSet mints one ES256 token per audience in the admitted run scope (only those in `only` when non-empty),
+// each claiming a subset of it, exp = min(now + 60 min, the run's overall deadline) (C-RUNNER 4.0.0, CCR-09-01).
+// The runner's own key signs; verifiers check the runner JWKS and the runner revocation feed only (SIMPLIFY-D50).
+func signSet(s *jose.Signer, issuer string, a *api.RunAuthz, steeringLive bool, now time.Time, only []string) (map[string]api.TokenEntry, error) {
 	exp := now.Add(time.Hour).Unix()
-	if g.Exp < exp {
-		exp = g.Exp
+	if a.Exp < exp {
+		exp = a.Exp
 	}
 	if exp <= now.Unix() {
-		return nil, fmt.Errorf("grant expired")
+		return nil, fmt.Errorf("run past its overall deadline")
 	}
 	out := map[string]api.TokenEntry{}
-	for _, aud := range g.Audiences {
+	for _, aud := range a.Audiences {
 		if len(only) > 0 && !slices.Contains(only, aud) {
+			continue
+		}
+		if _, known := audienceScopes[aud]; !known { // e.g. repo-mirror in plans of in-flight jobs (SIMPLIFY-D40)
 			continue
 		}
 		scopes := []string{}
@@ -41,15 +45,21 @@ func signSet(s *jose.Signer, issuer, grant string, g *api.RunGrantClaims, steeri
 			if sc == "inbox:read" && !steeringLive {
 				continue
 			}
-			if slices.Contains(g.Scopes, sc) {
+			if slices.Contains(a.Scopes, sc) {
 				scopes = append(scopes, sc)
 			}
 		}
-		budget := g.BudgetUSD
 		c := api.RunTokenClaims{
-			Iss: issuer, Sub: "run:" + g.RunID, Aud: aud, Exp: exp, Iat: now.Unix(), Jti: ids.ULID("rtk"),
-			TenantID: g.TenantID, JobID: g.JobID, RunID: g.RunID, Role: g.Role, RepoIDs: g.RepoIDs,
-			Scopes: scopes, BudgetUSD: &budget, ActingFor: g.ActingFor, Grant: grant, GrantJti: g.Jti,
+			Iss: issuer, Sub: "run:" + a.RunID, Aud: aud, Exp: exp, Iat: now.Unix(), Jti: ids.ULID("rtk"),
+			TenantID: a.TenantID, JobID: a.JobID, RunID: a.RunID, Role: a.Role, RepoIDs: a.RepoIDs,
+			Scopes: scopes, ActingFor: a.ActingFor,
+		}
+		if a.BudgetUSD > 0 {
+			budget := a.BudgetUSD
+			c.BudgetUSD = &budget
+		}
+		if err := authz.Within(&c, a); err != nil { // defence in depth: never sign outside the admitted run
+			return nil, err
 		}
 		tok, err := s.Sign(api.TokenTyp, c)
 		if err != nil {

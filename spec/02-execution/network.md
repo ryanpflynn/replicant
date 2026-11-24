@@ -202,6 +202,19 @@ true`) and the `network_profiles` policy (a new version), and needs no code chan
 | `ndots` | Pod `dnsConfig ndots: 1` reduces search-path queries |
 | Availability | the in-agent DNS proxy restarts with the Cilium agent; Cilium's standalone (HA) DNS proxy is an "alpha feature" [verified: https://docs.cilium.io/en/stable/security/dns/, 2026-10-24], so v1 accepts brief DNS failures during agent restarts (sandboxes retry; Cilium agent upgrades drain sandbox nodes first) |
 
+### 4.1 Local stand-in (runner-local, SIMPLIFY-D30)
+
+The local stack emulates the DNS and FQDN controls above without a DNS server or a forward proxy
+([ADR-11-007](../11-local-dev/adr/007-sandbox-network-local.md)):
+
+| Prod control | Local equivalent |
+|---|---|
+| DNS proxy answers only the profile's names | runner-local writes static host entries into the pause container (the run's network namespace and `/etc/hosts` owner): every `*.sbx.local` name and every name on the TLS egress allowlist maps to `sbx-edge`. Its only nameserver is `sbx-edge`, which serves no DNS, so every other lookup fails at once |
+| `toFQDNs` on 443 | `sbx-edge` (nginx) `stream` block on :443 with `ssl_preread`: an exact SNI allowlist (`proxy.golang.org`, `sum.golang.org` in v0) passes the TLS session through to that name; any other SNI, or none, is closed. TLS is not terminated |
+| no default route | `replicant-sbx` is an `internal` network: direct-IP connections have no route; plain HTTP to an allowlisted name reaches sbx-edge's HTTP default server (444) |
+
+SEC-EGRESS-09..11 cover the three rows.
+
 ## 5. Network profiles (policy type `network_profiles`, owned by WS-02 with WS-09)
 
 Schema: [schemas/policy-network-profiles.schema.json](schemas/policy-network-profiles.schema.json);

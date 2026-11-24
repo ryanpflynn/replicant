@@ -1,6 +1,8 @@
 # sbx-edge: the local stand-in for the prod PrivateLink/NLB endpoints that sandbox node pools may reach (C-ARCH 1.5.2
-# §2 invariant 2). Template: ${REPLICANT_SBX_EDGE_*} are substituted at container start (nginx image envsubst). Upstreams are resolved per request through Docker DNS so a service that is not running
-# (for example alloy without the observability profile) yields 502 instead of preventing startup.
+# §2 invariant 2), and (SIMPLIFY-D31) the sandboxes' only way off the host: TLS passthrough by SNI allowlist.
+# Template: ${REPLICANT_SBX_EDGE_*} are substituted at container start (nginx image envsubst). Upstreams are resolved
+# per request through Docker DNS so a service that is not running (for example alloy without the observability
+# profile) yields 502 instead of preventing startup.
 worker_processes 1;
 events { worker_connections 1024; }
 http {
@@ -45,10 +47,6 @@ http {
     location /sandbox/v1/ { set $u ${REPLICANT_SBX_EDGE_K8S_SANDBOX_UPSTREAM}; proxy_pass $u; proxy_set_header Host $host; }
     location = /.well-known/jwks.json { set $u ${REPLICANT_SBX_EDGE_K8S_SANDBOX_UPSTREAM}; proxy_pass $u; }
     location / { return 404; } }
-  # repo-mirror: read-only smart HTTP (git-upload-pack only).
-  server { listen 80; server_name git.sbx.local;
-    location ~ ^/.+/(info/refs|git-upload-pack)$ { set $u http://repo-mirror:8080; proxy_pass $u; proxy_set_header Host $host; }
-    location / { return 403; } }
   # S3 (the prod path is a VPC gateway endpoint). Host is preserved so SigV4 signatures validate.
   server { listen 80; server_name s3.sbx.local;
     location / {
@@ -63,4 +61,30 @@ http {
   server { listen 80; server_name otlp.sbx.local;
     location /v1/ { set $u http://alloy:4318; proxy_pass $u; } }
   server { listen 80 default_server; return 444; }
+}
+
+# Sandbox egress (SIMPLIFY-D31; replaces the squid egress proxy and the sbx-dns resolver). runner-local maps each
+# allowlisted name to this container in the sandbox's /etc/hosts (RUNNER_SANDBOX_EGRESS_HOSTS, same list), so a
+# client connects to :443 here as if to the real host. nginx reads the SNI without terminating TLS and passes the
+# connection to that name on :443, resolved here; any other SNI (or none) is closed. Plain HTTP to these names
+# lands on the http default_server (444). Nothing else leaves: replicant-sbx is internal and sandboxes resolve no
+# other name.
+stream {
+  resolver ${REPLICANT_SBX_EDGE_RESOLVER} valid=30s ipv6=off;
+  log_format egress '$remote_addr sni="$ssl_preread_server_name" upstream=$upstream_addr $status $bytes_sent $bytes_received $session_time';
+  access_log /dev/stdout egress;
+  # The allowlist: exact SNI -> upstream. Default: a closed local port, so the session ends without a byte sent.
+  map $ssl_preread_server_name $replicant_egress_upstream {
+    default          127.0.0.1:1;
+    proxy.golang.org proxy.golang.org:443;
+    sum.golang.org   sum.golang.org:443;
+  }
+  server {
+    listen 443;
+    ssl_preread on;
+    preread_timeout 10s;
+    proxy_connect_timeout 10s;
+    proxy_timeout 900s;
+    proxy_pass $replicant_egress_upstream;
+  }
 }

@@ -1,5 +1,6 @@
-// Package authz implements run-grant verification (Runner admission, RS-10) and the C-RUNNER 3.0.0
-// run-token verifier obligations 1–5 shared by the sandbox listener and repo-mirror.
+// Package authz implements the C-RUNNER 4.0.0 run-token verifier obligations shared by the sandbox listener and
+// the other run-token verifiers. There is no run grant any more (SIMPLIFY-D50): the Runner is the only issuer, it
+// checks each run against core's intake record before it mints, and it is the only revocation source.
 package authz
 
 import (
@@ -14,59 +15,12 @@ import (
 	"example.com/replicant/internal/runner/revoke"
 )
 
-// GrantVerifier verifies core-signed run grants.
-type GrantVerifier struct {
-	Issuer  string
-	JWKS    *jose.RemoteJWKS
-	Revoked revoke.Checker
-	Now     func() time.Time
-	Skew    time.Duration
-}
-
-func (g *GrantVerifier) now() time.Time {
-	if g.Now != nil {
-		return g.Now()
-	}
-	return time.Now()
-}
-
-// Verify checks signature, typ, iss, exp and revocation and returns the claims.
-func (g *GrantVerifier) Verify(ctx context.Context, grant string) (*api.RunGrantClaims, error) {
-	p, err := g.JWKS.VerifyToken(ctx, grant)
-	if err != nil {
-		return nil, fmt.Errorf("grant signature: %w", err)
-	}
-	if p.Header.Typ != api.GrantTyp {
-		return nil, fmt.Errorf("grant typ %q", p.Header.Typ)
-	}
-	var c api.RunGrantClaims
-	if err := json.Unmarshal(p.Payload, &c); err != nil {
-		return nil, fmt.Errorf("grant claims: %w", err)
-	}
-	if c.Typ != api.GrantTyp {
-		return nil, fmt.Errorf("grant claim typ %q", c.Typ)
-	}
-	if g.Issuer != "" && c.Iss != g.Issuer {
-		return nil, fmt.Errorf("grant iss %q", c.Iss)
-	}
-	if g.now().Unix() > c.Exp+int64(g.Skew.Seconds()) {
-		return nil, fmt.Errorf("grant expired")
-	}
-	if g.Revoked != nil {
-		if ok, why := g.Revoked.Revoked(c.JobID, c.RunID); ok {
-			return nil, fmt.Errorf("grant revoked (%s)", why)
-		}
-	}
-	return &c, nil
-}
-
 // TokenVerifier verifies per-audience run tokens.
 type TokenVerifier struct {
 	Audience string // the verifier's own name
 	Issuers  []string
-	JWKS     *jose.RemoteJWKS
-	Grants   *GrantVerifier
-	Revoked  revoke.Checker // core list and exec feed
+	JWKS     *jose.RemoteJWKS // the Runner's JWKS
+	Revoked  revoke.Checker   // the Runner's revocation feed (it carries core's job revocations)
 	Now      func() time.Time
 }
 
@@ -80,10 +34,10 @@ func (v *TokenVerifier) now() time.Time {
 // Verified is the result of a successful verification.
 type Verified struct {
 	Claims api.RunTokenClaims
-	Grant  api.RunGrantClaims
 }
 
-// Verify applies obligations 1–3 and 5; obligation 4 (authorization) is the caller's.
+// Verify applies obligations 1 (signature, aud, iss, exp, sub) and 3 (revocation); obligation 2
+// (authorization) is the caller's.
 func (v *TokenVerifier) Verify(ctx context.Context, token string) (*Verified, error) {
 	p, err := v.JWKS.VerifyToken(ctx, token)
 	if err != nil {
@@ -103,52 +57,47 @@ func (v *TokenVerifier) Verify(ctx context.Context, token string) (*Verified, er
 	if v.now().Unix() >= c.Exp {
 		return nil, fmt.Errorf("token expired")
 	}
+	if c.RunID == "" || c.JobID == "" || c.TenantID == "" || c.ActingFor == "" {
+		return nil, fmt.Errorf("token identity incomplete")
+	}
 	if c.Sub != "run:"+c.RunID {
 		return nil, fmt.Errorf("sub mismatch")
-	}
-	g, err := v.Grants.Verify(ctx, c.Grant)
-	if err != nil {
-		return nil, err
-	}
-	if err := Subset(&c, g); err != nil {
-		return nil, err
 	}
 	if v.Revoked != nil {
 		if ok, why := v.Revoked.Revoked(c.JobID, c.RunID); ok {
 			return nil, fmt.Errorf("revoked (%s)", why)
 		}
 	}
-	return &Verified{Claims: c, Grant: *g}, nil
+	return &Verified{Claims: c}, nil
 }
 
-// Subset checks the token-within-grant relation (CCR-09-02).
-func Subset(c *api.RunTokenClaims, g *api.RunGrantClaims) error {
+// Within checks that a token's claims stay inside the run's admitted authorization (used by the Runner before
+// it signs; verifiers trust the Runner's signature instead).
+func Within(c *api.RunTokenClaims, a *api.RunAuthz) error {
 	switch {
-	case c.GrantJti != g.Jti:
-		return fmt.Errorf("grant_jti mismatch")
-	case c.RunID != g.RunID || c.JobID != g.JobID || c.TenantID != g.TenantID:
-		return fmt.Errorf("token identity outside grant")
-	case c.Role != g.Role:
-		return fmt.Errorf("role outside grant")
-	case !slices.Contains(g.Audiences, c.Aud):
-		return fmt.Errorf("aud outside grant")
-	case c.Exp > g.Exp:
-		return fmt.Errorf("exp beyond grant")
-	case c.ActingFor != g.ActingFor:
+	case c.RunID != a.RunID || c.JobID != a.JobID || c.TenantID != a.TenantID:
+		return fmt.Errorf("token identity outside the run")
+	case c.Role != a.Role:
+		return fmt.Errorf("role outside the run")
+	case !slices.Contains(a.Audiences, c.Aud):
+		return fmt.Errorf("aud outside the run scope")
+	case c.Exp > a.Exp:
+		return fmt.Errorf("exp beyond the run")
+	case c.ActingFor != a.ActingFor:
 		return fmt.Errorf("acting_for mismatch")
 	}
 	for _, s := range c.Scopes {
-		if !slices.Contains(g.Scopes, s) {
-			return fmt.Errorf("scope %s outside grant", s)
+		if !slices.Contains(a.Scopes, s) {
+			return fmt.Errorf("scope %s outside the run scope", s)
 		}
 	}
 	for _, r := range c.RepoIDs {
-		if !slices.Contains(g.RepoIDs, r) {
-			return fmt.Errorf("repo %s outside grant", r)
+		if !slices.Contains(a.RepoIDs, r) {
+			return fmt.Errorf("repo %s outside the run scope", r)
 		}
 	}
-	if c.BudgetUSD != nil && *c.BudgetUSD > g.BudgetUSD+1e-9 {
-		return fmt.Errorf("budget outside grant")
+	if c.BudgetUSD != nil && *c.BudgetUSD > a.BudgetUSD+1e-9 {
+		return fmt.Errorf("budget outside the run")
 	}
 	return nil
 }

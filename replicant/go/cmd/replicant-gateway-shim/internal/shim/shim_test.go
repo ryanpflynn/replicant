@@ -38,7 +38,7 @@ func scriptHarness(t *testing.T) (*harness, minted) {
 	return h, m
 }
 
-// GW-01: non-streaming request with a valid token, grant and policy; usage event with attribution.
+// GW-01: non-streaming request with a valid token and policy; usage event with attribution.
 func TestGW01NonStreamingAndUsageEvent(t *testing.T) {
 	h, m := scriptHarness(t)
 	resp := h.do("POST", "/anthropic/v1/messages?beta=true", m.token, msgBody("anthropic/claude-sonnet-5-5", false, 1, true),
@@ -72,7 +72,7 @@ func TestGW01NonStreamingAndUsageEvent(t *testing.T) {
 	e := ev[0]
 	if e.RunID != m.runID || e.JobID != m.jobID || e.TenantID != "acme-payments" || e.ActingFor == "" || e.Cost.MicrosUSD != 4500 ||
 		e.Usage.InputTokens != 1000 || e.Purpose != "agent" || e.UsageSource != "parsed" || e.TraceID != "0af7651916cd43dd8448eb211c80319c" ||
-		e.Caller.Kind != "run" || !strings.HasPrefix(e.Caller.GrantJti, "rgr_") || e.EvaluationMode != "none" {
+		e.Caller.Kind != "run" || !strings.HasPrefix(e.Caller.TokenJti, "rtk_") || e.EvaluationMode != "none" {
 		t.Fatalf("event %+v", e)
 	}
 }
@@ -126,14 +126,14 @@ func TestGW02StreamingFaultAndFinish(t *testing.T) {
 	}
 }
 
-// GW-03: a token for another audience is rejected; GW-04: grant signed by an unknown key, or token outside grant.
+// GW-03: a token for another audience is rejected; GW-04: a token not signed by the runner's JWKS key (SIMPLIFY-D50:
+// the runner JWKS is the only trust anchor; there is no grant).
 func TestGW03GW04TokenChecks(t *testing.T) {
 	h := newHarness(t, "script", "", nil)
 	for name, o := range map[string]runOpts{
 		"aud context-mcp":    {aud: "context-mcp"},
 		"aud array without":  {aud: []string{"memory-mcp"}},
-		"unknown grant key":  {grantKey: mustKey()},
-		"budget above grant": {budget: 20, grantBudget: 10},
+		"not the runner key": {key: mustKey()},
 		"expired":            {exp: -2 * time.Minute},
 	} {
 		m := h.mint(o)
@@ -162,34 +162,31 @@ func mustKey() *ecdsa.PrivateKey {
 	return k
 }
 
-// GW-05: a job on /grants/revoked is rejected after one poll; GW-14: a run on the exec revocation feed.
+// GW-05: a job core revoked reaches the shim through the runner's feed (reason job_revoked) and closes every run of
+// the job; GW-14: a run on the runner's revocation feed. The runner feed is the shim's only revocation source
+// (SIMPLIFY-D50).
 func TestGW05GW14RevocationFeeds(t *testing.T) {
 	h, m := scriptHarness(t)
 	m2 := h.mint(runOpts{})
 	mustStatus(t, h.policy(m2, &Stub{Root: "scripts", Set: "set1", Key: "implementer"}), 200)
-	grants := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, `{"generated_at":"2026-10-24T00:00:00Z","job_ids":[{"id":"`+m.jobID+`","revoked_at":"2026-10-24T00:00:00Z"}],"run_ids":[]}`)
-	}))
-	defer grants.Close()
+	m3 := h.mint(runOpts{jobID: m.jobID}) // another run of the revoked job, not itself on the feed
+	mustStatus(t, h.policy(m3, &Stub{Root: "scripts", Set: "set1", Key: "implementer"}), 200)
 	exec := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer feedtok" {
 			w.WriteHeader(401)
 			return
 		}
-		_, _ = io.WriteString(w, `{"revoked":[{"run_id":"`+m2.runID+`","job_id":"`+m2.jobID+`","at":"2026-10-24T00:00:00Z","reason":"Succeeded"}],"next_cursor":"c1"}`)
+		_, _ = io.WriteString(w, `{"revoked":[{"run_id":"`+m2.runID+`","job_id":"`+m2.jobID+`","at":"2026-10-24T00:00:00Z","reason":"Succeeded"},`+
+			`{"run_id":"`+m.runID+`","job_id":"`+m.jobID+`","at":"2026-10-24T00:00:00Z","reason":"job_revoked"}],"next_cursor":"c1"}`)
 	}))
 	defer exec.Close()
 	writeFile(t, h.dir+"/feedtok", "feedtok\n")
-	h.cfg.GrantRevocationURL = grants.URL
 	h.cfg.ExecRevocationURLs = []string{exec.URL, "http://127.0.0.1:1/v1/revocations"} // second feed unreachable
 	h.cfg.ExecRevocationTokenFile = h.dir + "/feedtok"
-	if err := h.srv.Feeds.PollGrantsOnce(t.Context()); err != nil {
-		t.Fatal(err)
-	}
 	if err := h.srv.Feeds.PollExecOnce(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	for _, mm := range []minted{m, m2} {
+	for _, mm := range []minted{m, m2, m3} {
 		out := mustStatus(t, h.do("POST", "/anthropic/v1/messages", mm.token, msgBody("anthropic/claude-sonnet-5-5", false, 1, true), nil), 401)
 		if out["replicant_code"] != "run_closed" {
 			t.Fatal(out)

@@ -9,8 +9,9 @@ import (
 	"github.com/gowebpki/jcs"
 )
 
-// PerAttemptFields are the RunSpec fields excluded from spec_digest (C-RUNNER 3.0.0, exhaustive).
-var PerAttemptFields = []string{"run_grant", "trace_context"}
+// PerAttemptFields are the RunSpec fields excluded from spec_digest (C-RUNNER 4.0.0, exhaustive). run_scope
+// replaced run_grant (SIMPLIFY-D50), so a run's digest is the same before and after the change.
+var PerAttemptFields = []string{"run_scope", "trace_context"}
 
 // Canonical returns the JCS form of a JSON document.
 func Canonical(raw []byte) ([]byte, error) { return jcs.Transform(raw) }

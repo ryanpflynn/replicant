@@ -21,9 +21,9 @@ import (
 
 // devtool is a local-test helper, never used by the running service:
 //
-//	devtool mint     --dir D [--tenant T --role R --budget USD --models a,b --issuer URL --grant-issuer ISS]
-//	                 writes D/runner.key.pem, D/grant.key.pem (reused when present), D/runner-jwks.json,
-//	                 D/grant-jwks.json, D/run-token (0600, never printed) and D/run.json (ids only).
+//	devtool mint     --dir D [--tenant T --role R --budget USD --models a,b --issuer URL]
+//	                 writes D/runner.key.pem (reused when present), D/runner-jwks.json, D/run-token (0600, never
+//	                 printed) and D/run.json (ids only). There is no run grant (SIMPLIFY-D50).
 //	devtool register --dir D --url http://127.0.0.1:8420 --service-token-file F [--stub root/set/key]
 //	                 PUTs the run policy for D/run.json.
 func devtool(args []string) int {
@@ -61,7 +61,6 @@ type runInfo struct {
 	BudgetUSD       float64  `json:"budget_usd"`
 	Models          []string `json:"models"`
 	Issuer          string   `json:"issuer"`
-	GrantIssuer     string   `json:"grant_issuer"`
 }
 
 func devMint(args []string) int {
@@ -72,7 +71,6 @@ func devMint(args []string) int {
 	budget := fs.Float64("budget", 15, "budget_usd")
 	models := fs.String("models", "anthropic/claude-sonnet-5-5,anthropic/claude-opus-5-5,anthropic/claude-haiku-5-5", "policy models")
 	issuer := fs.String("issuer", "http://runner-local:8480", "run token iss")
-	grantIss := fs.String("grant-issuer", "replicant-local-core", "run grant iss")
 	ttl := fs.Duration("ttl", time.Hour, "token lifetime")
 	if err := fs.Parse(args); err != nil || *dir == "" {
 		fmt.Fprintln(os.Stderr, "mint: --dir is required")
@@ -87,38 +85,21 @@ func devMint(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	gk, err := loadOrCreateKey(filepath.Join(*dir, "grant.key.pem"))
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
 	writeJSON := func(name string, v any, mode os.FileMode) error {
 		b, _ := json.MarshalIndent(v, "", "  ")
 		return os.WriteFile(filepath.Join(*dir, name), b, mode)
 	}
 	_ = writeJSON("runner-jwks.json", jose.JWKS{Keys: []jose.JWK{jose.PublicJWK(&rk.PublicKey, "runner-dev-1")}}, 0o644)
-	_ = writeJSON("grant-jwks.json", jose.JWKS{Keys: []jose.JWK{jose.PublicJWK(&gk.PublicKey, "rg-dev-1")}}, 0o644)
 
 	now := time.Now()
 	ri := runInfo{TenantID: *tenant, JobID: ids.ULID("job"), RunID: ids.ULID("run"), Role: *role, ReleaseBundleID: ids.ULID("rb"),
-		BudgetUSD: *budget, Models: strings.Split(*models, ","), Issuer: *issuer, GrantIssuer: *grantIss}
-	grantJti := ids.ULID("rgr")
+		BudgetUSD: *budget, Models: strings.Split(*models, ","), Issuer: *issuer}
 	actingFor := ids.ULID("usr")
-	grant, err := (&jose.Signer{Key: gk, Kid: "rg-dev-1"}).Sign("replicant-run-grant+jwt", map[string]any{
-		"iss": ri.GrantIssuer, "typ": "replicant-run-grant+jwt", "jti": grantJti, "iat": now.Unix(), "exp": now.Add(*ttl + time.Hour).Unix(),
-		"tenant_id": ri.TenantID, "job_id": ri.JobID, "run_id": ri.RunID, "role": ri.Role, "repo_ids": []string{"repo-ledger-api"},
-		"audiences": []string{"ai-gateway", "runner-sandbox"}, "scopes": []string{"gateway:invoke", "inbox:read"},
-		"budget_usd": ri.BudgetUSD, "acting_for": actingFor, "spec_digest": "sha256:" + strings.Repeat("0", 64),
-	})
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
 	tok, err := (&jose.Signer{Key: rk, Kid: "runner-dev-1"}).Sign("JWT", map[string]any{
 		"iss": ri.Issuer, "sub": "run:" + ri.RunID, "aud": "ai-gateway", "exp": now.Add(*ttl).Unix(), "iat": now.Unix(),
 		"jti": ids.ULID("rtk"), "tenant_id": ri.TenantID, "job_id": ri.JobID, "run_id": ri.RunID, "role": ri.Role,
 		"release_bundle_id": ri.ReleaseBundleID, "repo_ids": []string{"repo-ledger-api"}, "scopes": []string{"gateway:invoke"},
-		"budget_usd": ri.BudgetUSD, "acting_for": actingFor, "grant": grant, "grant_jti": grantJti,
+		"budget_usd": ri.BudgetUSD, "acting_for": actingFor,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

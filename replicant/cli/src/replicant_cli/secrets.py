@@ -27,10 +27,12 @@ SIMPLE_TOKENS = (
     "pg_replicant_superuser", "s3_admin_secret", "s3_runner_secret", "oidc_replicant_web", "scim_token",
     "dev_seed_token", "gitea_admin_password", "gitea_bot_password", "gitea_webhook_secret", "slack_signing_secret",
     "usage_ingest_token", "runner_revocations_token", "runner_worker_token", "runner_eval_token",
-    "broker_mirror_token", "gateway_service_token", "control_plane_shim_token",
+    "gateway_service_token", "control_plane_shim_token",
+    "runner_cp_token",  # runner-local -> core run-scope admission and job revocations (SIMPLIFY-D50)
     # v0 (CONTROL-02)
-    "github_integration_cp_token", "broker_publisher_token", "broker_github_integration_token",
-    "replicant_worker_cp_token", "notify_delivery_token", "slack_integration_cp_token",
+    # (github-integration, slack-integration and the notify delivery path run inside core since SIMPLIFY Phase 2:
+    # their caller tokens are gone)
+    "broker_publisher_token", "broker_github_integration_token", "replicant_worker_cp_token",
     # v0 MEM: replicant-worker -> github-token-broker (read-only PR inspection, MEM-D20)
     "broker_worker_token",
     # v0 MEM: control-plane-api -> memory-service (admin proxy; also the HMAC key of the signed caller principal)
@@ -65,14 +67,6 @@ def _ec_pem() -> str:
                            serialization.NoEncryption()).decode()
 
 
-def _jwk_from_pem(pem: str, kid: str) -> dict:
-    from cryptography.hazmat.primitives import serialization
-
-    pub = serialization.load_pem_private_key(pem.encode(), None).public_key().public_numbers()
-    b64 = lambda i: base64.urlsafe_b64encode(i.to_bytes(32, "big")).rstrip(b"=").decode()  # noqa: E731
-    return {"kty": "EC", "crv": "P-256", "x": b64(pub.x), "y": b64(pub.y), "kid": kid, "alg": "ES256", "use": "sig"}
-
-
 def _yaml_map(m: dict[str, str]) -> str:
     return "".join(f'"{k}": "{v}"\n' for k, v in m.items())
 
@@ -103,21 +97,19 @@ def ensure(p: Paths) -> list[str]:
         put("langfuse_secret_key", "sk-lf-" + token(24))
     if not have("temporal_codec_key"):
         put("temporal_codec_key", _rnd.token_hex(32))
-    for k in ("run_token_signing_key", "run_grant_signing_key"):
-        if not have(k):
-            put(k, _ec_pem())
+    if not have("run_token_signing_key"):  # no run grants since SIMPLIFY-D50: only the runner signs
+        put("run_token_signing_key", _ec_pem())
     s = p.secret
     maps = {
         "runner_worker_tokens": {s("runner_worker_token"): SUBJECT_REPLICANT_WORKER, s("runner_eval_token"): SUBJECT_EVAL_WORKER},
         "gateway_service_tokens": {s("gateway_service_token"): "svc_replicant-services"},
         "runner_revocations_readers": {s("runner_revocations_token"): "revocation-readers"},
         "control_plane_internal_callers": {s("control_plane_shim_token"): "svc_replicant-gateway-shim",
-                                           s("github_integration_cp_token"): "svc_github-integration",
                                            s("replicant_worker_cp_token"): "svc_replicant-worker",
-                                           s("slack_integration_cp_token"): "svc_slack-integration"},
+                                           s("runner_cp_token"): "svc_runner-local"},
         "memory_internal_callers": {s("memory_cpa_token"): "svc_control-plane-api",
                                     s("replicant_worker_cp_token"): "svc_replicant-worker"},
-        "broker_caller_tokens": {s("broker_mirror_token"): "repo-mirror", s("broker_publisher_token"): "publisher-worker",
+        "broker_caller_tokens": {s("broker_publisher_token"): "publisher-worker",
                                  s("broker_github_integration_token"): "github-integration",
                                  s("broker_worker_token"): "replicant-worker"},
     }
@@ -134,7 +126,7 @@ def ensure(p: Paths) -> list[str]:
         if not have(name) or (p.secrets / name).read_text() != want:
             put(name, want)
 
-    # generated/: S3 identities (rendered from config/s3/*.tmpl), run-grant JWKS, github-app.env
+    # generated/: S3 identities (rendered from config/s3/*.tmpl), github-app.env
     tmpl_vars = {
         "S3_ADMIN_SECRET": s("s3_admin_secret"), "S3_RUNNER_SECRET": s("s3_runner_secret"),
         "S3_SERVICES_SECRET": s("s3_services_secret"), "S3_GATEWAY_SHIM_SECRET": s("s3_gateway_shim_secret"),
@@ -153,11 +145,6 @@ def ensure(p: Paths) -> list[str]:
         if not dst.is_file() or dst.read_text() != out:
             _write(dst, out, 0o644)
             created.append(f"generated/{t}")
-    jwks = json.dumps({"keys": [_jwk_from_pem(s("run_grant_signing_key"), "rg-local-1")]}, indent=2) + "\n"
-    dst = p.generated / "run-grant-jwks.json"
-    if not dst.is_file() or dst.read_text() != jwks:
-        _write(dst, jwks, 0o644)
-        created.append("generated/run-grant-jwks.json")
     for f, content in (("github-app.env", "# dev GitHub App (M3); empty until `replicant dev github-app create`\n"),):
         if not (p.dev_home / f).is_file():
             _write(p.dev_home / f, content, 0o644)
@@ -256,7 +243,7 @@ def _ensure_env(p: Paths, created: list[str]) -> None:
         f"pk-lf-replicant-local:{defaults['REPLICANT_LANGFUSE_SECRET_KEY']}".encode()).decode()
     merged = {**defaults, **existing}
     if merged != existing:
-        body = "# Generated by `replicant dev up` (never committed). Edit values here, not in compose.yaml.\n"
+        body = "# Generated by `replicant dev up` (never committed). Edit values here, not in compose.v0.yaml.\n"
         body += "".join(f"{k}={v}\n" for k, v in merged.items())
         _write(p.env_file, body)
         created.append("dev/compose/.env")

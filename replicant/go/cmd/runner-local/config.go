@@ -29,21 +29,27 @@ type Config struct {
 	StateHostDir        string // when runner-local runs on the host: bind-mount source for state subpaths
 
 	SandboxNetwork string
-	SandboxDNS     []string
-	SandboxEnv     map[string]string
-	Runtime        string
-	MaxConcurrent  int
-	MaxCPUs        float64
-	MaxMemoryBytes int64
+	// sbx-edge on the sandbox network (SIMPLIFY-D30): the pause container maps every name in SandboxEdgeHosts
+	// and SandboxEgressHosts to SandboxEdgeIP in /etc/hosts and gets sbx-edge (no DNS listener) as its only
+	// nameserver, so no other name resolves. Empty: the engine's default resolver (direct egress, M1).
+	SandboxEdgeIP      string
+	SandboxEdgeHosts   []string
+	SandboxEgressHosts []string
+	SandboxEnv         map[string]string
+	Runtime            string
+	MaxConcurrent      int
+	MaxCPUs            float64
+	MaxMemoryBytes     int64
 
 	TemporalAddress   string
 	TemporalNamespace string
 	CodecKeyFile      string
 
-	GrantsIssuer        string
-	GrantsJWKSURL       string
-	GrantsRevocationURL string
-	GrantsPoll          time.Duration
+	// Core (SIMPLIFY-D50): run-scope check at admission and core's job revocation list, with the runner's
+	// caller token for core (service:runner-local).
+	CoreURL       string
+	CoreTokenFile string
+	CorePoll      time.Duration
 
 	RevocationsBucket      string
 	RevocationsPrefix      string
@@ -79,7 +85,6 @@ type Config struct {
 	EPAIGateway     string
 	EPMemoryMCP     string
 	EPContextMCP    string
-	EPRepoMirror    string
 	EPOTLP          string
 
 	ReadyRequireTemporal bool
@@ -104,6 +109,26 @@ func expand(s string) string {
 		}
 		return g[3]
 	})
+}
+
+// defaultEdgeHosts are the names sbx-edge serves over HTTP (dev/compose/config/sbx-edge/nginx.conf.template).
+const defaultEdgeHosts = "gateway.sbx.local,memory-mcp.sbx.local,context-mcp.sbx.local,runner-sandbox.sbx.local," +
+	"runner-sandbox-k8s.sbx.local,s3.sbx.local,otlp.sbx.local" // no git.sbx.local: the repo is a bundle input (SIMPLIFY-D40)
+
+// defaultEgressHosts is sbx-edge's TLS SNI allowlist (the `stream` map $replicant_egress_upstream): the only
+// external names a sandbox resolves, each to sbx-edge, which passes port 443 through to the real host.
+const defaultEgressHosts = "proxy.golang.org,sum.golang.org"
+
+// SandboxHosts renders the pause container's ExtraHosts ("name:ip"); nil without an edge IP.
+func (c *Config) SandboxHosts() []string {
+	if c.SandboxEdgeIP == "" {
+		return nil
+	}
+	var out []string
+	for _, n := range append(append([]string{}, c.SandboxEdgeHosts...), c.SandboxEgressHosts...) {
+		out = append(out, n+":"+c.SandboxEdgeIP)
+	}
+	return out
 }
 
 func loadConfig() (*Config, error) {
@@ -162,7 +187,9 @@ func loadConfig() (*Config, error) {
 		StateVolume:            or("RUNNER_STATE_VOLUME", "", ""),
 		StateHostDir:           or("RUNNER_STATE_HOST_DIR", "", ""),
 		SandboxNetwork:         or("RUNNER_SANDBOX_NETWORK", "sandbox.network", "replicant-sbx"),
-		SandboxDNS:             httpx.List(or("RUNNER_SANDBOX_DNS", "", "")),
+		SandboxEdgeIP:          or("RUNNER_SANDBOX_EDGE_IP", "sandbox.edge_ip", ""),
+		SandboxEdgeHosts:       httpx.List(or("RUNNER_SANDBOX_EDGE_HOSTS", "", defaultEdgeHosts)),
+		SandboxEgressHosts:     httpx.List(or("RUNNER_SANDBOX_EGRESS_HOSTS", "", defaultEgressHosts)),
 		Runtime:                or("RUNNER_LOCAL_RUNTIME", "sandbox.runtime.default", "runc"),
 		MaxConcurrent:          atoiDef(or("RUNNER_MAX_CONCURRENT_RUNS", "max_concurrent_runs", "2"), 2),
 		MaxCPUs:                atofDef(or("RUNNER_MAX_SANDBOX_CPUS", "", "4"), 4),
@@ -170,10 +197,9 @@ func loadConfig() (*Config, error) {
 		TemporalAddress:        or("RUNNER_TEMPORAL_ADDRESS", "notifier.temporal_address", ""),
 		TemporalNamespace:      or("RUNNER_TEMPORAL_NAMESPACE", "notifier.namespace", "replicant-local"),
 		CodecKeyFile:           or("RUNNER_TEMPORAL_CODEC_KEY_FILE", "", "/run/secrets/temporal_codec_key"),
-		GrantsIssuer:           or("RUNNER_GRANTS_ISSUER", "grants.issuer", "replicant-local-core"),
-		GrantsJWKSURL:          or("RUNNER_GRANTS_JWKS_URL", "grants.jwks_url", "http://grants.replicant.localhost:8403/.well-known/jwks.json"),
-		GrantsRevocationURL:    or("RUNNER_GRANTS_REVOCATION_URL", "grants.revocation_url", "http://grants.replicant.localhost:8403/grants/revoked"),
-		GrantsPoll:             time.Duration(atoiDef(or("RUNNER_GRANTS_REVOCATION_POLL_SECONDS", "grants.revocation_poll_seconds", "60"), 60)) * time.Second,
+		CoreURL:                strings.TrimRight(or("RUNNER_CORE_URL", "core.url", "http://control-plane-api:8401"), "/"),
+		CoreTokenFile:          or("RUNNER_CORE_TOKEN_FILE", "core.token_file", "/run/secrets/runner_cp_token"),
+		CorePoll:               time.Duration(atoiDef(or("RUNNER_CORE_REVOCATION_POLL_SECONDS", "core.revocation_poll_seconds", "60"), 60)) * time.Second,
 		RevocationsBucket:      or("RUNNER_REVOCATIONS_BUCKET", "revocations.bucket", "local-replicant-local-ops"),
 		RevocationsPrefix:      or("RUNNER_REVOCATIONS_PREFIX", "revocations.prefix", "exec-revocations/local/"),
 		RevocationsReadersFile: or("RUNNER_REVOCATIONS_READERS_FILE", "revocations.readers_file", "/run/secrets/runner_revocations_readers"),
@@ -201,12 +227,12 @@ func loadConfig() (*Config, error) {
 		EPAIGateway:            or("RUNNER_SANDBOX_GATEWAY_URL", "", "http://gateway-shim:8420"),
 		EPMemoryMCP:            or("RUNNER_SANDBOX_MEMORY_MCP_URL", "", ""),  // M1: no memory-service
 		EPContextMCP:           or("RUNNER_SANDBOX_CONTEXT_MCP_URL", "", ""), // M1: no context-mcp
-		EPRepoMirror:           or("RUNNER_SANDBOX_REPO_MIRROR_URL", "", "http://repo-mirror:8080"),
 		EPOTLP:                 or("RUNNER_SANDBOX_OTLP_URL", "", ""),
 		ReadyRequireTemporal:   httpx.EnvBool("RUNNER_READY_REQUIRE_TEMPORAL", true),
 	}
-	c.PauseImage = or("RUNNER_PAUSE_IMAGE", "sandbox.pod_group.pause_image", c.ImageRegistry+"/pause:3.10")
 	c.SidecarsImage = or("RUNNER_SIDECARS_IMAGE", "", c.ImageRegistry+"/sandbox-sidecars:"+c.ImageTag)
+	// The pod-group pause holder is `sandbox-sidecars pause` unless a dedicated image is configured.
+	c.PauseImage = or("RUNNER_PAUSE_IMAGE", "sandbox.pod_group.pause_image", c.SidecarsImage)
 	if c.S3PublicEndpoint == "" {
 		c.S3PublicEndpoint = c.S3Endpoint
 	}
@@ -225,9 +251,10 @@ func loadConfig() (*Config, error) {
 	}
 	// M1: no egress proxy or package mirrors (PLAN "sandbox egress is allowed directly"); allow switching the
 	// file's proxy/mirror env off without editing the WS-11 file.
-	// Default: direct egress whenever sandboxes are not on the internal replicant-sbx network (v0: replicant-core,
-	// where egress.sbx.local and the mirrors do not exist).
+	// Default: direct egress whenever sandboxes are not on the internal replicant-sbx network (M1: replicant-core,
+	// where sbx-edge and the mirrors do not exist); the sandbox then also keeps the engine's resolver (no edge hosts).
 	if httpx.EnvBool("RUNNER_SANDBOX_DIRECT_EGRESS", c.SandboxNetwork != "replicant-sbx") {
+		c.SandboxEdgeIP = ""
 		for _, k := range []string{"HTTPS_PROXY", "HTTP_PROXY", "NPM_CONFIG_REGISTRY", "GOPROXY", "PIP_INDEX_URL", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_PROTOCOL"} {
 			delete(c.SandboxEnv, k)
 		}

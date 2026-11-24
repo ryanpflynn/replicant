@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -38,15 +39,14 @@ func isRepoConfigPath(rel string) bool {
 	return false
 }
 
-// restoreBaseConfig makes the checkout's configuration paths exactly what they are at sha (fetched when missing):
-// files changed on the branch are restored, files added on the branch are removed, and the result is read-only.
-// This covers PR-repair jobs whose branch carries human commits (§8c "Config comes from the base branch only").
+// restoreBaseConfig makes the checkout's configuration paths exactly what they are at sha (a commit of the repo
+// bundle, which carries it as refs/replicant/config): files changed on the branch are restored, files added on the
+// branch are removed, and the result is read-only. This covers PR-repair jobs whose branch carries human commits
+// (§8c "Config comes from the base branch only").
 func restoreBaseConfig(ctx context.Context, repo, sha string) error {
 	env := gitEnv()
 	if _, err := git(ctx, repo, env, "cat-file", "-e", sha+"^{commit}"); err != nil {
-		if _, err := git(ctx, repo, env, "fetch", "--no-tags", "--filter=blob:none", "--depth", "1", "origin", sha); err != nil {
-			return err
-		}
+		return fmt.Errorf("commit %s is not in the repo bundle: %w", sha, err)
 	}
 	baseOut, err := git(ctx, repo, env, "ls-tree", "-r", "-z", "--name-only", sha)
 	if err != nil {

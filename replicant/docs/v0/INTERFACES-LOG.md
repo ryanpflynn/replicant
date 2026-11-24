@@ -1037,3 +1037,85 @@ control-plane-api.openapi.yaml. Deviations: DEVIATIONS CONFIG-D*.
 - **Worker LLM helper** `replicant_worker/activities/llm.py complete(tenant_id, job_id, script_key, system, user, model,
   max_tokens) -> text` (header `X-Replicant-Script-Key`; scripted fixtures `tests/fixtures/gateway-scripts/
   walkthrough-ledger-api/<script_key>.yaml`).
+
+## SIMPLIFY-P2 (simplification Phase 2 -> CONTROL, WORKER, PLATFORM, 2026-11-23): one `core` process
+
+- **Configuration of `control-plane-api serve`** (DEVIATIONS SIMPLIFY-D10..D13):
+  - `REPLICANT_GRANTS_PORT` (8403) sets the port of the run-grant listener. The listener runs when
+    `REPLICANT_RUN_GRANT_JWKS_FILE` is set.
+  - `REPLICANT_GITHUB_INTEGRATION_DB_DSN` / `_DB_PASSWORD_FILE`, `REPLICANT_SLACK_INTEGRATION_DB_DSN` /
+    `_DB_PASSWORD_FILE` and `REPLICANT_PROJECTOR_DB_DSN` / `_DB_PASSWORD_FILE` are each module's own login.
+  - `REPLICANT_SLACK_ENABLED` (default `false`) turns on Slack.
+  - `REPLICANT_<GITHUB_INTEGRATION|PROJECTOR|GRANTS>_ENABLED` overrides whether a module runs.
+  - The modules' other variables (`REPLICANT_GITEA_*`, `REPLICANT_TOKEN_BROKER_*`, `SLACK_*`,
+    `REPLICANT_WORKER_SET_CURRENT_ON_START`) keep their names and are read from core's environment.
+- **Routes on the API listener (8401):** `POST /webhooks/gitea`, `POST /github/webhook` and
+  `POST /v1/admin/scm-installations` from github-integration, and `POST /slack/events|interactions|commands` from
+  slack-integration when Slack is enabled. The paths and authentication are unchanged; only the host and port change.
+- **In-process caller identity:** the ASGI scope key `replicant.in_process_caller` carries the caller's service
+  principal on calls between the modules, which replaces the caller tokens there. Secrets no longer used by core:
+  `github_integration_cp_token`, `slack_integration_cp_token` and `notify_delivery_token`.
+
+## SIMPLIFY-P5 (simplification Phase 5 -> WORKER, RUNNER, PLATFORM, 2026-11-23): repo bundle replaces repo-mirror
+
+- **Inputs manifest** (replicant.run-inputs/v1, all copies of run-inputs.schema.json): new place `repo_bundle`
+  (at most one per manifest): a `git bundle` with `refs/replicant/base` = the plan's `workspace.base_sha` and
+  `refs/replicant/config` = `config_base_sha` when present. Staged by `context.stage_inputs` as object `repo_bundle`,
+  type `run_inputs`, `application/x-git-bundle`, key `runs/<run>/inputs/repo.bundle` (DEVIATIONS SIMPLIFY-D40).
+- **`context.stage_inputs`** additionally receives `repo` (the primary repo ref with `base_sha`) from workflows with
+  the `repo-bundle-v1` patch; without it the task packet's repo is used.
+- **Worker environment:** `REPLICANT_TOKEN_BROKER_TOKEN_FILE` / `REPLICANT_TOKEN_BROKER_URL` (as pr_inspect) and
+  `REPLICANT_GITEA_BASE_URL` (the SCM's clone base; default `http(s)://<repo host>`), git on PATH, optional
+  `REPLICANT_REPO_BUNDLE_TMP` (scratch directory for the fetch and the bundle; default the system temp dir).
+- **Sandbox:** agentd serves no git route (:7802); `:7803` streams inputs. Run plans and grants carry audiences
+  `ai-gateway`, `runner-sandbox` (no `repo-mirror`) and no `repo:fetch` scope. bootstrap.json has no
+  `endpoints.repo_mirror`.
+
+## SIMPLIFY-P6 (simplification Phase 6 -> WORKER, RUNNER, CONTROL, GATEWAY, PLATFORM, 2026-11-23): no run grants
+
+- **C-RUNNER 4.0.0 RunSpec** (all copies of runner-api.openapi.yaml): `run_grant` is removed; required `run_scope`
+  {`repo_ids` (1..5), `audiences`, `scopes`, `acting_for`} is a per-attempt field (excluded from `spec_digest` with
+  `trace_context`). Error code `run_grant_invalid` → `run_scope_invalid` (422, not retryable). `RunTokenClaims` loses
+  `grant`/`grant_jti`; `RunGrantClaims` is removed. C-CRD 4.0.0: `spec.runGrant` → `spec.runScope`
+  {repoIds, audiences, scopes, actingFor}. (DEVIATIONS SIMPLIFY-D50.)
+- **Core → Runner** (control-plane-api, principal `service:runner-local|service:runner-api`):
+  - `GET /internal/v1/jobs/{job_id}/run-scope?tenant_id=T` →
+    `{job_id, tenant_id, repo_ids, acting_for, status, revoked}`; 404 when the job is not that tenant's.
+  - `GET /internal/v1/revocations` → `{job_ids: [{id, revoked_at}], run_ids: [{id, revoked_at}]}`, ETag/304.
+- **Runner → verifiers:** `GET /.well-known/jwks.json` (both listeners) and `GET /v1/revocations` (orchestration
+  listener, revocation readers) are the only key and revocation sources. Feed entries for runs of a job core revoked
+  have `reason: "job_revoked"`; verifiers close the whole job on it.
+- **runner-local environment:** `RUNNER_CORE_URL` (default `http://control-plane-api:8401`), `RUNNER_CORE_TOKEN_FILE`
+  (default `/run/secrets/runner_cp_token`), `RUNNER_CORE_REVOCATION_POLL_SECONDS` (60); config keys `core.url`,
+  `core.token_file`, `core.revocation_poll_seconds`. `RUNNER_GRANTS_*` and the `grants:` block are ignored.
+- **Removed environment:** worker `REPLICANT_RUN_GRANT_KEY_FILE/_KID/_ISSUER/_SIGNER`; core `REPLICANT_GRANTS_PORT`,
+  `REPLICANT_GRANTS_ENABLED`, `REPLICANT_RUN_GRANT_JWKS_SOURCE/_FILE`, `REPLICANT_EXEC_REVOCATIONS_*`; gateway-shim
+  `REPLICANT_RUN_GRANT_ISSUER/_JWKS_URL/_REVOCATION_URL/_REVOCATION_POLL_SECONDS`. Secret `run_grant_signing_key` and
+  `generated/run-grant-jwks.json` are no longer read; new secret `runner_cp_token` (map entry
+  `svc_runner-local` in `control_plane_internal_callers`).
+
+## SIMPLIFY-NOTE (orchestrator -> all, 2026-11-24): earlier entries superseded by the simplification
+
+Entries above this one are kept as written. Where they describe the following, read the current design instead
+(DEVIATIONS `## SIMPLIFY`; `docs/design/v0-system-design.md` §1, §2, §5):
+- **Run grants, the grants host and `:8403`** (CONTROL-01, CONTROL-02, CONTROL-05, GATEWAY-03, GATEWAY-04, RUNNER-02,
+  RUNNER-04, RUNNER-07, WORKER-02, WORKER-04, INT-01, INT-03, and SIMPLIFY-P2's grants listener): removed. The worker
+  sends `run_scope`; runner-local checks it against core's intake record, signs run tokens itself and serves the only
+  revocation feed (SIMPLIFY-P6, SIMPLIFY-D50).
+- **repo-mirror and the `repo-mirror` audience** (CONTROL-02, CONTROL-03, RUNNER-01, RUNNER-02, RUNNER-04, RUNNER-06,
+  RUNNER-07, PLATFORM-04, WORKER-04, INT-01): removed; the repository is a git bundle in the run inputs (SIMPLIFY-P5,
+  SIMPLIFY-D40).
+- **sbx-dns, egress-proxy (squid) and proxy variables in the sandbox** (GATEWAY-01, RUNNER-01, INT-02, INT-03):
+  removed; static `/etc/hosts` on the pause container and sbx-edge's SNI allowlist (SIMPLIFY-D30, D31).
+- **`gateway-state` (Valkey), `temporal-bootstrap`, `temporal-ui`** (GATEWAY-01, PLATFORM-03, WORKER-02, INT-01):
+  removed; Temporal's dev server registers the namespace and search attributes and serves its own UI (SIMPLIFY-D1).
+- **`migrate`, `s3-init`, `gitea-bootstrap` services** (PLATFORM-01, PLATFORM-03, WORKER-02, INT-01): one `init`
+  one-shot (SIMPLIFY-D3).
+- **github-integration, slack-integration and replicant-projector as containers** (CONTROL-01, WORKER-02, NOTIFY-01,
+  NOTIFY-02): modules of the core `control-plane-api` process; Gitea webhooks go to
+  `control-plane-api:8401/webhooks/gitea` (SIMPLIFY-P2, SIMPLIFY-D10..D13).
+- **Per-service Dockerfiles and image names** (CONTROL-06, GATEWAY-01, PLATFORM-02, PLATFORM-04, RUNNER-01, RUNNER-06,
+  WORKER-02, INT-01): two images, `replicant-py` and `replicant-go` (SIMPLIFY-D2).
+- **`volume-init`, `workspace-guard`, `watchdog` containers and the `pause:3.10` image** (RUNNER-01, RUNNER-06,
+  RUNNER-07, INT-01, INT-03): `sandbox-init`, the uploader's watchdog and `sandbox-sidecars pause`
+  (SIMPLIFY-D20..D22).

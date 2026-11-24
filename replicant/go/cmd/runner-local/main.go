@@ -1,4 +1,4 @@
-// Command runner-local implements the Runner API (C-RUNNER 3.0.0) over the Docker/Podman Engine API
+// Command runner-local implements the Runner API (C-RUNNER 4.0.0) over the Docker/Podman Engine API
 // for the compose profile (spec/02-execution/local-runner.md): admission, idempotency, per-audience run
 // tokens, the sandbox listener, the pod-group executor, the in-process notifier and the revocation feed.
 package main
@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"time"
 
@@ -98,10 +99,16 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	core := &revoke.Core{URL: cfg.GrantsRevocationURL, Interval: cfg.GrantsPoll}
-	go core.Run(ctx, log)
-	grants := &authz.GrantVerifier{Issuer: cfg.GrantsIssuer, JWKS: &jose.RemoteJWKS{URLs: httpx.List(cfg.GrantsJWKSURL)}, Revoked: core, Skew: 30 * time.Second}
 	feed := NewFeed(cfg.StateDir, s3c, cfg.RevocationsBucket, cfg.RevocationsPrefix, cfg.RevocationsRetain, log)
+	// Core's job revocation list (SIMPLIFY-D50): the runner is its only reader and copies every listed run of
+	// its own into the feed, the one revocation source verifiers poll.
+	coreToken, _ := httpx.ReadToken(cfg.CoreTokenFile)
+	if coreToken == "" {
+		log.Warn("no core caller token: run-scope checks and core revocations will fail", "file", cfg.CoreTokenFile)
+	}
+	core := &revoke.Core{URL: cfg.CoreURL + "/internal/v1/revocations", Token: coreToken, Interval: cfg.CorePoll,
+		OnUpdate: func(jobs, runs []string) { propagateCoreRevocations(ctx, store, feed, jobs, runs) }}
+	go core.Run(ctx, log)
 	// WORKER-01: no payload codec in M1 (plan §1.3), so the Signal payload is plain json/plain by default.
 	// RUNNER_TEMPORAL_PAYLOAD_CODEC=local-v1 enables the encode-only tenant codec with the file key.
 	var codecKey []byte
@@ -140,15 +147,16 @@ func run(log *slog.Logger) error {
 	_, _ = rand.Read(pageKey)
 	s := &Server{
 		Cfg: cfg, Log: log, Store: store, Signer: signer, Engine: eng, S3: s3c,
-		Registry: &Registry{S3: s3c, Bucket: cfg.RegistryBucket}, Grants: grants, Core: core, Feed: feed,
-		Kill: &KillSwitches{Source: cfg.KillSwitchMirror, S3: s3c}, Creds: creds, Inbox: &Inbox{S3: s3c},
+		Registry: &Registry{S3: s3c, Bucket: cfg.RegistryBucket}, Core: core, Feed: feed,
+		Scope: &CoreScope{URL: cfg.CoreURL, TokenFile: cfg.CoreTokenFile},
+		Kill:  &KillSwitches{Source: cfg.KillSwitchMirror, S3: s3c}, Creds: creds, Inbox: &Inbox{S3: s3c},
 		Notifier: &Notifier{Address: cfg.TemporalAddress, Namespace: cfg.TemporalNamespace, CodecKey: codecKey, Log: log},
 		workers:  workers, readers: readers, pageKey: pageKey, wake: make(chan string, 256),
 	}
 	s.Tokens = &authz.TokenVerifier{
 		Audience: api.AudSandbox, Issuers: []string{cfg.Issuer},
-		JWKS:   &jose.RemoteJWKS{Static: []jose.JWK{signer.PublicJWK()}},
-		Grants: grants, Revoked: revoke.Multi{core},
+		JWKS:    &jose.RemoteJWKS{Static: []jose.JWK{signer.PublicJWK()}},
+		Revoked: revoke.Multi{feed, core},
 	}
 	s.SELinux = eng.SELinuxEnabled(ctx)
 	log.Info("selinux labels per pod group", "enabled", s.SELinux)
@@ -194,4 +202,24 @@ func touch(dir string) error {
 		return err
 	}
 	return nil
+}
+
+// propagateCoreRevocations adds every local run of a job (or run) on core's revocation list to the feed.
+func propagateCoreRevocations(ctx context.Context, store *Store, feed *Feed, jobs, runs []string) {
+	if len(jobs) == 0 && len(runs) == 0 {
+		return
+	}
+	recs, err := store.List()
+	if err != nil {
+		return
+	}
+	for _, r := range recs {
+		sp := r.AgentRun.Spec
+		switch {
+		case slices.Contains(jobs, sp.JobID):
+			feed.Add(ctx, sp.RunID, sp.JobID, "job_revoked")
+		case slices.Contains(runs, sp.RunID):
+			feed.Add(ctx, sp.RunID, sp.JobID, "run_revoked")
+		}
+	}
 }

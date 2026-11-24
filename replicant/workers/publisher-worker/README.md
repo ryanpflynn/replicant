@@ -9,7 +9,7 @@ caller token `REPLICANT_TOKEN_BROKER_TOKEN_FILE`), the approved diff bundle is c
 argv) to `replicant/<job_id>`, and the PR is found by head branch before one is created, so retries are idempotent.
 
 ```bash
-podman build -f workers/publisher-worker/Dockerfile -t localhost/replicant/publisher-worker:dev .
+podman build -f images/replicant-py/Dockerfile --target dev -t localhost/replicant/replicant-py:dev .   # shared Python image (SIMPLIFY-D2)
 publisher-worker run | healthcheck
 uv run --package publisher-worker pytest workers/publisher-worker/tests   # starts wrk-gitea-<pid> (podman)
 ```

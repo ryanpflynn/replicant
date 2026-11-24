@@ -1,5 +1,5 @@
 // Command replicant-agentd is the WS-03 native sidecar (cli-invocation.md §5, ADR-03-001): sole holder of the
-// run tokens, loopback auth proxy for the gateway (:7800), MCP (:7801), git (:7802) and inputs (:7803),
+// run tokens, loopback auth proxy for the gateway (:7800), MCP (:7801) and inputs (:7803, the repo bundle included),
 // token refresh, heartbeat and self-stop, steering relay, usage accounting, and the uploader's credentials.
 package main
 
@@ -128,7 +128,6 @@ func run(log *slog.Logger) error {
 	}
 	go serveTCP(sandbox.LoopbackGateway, a.gatewayHandler())
 	go serveTCP(sandbox.LoopbackMCP, a.mcpHandler())
-	go serveTCP(sandbox.LoopbackGit, a.gitHandler())
 	go serveTCP(sandbox.LoopbackInputs, a.inputsHandler())
 	go serveUnix(httpx.Env("REPLICANT_UPLOADER_SOCKET", sandbox.UploaderSocket), a.uploaderHandler())
 	go serveUnix(httpx.Env("REPLICANT_IPC_SOCKET", sandbox.IPCSocket), a.ipcHandler())
@@ -190,7 +189,7 @@ func (a *Agent) installTokens(dir string, set map[string]string) error {
 		if first == nil {
 			cc := c
 			first = &cc
-		} else if c.RunID != first.RunID || c.TenantID != first.TenantID || c.JobID != first.JobID || c.ActingFor != first.ActingFor || c.GrantJti != first.GrantJti {
+		} else if c.RunID != first.RunID || c.TenantID != first.TenantID || c.JobID != first.JobID || c.ActingFor != first.ActingFor {
 			return errors.New("token set is inconsistent")
 		}
 		exp[aud] = time.Unix(c.Exp, 0)

@@ -31,7 +31,7 @@ func (s *Server) labels(r *Record) map[string]string {
 		v1.LabelIsolation:                    r.Local.Runtime,
 		v1.LabelBundle:                       ar.Labels[v1.LabelBundle],
 		v1.LabelNetworkProfile:               ar.Spec.NetworkProfile,
-		v1.LabelActingFor:                    r.Local.Grant.ActingFor,
+		v1.LabelActingFor:                    r.Local.Scope.ActingFor,
 		v1.LabelWorkspaceMode:                string(ar.Spec.Workspace.Enforcement),
 		v1.LabelWorkspaceBytes:               strconv.FormatInt(r.Local.WorkspaceBytes, 10),
 		"replicant.example.com/local-runner": "true",
@@ -167,29 +167,38 @@ func (s *Server) containerSpec(r *Record, c string) (string, engine.ContainerCon
 	switch c {
 	case cPause:
 		cc.Image = s.Cfg.PauseImage
+		if cc.Image == s.Cfg.SidecarsImage {
+			// the pause holder is a subcommand of the sidecars image; a dedicated pause image keeps its own entrypoint
+			cc.User = "65535:65535"
+			cc.Cmd = []string{"/usr/local/bin/sandbox-sidecars", "pause"}
+		}
 		cc.Hostname = ar.Name
-		cc.HostConfig = engine.HostConfig{NetworkMode: s.Cfg.SandboxNetwork, DNS: s.Cfg.SandboxDNS, ReadonlyRootfs: true,
+		cc.HostConfig = engine.HostConfig{NetworkMode: s.Cfg.SandboxNetwork, ReadonlyRootfs: true,
 			CapDrop: []string{"ALL"}, SecurityOpt: s.secOpts(r), PidsLimit: 16}
+		if s.Cfg.SandboxEdgeIP != "" {
+			// SIMPLIFY-D30: the pause container owns the group's /etc/hosts and resolv.conf (Docker and Podman give
+			// joined containers the netns owner's entries and reject ExtraHosts on them). The sbx-edge names are
+			// static host entries; the only nameserver is sbx-edge, which serves no DNS (refused at once), so every
+			// other name fails to resolve (SEC-EGRESS-05).
+			cc.HostConfig.ExtraHosts = s.Cfg.SandboxHosts()
+			cc.HostConfig.DNS = []string{s.Cfg.SandboxEdgeIP}
+		}
 		cc.Env = nil
 		return cc.Image, cc
-	case cVolumeInit:
+	case cSandboxInit:
+		// One-shot, no network: fsGroup emulation (chown the run's volumes), then the workspace-guard check (exit 84).
 		cc.Image = s.Cfg.SidecarsImage
 		cc.User = "0:0"
-		cc.Cmd = []string{"/usr/local/bin/sandbox-sidecars", "volume-init"}
+		cc.Cmd = []string{"/usr/local/bin/sandbox-sidecars", "sandbox-init"}
 		var mounts []engine.Mount
 		for _, v := range volumeNames {
 			mounts = append(mounts, vol(r, v, "/v/"+v, false))
 		}
 		cc.HostConfig = engine.HostConfig{NetworkMode: "none", Mounts: mounts, CapDrop: []string{"ALL"},
 			CapAdd: []string{"CHOWN", "FOWNER", "DAC_OVERRIDE"}, SecurityOpt: s.secOpts(r), ReadonlyRootfs: true}
-		cc.Env = nil
+		cc.Env = []string{"REPLICANT_WORKSPACE_ENFORCEMENT=" + string(ar.Spec.Workspace.Enforcement),
+			"REPLICANT_WORKSPACE_LIMIT_BYTES=" + strconv.FormatInt(r.Local.WorkspaceBytes, 10)}
 		return cc.Image, cc
-	case cGuard:
-		cc.Image = s.Cfg.SidecarsImage
-		cc.User = "10001:10001"
-		cc.Cmd = []string{"/usr/local/bin/sandbox-sidecars", "workspace-guard"}
-		cc.Env = append(cc.Env, "REPLICANT_WORKSPACE_ENFORCEMENT="+string(ar.Spec.Workspace.Enforcement))
-		cc.HostConfig = s.hostConfig(r, cc.User, []engine.Mount{vol(r, "workspace", sandbox.WorkspaceDir, false)})
 	case cAgentd:
 		cc.Image = r.Local.CLIImage
 		cc.User = "10000:10000"
@@ -201,12 +210,6 @@ func (s *Server) containerSpec(r *Record, c string) (string, engine.ContainerCon
 			vol(r, "agentd-state", sandbox.TokenDir, false), ipc, upIPC, cfgMount})
 		cc.HostConfig.RestartPolicy = &engine.RestartPolicy{Name: "on-failure", MaximumRetryCount: 5}
 		cc.HostConfig.Memory = 512 << 20
-	case cWatchdog:
-		cc.Image = s.Cfg.SidecarsImage
-		cc.User = "10003:10003"
-		cc.Cmd = []string{"/usr/local/bin/sandbox-sidecars", "watchdog"}
-		cc.HostConfig = s.hostConfig(r, cc.User, []engine.Mount{vol(r, "workspace", sandbox.WorkspaceDir, true), ipc})
-		cc.HostConfig.RestartPolicy = &engine.RestartPolicy{Name: "on-failure", MaximumRetryCount: 5}
 	case cPrepare:
 		cc.Image = r.Local.CLIImage
 		cc.User = "10001:10001"
@@ -248,8 +251,10 @@ func (s *Server) containerSpec(r *Record, c string) (string, engine.ContainerCon
 		cc.User = "10003:10003"
 		cc.Cmd = []string{"/usr/local/bin/sandbox-sidecars", "uploader"}
 		cc.Env = append(cc.Env, "REPLICANT_UPLOADER_SOCKET="+sandbox.UploaderSocket, "REPLICANT_S3_VERIFY_READBACK=true")
+		// workspace read-only: the uploader also runs the disk watchdog (writes the ipc status files)
 		cc.HostConfig = s.hostConfig(r, cc.User, []engine.Mount{
-			vol(r, "out", sandbox.OutDir, true), vol(r, "spool", sandbox.SpoolDir, true), ipc, upIPC, cfgMount})
+			vol(r, "out", sandbox.OutDir, true), vol(r, "spool", sandbox.SpoolDir, true),
+			vol(r, "workspace", sandbox.WorkspaceDir, true), ipc, upIPC, cfgMount})
 		cc.HostConfig.Memory = 512 << 20
 	}
 	return cc.Image, cc
@@ -267,7 +272,7 @@ func (s *Server) bootstrap(r *Record) sandbox.Bootstrap {
 		InputsManifestURI: ar.Spec.Inputs.ManifestURI, InputsManifestSHA256: ar.Spec.Inputs.ManifestSHA256,
 		Endpoints: sandbox.Endpoints{RunnerSandbox: s.Cfg.EPRunnerSandbox, AIGateway: s.Cfg.EPAIGateway,
 			MemoryMCP: s.Cfg.EPMemoryMCP, ContextMCP: s.Cfg.EPContextMCP, CodeSearchMCP: strings.TrimSuffix(s.Cfg.EPContextMCP, "/") + "/code-search",
-			RepoMirror: s.Cfg.EPRepoMirror, OTLP: s.Cfg.EPOTLP, LogTransport: "stdout"},
+			OTLP: s.Cfg.EPOTLP, LogTransport: "stdout"},
 		Repo: sandbox.BootstrapRepo{RepoID: ar.Spec.Repo.RepoID, BaseSHA: ar.Spec.Repo.BaseSHA, FetchDepth: fd,
 			Provider: string(ar.Spec.Repo.Provider), Host: ar.Spec.Repo.Host, Owner: ar.Spec.Repo.Owner, Name: ar.Spec.Repo.Name},
 		Local: &sandbox.LocalBootstrap{S3Endpoint: s.Cfg.S3PublicEndpoint, S3Region: s.Cfg.S3Region, VerifyReadback: true, SendChecksum: s.Cfg.S3SendChecksum},
@@ -370,7 +375,7 @@ func (s *Server) createPodGroup(ctx context.Context, r *Record) error {
 	var owner map[string]string
 	if s.isPodman(ctx) {
 		// explicit ownership: podman otherwise chowns an unowned volume to whichever container mounts it first; on
-		// Docker the volume-init helper below sets it
+		// Docker sandbox-init below sets it
 		owner = map[string]string{"o": "uid=10001,gid=10002"}
 	}
 	for _, v := range volumeNames {
@@ -388,23 +393,16 @@ func (s *Server) createPodGroup(ctx context.Context, r *Record) error {
 			return fmt.Errorf("volume %s: %w", v, err)
 		}
 	}
-	// fsGroup emulation: chown the run's volumes, then remove the helper.
-	id, err := s.createStart(ctx, r, cVolumeInit)
+	// sandbox-init: fsGroup emulation, then the workspace guard. It is kept (exited) so its status and logs stay
+	// observable; a non-zero exit leaves the group without pause and Derive fails the run from its status.
+	code, err := s.runSandboxInit(ctx, r)
 	if err != nil {
 		return err
 	}
-	for i := 0; i < 120; i++ {
-		ins, _ := s.Engine.InspectContainer(ctx, id)
-		if ins == nil || exited(ins) {
-			if ins != nil && ins.State.ExitCode != 0 {
-				logs, _ := s.Engine.Logs(ctx, id, 20)
-				return fmt.Errorf("volume-init exit %d: %s", ins.State.ExitCode, strings.TrimSpace(logs))
-			}
-			break
-		}
-		time.Sleep(250 * time.Millisecond)
+	if code != 0 {
+		_, err := s.Store.Update(r.AgentRun.Spec.RunID, func(rr *Record) error { rr.Local.GuardExit = &code; return nil })
+		return err
 	}
-	_ = s.Engine.Remove(ctx, id)
 	if _, err := s.createStart(ctx, r, cPause); err != nil {
 		return err
 	}
@@ -416,6 +414,29 @@ func (s *Server) createPodGroup(ctx context.Context, r *Record) error {
 		return nil
 	})
 	return err
+}
+
+// runSandboxInit starts sandbox-init and waits (up to 30 s) for its exit code.
+func (s *Server) runSandboxInit(ctx context.Context, r *Record) (int, error) {
+	id, err := s.createStart(ctx, r, cSandboxInit)
+	if err != nil {
+		return 0, err
+	}
+	for i := 0; i < 120; i++ {
+		ins, _ := s.Engine.InspectContainer(ctx, id)
+		if ins == nil {
+			return 0, fmt.Errorf("sandbox-init vanished")
+		}
+		if exited(ins) {
+			if ins.State.ExitCode != 0 {
+				logs, _ := s.Engine.Logs(ctx, id, 20)
+				s.Log.Warn("sandbox-init failed", "run_id", r.AgentRun.Spec.RunID, "exit", ins.State.ExitCode, "logs", strings.TrimSpace(logs))
+			}
+			return ins.State.ExitCode, nil
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return 0, fmt.Errorf("sandbox-init did not exit within 30s")
 }
 
 // exited: the container has terminated (podman reports "stopping" with Running=false while a stop is in progress).
@@ -438,26 +459,9 @@ func (s *Server) advancePodGroup(ctx context.Context, r *Record) error {
 		return s.terminateIfNeeded(ctx, r)
 	}
 	switch r.Local.Stage {
-	case "scheduled":
-		if _, err := s.createStart(ctx, r, cGuard); err != nil {
+	case "scheduled", "guard": // "guard": a record from before sandbox-init absorbed the guard
+		if _, err := s.createStart(ctx, r, cAgentd); err != nil {
 			return err
-		}
-		_, err := s.Store.Update(runID, func(rr *Record) error { rr.Local.Stage = "guard"; return nil })
-		return err
-	case "guard":
-		ins := s.inspect(ctx, r, cGuard)
-		if !exited(ins) {
-			return nil
-		}
-		code := ins.State.ExitCode
-		_, _ = s.Store.Update(runID, func(rr *Record) error { rr.Local.GuardExit = &code; return nil })
-		if code != 0 {
-			return nil
-		}
-		for _, c := range []string{cAgentd, cWatchdog} {
-			if _, err := s.createStart(ctx, r, c); err != nil {
-				return err
-			}
 		}
 		_, err := s.Store.Update(runID, func(rr *Record) error { rr.Local.Stage = "sidecars"; return nil })
 		return err
@@ -538,7 +542,7 @@ func (s *Server) advancePodGroup(ctx context.Context, r *Record) error {
 		}
 		// Uploader done → stop the native sidecars (the pod completes).
 		if up := s.inspect(ctx, r, cUploader); exited(up) && !r.Local.StopSent {
-			go s.stopContainers(context.Background(), r, []string{cAgentd, cWatchdog, cPause}, 5)
+			go s.stopContainers(context.Background(), r, []string{cAgentd, cPause}, 5)
 			_, _ = s.Store.Update(runID, func(rr *Record) error { rr.Local.StopSent = true; return nil })
 		}
 	}

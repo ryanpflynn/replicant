@@ -1,7 +1,8 @@
 # Replicant v0: system design
 
-**Status:** living document, 2026-10-25. It describes the v0 local stack as built, and lists the work that is in
-progress or not started (§10). The specification in `../spec` is the source of truth. Where v0 differs from it, the
+**Status:** living document, 2026-10-25; architecture sections updated 2026-11-24 for the simplification
+(DEVIATIONS.md `## SIMPLIFY`, SIMPLIFY-D1..D59, and spec ADR-015). It describes the v0 local stack as built, and lists
+the work that is in progress or not started (§10). The specification in `../spec` is the source of truth. Where v0 differs from it, the
 difference is recorded in [`docs/v0/DEVIATIONS.md`](../v0/DEVIATIONS.md) by ID (for example WORKER-D5). This document
 cites those IDs and does not repeat them.
 
@@ -20,16 +21,24 @@ uses production code paths and the frozen contracts, and replaces cloud services
 
 | Production (spec) | v0 local |
 |---|---|
-| EKS, Kata/gVisor sandboxes | `runner-local`: Podman pod-groups (RUNNER-D2, D3) |
+| One EKS cluster; sandboxes on a hardened node pool with Kata/gVisor (ADR-015) | `runner-local`: Podman pod-groups (RUNNER-D2, D3), six containers per run (SIMPLIFY-D20) |
+| Runner on core nodes: checks each run against core's intake record, signs run tokens, serves the revocation feed and the notifier (ADR-015, SIMPLIFY-D50, D53) | `runner-local` does the same; AgentRun is a bare pod-group plus a write-once S3 record |
+| Cilium FQDN policy for sandbox DNS and egress (ADR-02-005) | static `/etc/hosts` on the run's pause container, all names pointing at `sbx-edge` (SIMPLIFY-D30) |
+| Egress proxy with an allowlist; PrivateLink/VPC endpoints for gateway, runner, memory, S3, OTLP | `sbx-edge` (nginx): HTTP routes for the `*.sbx.local` names plus an SNI allowlist on :443, no proxy variables (SIMPLIFY-D31) |
+| Repository access from the sandbox | none: the worker stages the repo as a git bundle in the run inputs (SIMPLIFY-D40) |
 | GitHub App | Gitea (`gitea:3300`); the GitHub App is milestone M3 (X0-3) |
 | Enterprise LLM gateway | `replicant-gateway-shim` with `script` (canned) or `passthrough` (real Claude) backends |
 | S3 + KMS | SeaweedFS with an SSE key (PLATFORM-D8) |
 | Aurora Postgres | Postgres 17 + pgvector, Alembic over the 17 owner DDL files |
-| Temporal Cloud | Temporal dev server (PLATFORM-D1) |
+| Temporal Cloud | Temporal dev server with its built-in UI on :8233 (PLATFORM-D1, SIMPLIFY-D1) |
 | Dex / identity-service | Static dev identity via the `X-Replicant-Dev-User` header (CONTROL-D1) |
-| Real Slack | `slack-mock` (records messages; viewer on :8410) |
+| Real Slack | `slack-mock` (records messages; viewer on :8410), opt-in profile `slack` (SIMPLIFY-D1) |
 
 ## 2. Architecture
+
+`dev/compose/compose.v0.yaml` is a standalone stack (SIMPLIFY-D1) of 14 default services, built from two Replicant
+images (`replicant-py` for every Python role, `replicant-go` for runner-local and gateway-shim; SIMPLIFY-D2) plus
+the postgres, control-plane-web and sandbox images. Profiles `slack` (slack-mock) and `observability` are opt-in.
 
 ```mermaid
 flowchart LR
@@ -44,24 +53,27 @@ flowchart LR
   end
 
   subgraph Control["Control plane"]
-    GHI[github-integration<br/>webhook → normalized event]
-    CPA[control-plane-api<br/>intake · jobs · gates · run-grants · notify outbox]
+    subgraph CORE["control-plane-api (core process, SIMPLIFY-D10)"]
+      CPA[API<br/>intake · jobs · gates · run-scope · notify outbox]
+      GHI[github-integration module<br/>webhook → normalized event]
+      SLI[Slack module<br/>opt-in]
+      PRJ[projector worker]
+    end
     WEB[control-plane-web :8400]
     TB[github-token-broker]
-    SLI[slack-integration]
+    MEM[memory-service]
   end
 
   subgraph Orchestration
-    TMP[(Temporal)]
+    TMP[(Temporal dev server + UI)]
     WRK[replicant-worker<br/>ReplicantJob + graph interpreter]
     PUB[publisher-worker]
-    PRJ[replicant-projector]
   end
 
   subgraph Execution["Execution plane"]
-    RL[runner-local]
-    MIR[repo-mirror]
+    RL[runner-local<br/>tokens · revocations · notifier]
     GW[gateway-shim]
+    EDGE[sbx-edge<br/>routes + SNI allowlist]
     subgraph SBX["Sandbox pod-group (per run)"]
       AGD[replicant-agentd]
       CLI[Claude Code / replicant-qa]
@@ -77,11 +89,12 @@ flowchart LR
   ISSUE -- webhook (HMAC) --> GHI --> CPA
   CPA -- start pinned workflow --> TMP
   TMP <--> WRK & PUB & PRJ
-  WRK -- createRun --> RL --> SBX
-  AGD --> CLI
-  CLI -- model calls --> GW
-  CLI -- git fetch --> MIR
-  SBX -- artifacts, transcripts --> S3
+  WRK -- repo bundle + inputs --> S3
+  WRK -- createRun + run_scope --> RL --> SBX
+  RL -- run-scope, revocations --> CPA
+  CLI --> AGD
+  AGD -- all sandbox traffic --> EDGE
+  EDGE --> GW & RL & S3
   PUB -- push branch, open PR --> PR
   PUB -.-> TB
   PRJ --> PG
@@ -93,21 +106,26 @@ flowchart LR
   PR -- merge webhook --> GHI
 ```
 
+An `init` one-shot (migrations, buckets, Gitea setup; SIMPLIFY-D3) runs before the services start. There is no
+separate migrate, s3-init, gitea-bootstrap, temporal-bootstrap, temporal-ui, gateway-state (Valkey), run-grants,
+sbx-dns, egress-proxy or repo-mirror service any more (SIMPLIFY-D1, D3, D30, D31, D40, D50).
+
 ### 2.1 Components
 
 | Component | Language | Role |
 |---|---|---|
-| `services/control-plane-api` | Python | Intake, jobs read API, gate decisions (Temporal Update `gate.decide`), run-grants JWKS (ES256), notify outbox, dispatcher and scheduler |
-| `services/github-integration` | Python | Gitea webhook (HMAC) → normalized event → intake; PR events → Signal `pr.event` |
+| `services/control-plane-api` | Python | The core process (SIMPLIFY-D10..D13). Intake, jobs read API, gate decisions (Temporal Update `gate.decide`), notify outbox, dispatcher and scheduler, and the runner's `run-scope` and `revocations` internal routes (SIMPLIFY-D50). Hosts the modules below in process |
+| `services/github-integration` | Python | Module in core: Gitea webhook (HMAC) → normalized event → intake; PR events → Signal `pr.event` |
+| `services/slack-integration` | Python | Module in core when `REPLICANT_SLACK_ENABLED` (profile `slack`): Slack DMs (Block Kit), signed-request verification |
+| `workers/replicant-projector` | Python | Worker in core: projects workflow events into the `jobs_read` tables |
 | `services/github-token-broker` | Python | Short-lived Gitea tokens |
-| `services/slack-integration` | Python | Slack DMs (Block Kit), signed-request verification |
-| `workers/replicant-worker` | Python | `ReplicantJob` Temporal workflow; interprets the C-DEF graph in-workflow (InterpreterEngine). Temporal history is the only job state store (ORCH-D1) |
+| `services/memory-service` | Python | Memory store and curation (§8b) |
+| `workers/replicant-worker` | Python | `ReplicantJob` Temporal workflow; interprets the C-DEF graph in-workflow (InterpreterEngine). Temporal history is the only job state store (ORCH-D1). Stages each run's repo as a git bundle (SIMPLIFY-D40) |
 | `workers/publisher-worker` | Python | Commit, push and open/update the PR (WORKER-D10) |
-| `workers/replicant-projector` | Python | Projects workflow events into the `jobs_read` tables |
-| `go/cmd/runner-local` | Go | C-RUNNER on Podman; run lifecycle derived from pod status |
+| `go/cmd/runner-local` | Go | C-RUNNER on Podman or Docker; run lifecycle derived from pod status; admits runs against core's intake record, signs run tokens, serves the revocation feed (SIMPLIFY-D50) |
 | `go/cmd/replicant-agentd` | Go | In-sandbox agent supervisor; the only holder of the per-audience run tokens |
-| `go/cmd/replicant-entrypoint` | Go | Materializes the run inputs, drives the CLI, uploads results |
-| `go/cmd/repo-mirror` | Go | Read-only git mirror for sandboxes |
+| `go/cmd/replicant-entrypoint` | Go | Materializes the run inputs (including the repo bundle), drives the CLI, uploads results |
+| `go/cmd/sandbox-sidecars` | Go | `sandbox-init`, `pause` and `uploader` (with the disk watchdog) containers of each run (SIMPLIFY-D20..D22) |
 | `go/cmd/replicant-gateway-shim` | Go | Model gateway: per-run policies, budgets, usage log |
 | `web/control-plane-web` | TypeScript (React) | Management UI |
 
@@ -119,8 +137,8 @@ sequenceDiagram
   actor Alice as Requester (alice)
   actor Bob as Approver (bob)
   participant G as Gitea
-  participant I as github-integration
-  participant C as control-plane-api
+  participant I as github-integration (in core)
+  participant C as control-plane-api (core)
   participant T as Temporal / replicant-worker
   participant R as runner-local + sandbox
   participant M as gateway-shim
@@ -132,9 +150,9 @@ sequenceDiagram
   C->>T: start ReplicantJob, pinned to bundle build (X0-6)
   T->>G: ack comment (≤ 60 s target, X0-9)
   loop implement → qa → review
-    T->>C: run grant
-    T->>R: createRun (spec_digest, grant)
-    R->>M: model calls with run token
+    T->>R: createRun (spec_digest, run_scope)
+    R->>C: run-scope check against the intake record
+    R->>M: model calls with run token (runner-signed)
     R-->>T: run result (artifacts in S3)
   end
   T->>C: gate.requested → notify outbox
@@ -222,32 +240,49 @@ Notes:
 
 ## 5. Sandbox runs
 
-Each agent step (plan, implement, qa, review, repair, rebase) is one run on runner-local under the C-RUNNER contract.
+Each agent step (plan, implement, qa, review, repair, rebase) is one run on runner-local under the C-RUNNER contract
+(4.0.0, ADR-015).
 
 ```mermaid
 flowchart TB
-  W[replicant-worker] -- "1. run grant (ES256, JWKS)" --> CPA[control-plane-api]
+  W[replicant-worker] -- "1. stage inputs + repo bundle" --> S3[(S3: inputs/, steps/…, transcripts)]
   W -- "2. register run policy + budget" --> GW[gateway-shim]
-  W -- "3. createRun(spec, spec_digest = JCS)" --> RL[runner-local]
-  RL -- "4. pod-group" --> POD
+  W -- "3. createRun(spec, run_scope; spec_digest = JCS)" --> RL[runner-local]
+  RL -- "4. run-scope check" --> CPA[control-plane-api]
+  RL -- "5. pod-group" --> POD
 
   subgraph POD["Sandbox pod-group (sbx network)"]
-    EP[replicant-entrypoint] --> AGD[replicant-agentd<br/>holds run tokens]
-    AGD --> CC["claude -p<br/>ANTHROPIC_BASE_URL → shim"]
+    INIT[sandbox-init] --> PAUSE["pause<br/>/etc/hosts → sbx-edge"]
+    PAUSE --> AGD[replicant-agentd<br/>holds run tokens]
+    AGD --> PREP["prepare<br/>clone from bundle"]
+    PREP --> CC["agent: claude -p<br/>ANTHROPIC_BASE_URL → agentd"]
+    UP["uploader + disk watchdog"]
   end
 
-  CC -- model --> GW
-  CC -- git --> MIR[repo-mirror]
-  POD -- "DNS" --> DNS[sbx-dns]
-  POD -- "allowlisted egress" --> EG[sbx-edge → egress-proxy]
-  POD -- "STS per-run session policy" --> S3[(S3: steps/…, transcripts)]
+  AGD -- "gateway, runner-sandbox, memory-mcp, s3, otlp" --> EDGE[sbx-edge]
+  CC -- "allowlisted HTTPS (SNI)" --> EDGE
+  EDGE --> GW & RL & S3
   RL -- "status derived from pod (derive.go)" --> W
 ```
 
-- **Tokens.** Run grants are exchanged for per-audience run tokens (`ai-gateway`, `repo-mirror`,
-  `runner-sandbox`). Only agentd holds them; the CLI talks to agentd-mediated endpoints.
-- **Egress.** All sandbox egress goes through sbx-dns, sbx-edge and the egress proxy (X0-10, PLATFORM-D17). There are
-  no package mirrors in v0 (PLATFORM-D18).
+- **Containers.** Six per run, in start order: `sandbox-init` (volume ownership and the workspace hard-limit check, no
+  network), `pause` (owns the network namespace; a `sandbox-sidecars` subcommand), `replicant-agentd`, `prepare`,
+  `agent` and `uploader`, which also runs the disk watchdog (SIMPLIFY-D20..D22).
+- **Repository.** The worker fetches the commits a run needs with a read-only broker token and stages one git bundle
+  (`refs/replicant/base`, and `refs/replicant/config` when needed) in the run inputs. `prepare` streams it through
+  agentd, verifies it and checks out `base_sha`. The sandbox has no git endpoint and no `git fetch` during a run
+  (SIMPLIFY-D40).
+- **Tokens.** There are no run grants. runner-local admits each run by checking its `run_scope` against core's intake
+  record (`GET /internal/v1/jobs/{job_id}/run-scope`), then signs per-audience run tokens (`ai-gateway`,
+  `runner-sandbox`; no memory MCP in v0, MEM-D2) with its own key. It polls core's revocations and serves the only revocation feed;
+  gateway-shim verifies against the runner's JWKS and feed. Only agentd holds the tokens; the CLI talks to
+  agentd-mediated endpoints on loopback (SIMPLIFY-D50).
+- **Network.** sbx-edge is the only host on the internal `sbx` network. runner-local writes one `/etc/hosts` entry per
+  name on the pause container, all pointing at sbx-edge, and sbx-edge is the only nameserver, which has no DNS
+  listener, so every other lookup fails (SIMPLIFY-D30). Egress is an SNI allowlist on sbx-edge's :443
+  (`proxy.golang.org`, `sum.golang.org`), passed through without terminating TLS; there are no proxy variables and
+  plain HTTP egress is refused (SIMPLIFY-D31, X0-10). There are no package mirrors in v0 (PLATFORM-D18). Production
+  uses the same names behind the ADR-015 four-endpoint invariant, with a Cilium FQDN policy instead of static hosts.
 - **Run state.** Run state is derived from the pod. A cancel that lands during Provisioning completes once nothing in
   the pod is running (fix ORCH-01). Before that fix, stuck `Cancelling` runs exhausted the tenant run quota.
 
@@ -266,7 +301,7 @@ flowchart LR
     STEPS[steps/… artifacts]
     TR[transcripts]
   end
-  PRJ[replicant-projector] --> READ
+  PRJ[projector worker in core] --> READ
   CPA[control-plane-api] --> INTAKE & NOTIFY & TEN
   W[worker] --> REG
   SBX[sandboxes] --> STEPS & TR
@@ -694,7 +729,10 @@ cost.
   either part yet (see `v0-assessment.md` F7 and §5.2).
 - **Sandbox credentials.** STS per-run session policies scope a run's S3 access to its own prefixes. A session stays
   valid for up to 1 h after the run ends (accepted risk R-09).
-- **Run tokens.** Run tokens never leave agentd. Run grants are short-lived ES256 JWTs with a revocation feed.
+- **Run tokens.** Run tokens never leave agentd. runner-local signs them from the run scope it checked against core's
+  intake record, bounds their lifetime by the run's limits, and serves the revocation feed every verifier polls
+  (SIMPLIFY-D50, ADR-015). A compromised runner can mint any token; in production it runs on core nodes with core's
+  trust, and the sandbox node pool is hardened separately (ADR-015, SIMPLIFY-D52).
 - **Webhooks and Slack requests.** Webhooks are HMAC-verified, and Slack requests are signature-verified.
 - **Secrets.** Secrets are generated into `dev/.secrets/` (gitignored) and mounted as compose secrets. The model API
   key is read only from `dev/.env` and never logged.
@@ -709,13 +747,13 @@ cost.
 | X0-1 | `dev up` healthy ≤ 15 min, seed with no hand-typed SQL | **Passes on macOS.** Ubuntu not run |
 | X0-2 | E2E-01-v0 issue → merged PR, projection = snapshot | **Passes** (scripted backend, many runs) |
 | X0-3 | Same flow on a personal GitHub org via the dev App | **Not started.** Needs the user's org and a cloudflared tunnel |
-| X0-4 | Runner contract suite on runner-local | **23/24** targeted cases; RC-RUN-13 open |
+| X0-4 | Runner contract suite on runner-local | **Passes** (targeted cases). RC-RUN-13 closed (SIMPLIFY-D57); RC-CAN-01 runs only with runner-local's test hook on, otherwise SKIP (SIMPLIFY-D59) |
 | X0-5 | Determinism: histories replay; WF-* scenarios | **Partial** |
 | X0-6 | Pinning to bundle build | **Passes** |
 | X0-7 | Chaos: kill worker, kill runner, pause Postgres | **Passes** (3/3) |
 | X0-8 | Correlation of Loki, Tempo and Langfuse by trace ID | **Passes for Loki and Tempo.** Langfuse deferred (PLATFORM-D15) |
 | X0-9 | First visible progress ≤ 60 s, p95 over 20 runs | **Partial.** Single runs meet it; the 20-run p95 measurement isn't done |
-| X0-10 | Egress SEC-EGRESS-01..08 | **Passes** (3/3) |
+| X0-10 | Egress SEC-EGRESS-01..07 and 09..11 (SNI allowlist, SIMPLIFY-D31) | **Passes** |
 
 **Real Claude, end to end (2026-10-27).** E2E-01 passed from a clean stack with the gateway in `passthrough` mode
 (`tests/e2e/run_clean.sh --gateway passthrough`). Job `job_01m5ystcbs48t8s67pb8t6xf0p` went from issue #1 to PR #2,
@@ -742,8 +780,8 @@ fix prorates the FX fee reversal, which is correct. The API key appeared in no c
 | Agents | `reviewer-codex` runs Claude Code; images by tag, not digest | WORKER-D3, RUNNER-D9 |
 | Observability | Langfuse not started (memory budget); minimal Go OTLP exporter | PLATFORM-D15, D16 |
 | Release pipeline | No replicant-config repo or publish pipeline; bundles promoted without evaluation | WORKER-D2, CONTROL-D3 |
-| Runner | No node concept (lease expiry from heartbeats only); RC-CAN-01 has no hook; kind/k8s profile not built | RUNNER-D13 |
-| Package mirrors | Sandboxes fetch Go modules through the allowlisted egress proxy; npm and pip need the core profile | PLATFORM-D18 |
+| Runner | No node concept (lease expiry from heartbeats only); RC-CAN-01's hold hook is off by default; the kind profile's runner-api chart still expects run grants | RUNNER-D13, SIMPLIFY-D52, D59 |
+| Package mirrors | Sandboxes fetch Go modules through sbx-edge's SNI allowlist; npm and pip registries are not allowlisted | PLATFORM-D18, SIMPLIFY-D31 |
 | Slack | No request-changes, rerun-QA or answer buttons (UI only); no `response_url` replies or Socket Mode; App Home not refreshed when the projection changes; approval channel is tenant-level, not per repo; no escalation channel posts or 20 DMs/hour summary | NOTIFY-D9, D12–D16 |
 | Real Slack | Needs the app created from the manifest, `slack_bot_token` and `slack_signing_secret` secrets, `SLACK_API_URL` unset, and identity links | `services/slack-integration/README.md` |
 | Graph view | Gateway cost shows "pending" while a run is live (usage log is batched; tokens come from the transcript); the ~220 gitleaks rules are not applied in the API; Grafana links need the observability profile; repair-cycle visits counted per node, not per cycle; no `/runs/{run_id}/live` streaming endpoint | GRAPH-D1–D10 |
@@ -769,6 +807,6 @@ flowchart LR
   M3L --> NOW["Done 2026-10-25<br/>notifications phase 2<br/>graph + activity view"]
   NOW --> X03["X0-3 GitHub App<br/>needs org + tunnel"]
   NOW --> X05["X0-5 / X0-9<br/>determinism suite,<br/>20-run p95"]
-  NOW --> RC13["X0-4 RC-RUN-13"]
-  X03 & X05 & RC13 --> P1["Beyond v0:<br/>identity, usage-ingestor,<br/>Langfuse, memory, k8s profile"]
+  NOW --> SIM["Done 2026-11-23<br/>architecture simplification<br/>(SIMPLIFY-D*, ADR-015, RC-RUN-13)"]
+  X03 & X05 & SIM --> P1["Beyond v0:<br/>identity, usage-ingestor,<br/>Langfuse, memory, k8s profile"]
 ```

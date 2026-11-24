@@ -1,6 +1,7 @@
-// Package revoke polls the two revocation sources every run-token verifier must honour (C-RUNNER 3.0.0
-// verifier obligations 3 and 5): the core run-grant revocation list (`/grants/revoked`, every 60 s) and the
-// exec revocation feed (`GET /v1/revocations`, every 10 s).
+// Package revoke polls revocation sources. Since C-RUNNER 4.0.0 (SIMPLIFY-D50) only the Runner polls core's
+// revocation list (`GET /internal/v1/revocations` on core, every 60 s: Core) and folds it into its own exec
+// revocation feed; every run-token verifier polls that feed (`GET /v1/revocations`, every 10 s: Exec) and
+// nothing else.
 package revoke
 
 import (
@@ -23,11 +24,15 @@ type Checker interface {
 	Revoked(jobID, runID string) (bool, string)
 }
 
-// Core polls the grants host revocation list.
+// Core polls core's revocation list ({job_ids, run_ids}); the Runner is its only reader.
 type Core struct {
 	URL      string
+	Token    string // the Runner's caller token for core (Authorization: Bearer)
 	Interval time.Duration
 	Client   *http.Client
+	// OnUpdate runs after every successful fetch (the Runner copies the list into its feed; runs created since
+	// the last change are covered too).
+	OnUpdate func(jobs, runs []string)
 
 	mu      sync.RWMutex
 	jobs    map[string]bool
@@ -58,6 +63,26 @@ func (c *Core) Revoked(jobID, runID string) (bool, string) {
 	return false, ""
 }
 
+// Snapshot returns the revoked job and run ids of the last fetch.
+func (c *Core) Snapshot() (jobs, runs []string) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for j := range c.jobs {
+		jobs = append(jobs, j)
+	}
+	for r := range c.runs {
+		runs = append(runs, r)
+	}
+	return jobs, runs
+}
+
+func (c *Core) notify() {
+	if c.OnUpdate != nil {
+		js, rs := c.Snapshot()
+		c.OnUpdate(js, rs)
+	}
+}
+
 // Fresh reports when the list was last fetched successfully.
 func (c *Core) Fresh() time.Time {
 	c.mu.RLock()
@@ -78,6 +103,9 @@ func (c *Core) Poll(ctx context.Context) error {
 		cl = &http.Client{Timeout: 5 * time.Second}
 	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.URL, nil)
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
 	c.mu.RLock()
 	if c.etag != "" {
 		req.Header.Set("If-None-Match", c.etag)
@@ -92,10 +120,11 @@ func (c *Core) Poll(ctx context.Context) error {
 		c.mu.Lock()
 		c.fetched = time.Now()
 		c.mu.Unlock()
+		c.notify()
 		return nil
 	}
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("grants revoked: HTTP %d", resp.StatusCode)
+		return fmt.Errorf("core revocations: HTTP %d", resp.StatusCode)
 	}
 	var l coreList
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(&l); err != nil {
@@ -111,6 +140,7 @@ func (c *Core) Poll(ctx context.Context) error {
 	c.mu.Lock()
 	c.jobs, c.runs, c.etag, c.fetched = jobs, runs, resp.Header.Get("ETag"), time.Now()
 	c.mu.Unlock()
+	c.notify()
 	return nil
 }
 
@@ -122,7 +152,7 @@ func (c *Core) Run(ctx context.Context, log *slog.Logger) {
 	}
 	for {
 		if err := c.Poll(ctx); err != nil && log != nil {
-			log.Warn("grant revocation poll failed", "err", err)
+			log.Warn("core revocation poll failed", "err", err)
 		}
 		select {
 		case <-ctx.Done():

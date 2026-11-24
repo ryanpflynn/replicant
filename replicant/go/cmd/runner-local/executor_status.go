@@ -68,7 +68,7 @@ func (s *Server) observe(ctx context.Context, r *Record) controller.Observation 
 		}
 		return &cs
 	}
-	for _, c := range []string{cGuard, cPrepare} {
+	for _, c := range []string{cSandboxInit, cPrepare} {
 		if cs := status(c); cs != nil {
 			pod.Status.InitContainerStatuses = append(pod.Status.InitContainerStatuses, *cs)
 		}
@@ -232,11 +232,11 @@ func (s *Server) deriveAndApply(ctx context.Context, r *Record) (bool, error) {
 		s.queueNotification(rec, string(d.Phase), reason)
 	}
 	if d.Phase.IsTerminal() && (d.DeletePodGracefully || o.NodeLost) {
-		go s.stopContainers(context.Background(), rec, []string{cAgent, cUploader, cPrepare, cAgentd, cWatchdog, cPause}, 0)
+		go s.stopContainers(context.Background(), rec, []string{cAgent, cUploader, cPrepare, cAgentd, cPause}, 0)
 	} else if d.DeletePodGracefully {
 		if rec.Local.Intent == "" && !rec.AgentRun.Spec.CancelRequested {
 			// startup timeout or image pull: no finalize
-			go s.stopContainers(context.Background(), rec, []string{cAgent, cUploader, cPrepare, cAgentd, cWatchdog, cPause}, 0)
+			go s.stopContainers(context.Background(), rec, []string{cAgent, cUploader, cPrepare, cAgentd, cPause}, 0)
 		} else {
 			_ = s.terminateIfNeeded(ctx, rec)
 		}
@@ -267,6 +267,8 @@ func prepReason(code int) v1.FailureReason {
 		return v1.ReasonSessionRestoreFailed
 	case 43:
 		return v1.ReasonRepoFetchFailed
+	case controller.ExitWorkspaceDiskExceeded: // the clone already filled the workspace
+		return v1.ReasonWorkspaceDiskExceeded
 	}
 	return v1.ReasonControllerError
 }

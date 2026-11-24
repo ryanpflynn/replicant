@@ -46,3 +46,18 @@ Details: [state-ownership.md §2](../state-ownership.md#2-ui-read-model-projecti
 ## Revisit when
 
 - Temporal ships a supported change feed or event export API suitable for projections.
+
+## Note (SIMPLIFY Phase 2, 2026-11-23): where the projector runs
+
+The projector's activity worker (task queue `replicant-projections`, Worker Deployment
+`replicant-projector`) now runs inside the `core` process, next to control-plane-api, instead of as
+its own deployment. The decision above is unchanged:
+
+- **Workflow code still never writes Postgres.**
+- **The projector is still the only writer of `jobs_read` and `approvals`.** It connects with its own
+  login, `svc_replicant_projector`, through its own pool. The core API connects with
+  `svc_control_plane_api`, which has no write grants on these schemas.
+- **Its deployment versioning is unchanged.**
+
+Option 4's objection still holds: versioned workers get no database credentials. Details are in
+replicant/docs/v0/DEVIATIONS.md SIMPLIFY-D11.

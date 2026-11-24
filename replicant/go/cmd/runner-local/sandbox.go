@@ -81,7 +81,7 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request, v *authz.Verifi
 		}
 		only = []string{api.AudSandbox} // partial upload only (R1-039)
 	}
-	set, err := signSet(s.Signer, s.Cfg.Issuer, ar.Spec.RunGrant, &v.Grant, rec.Local.SteeringLive, time.Now(), only)
+	set, err := signSet(s.Signer, s.Cfg.Issuer, &rec.Local.Scope, rec.Local.SteeringLive, time.Now(), only)
 	if err != nil {
 		api.WriteProblem(w, api.NewProblem("run_not_active", err.Error()))
 		return

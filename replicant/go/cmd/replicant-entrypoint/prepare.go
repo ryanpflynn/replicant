@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -33,8 +35,11 @@ func (e *prepErr) Error() string { return e.msg }
 
 func fail(code int, format string, a ...any) error { return &prepErr{code, fmt.Sprintf(format, a...)} }
 
+// inputsBase is agentd's loopback inputs route (:7803); a variable for tests.
+var inputsBase = "http://" + sandbox.LoopbackInputs
+
 func inputsGet(ctx context.Context, path string) ([]byte, error) {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+sandbox.LoopbackInputs+path, nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, inputsBase+path, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -47,7 +52,7 @@ func inputsGet(ctx context.Context, path string) ([]byte, error) {
 	return b, err
 }
 
-// prepareMain implements §4.3 prepare and §4.4 steps 1–5 (exit 40–43).
+// prepareMain implements §4.3 prepare and §4.4 steps 1–5 (exit 40–43; 30 when the checkout is over the disk limit).
 func prepareMain() int {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
@@ -103,7 +108,20 @@ func prepare(ctx context.Context) error {
 	// 2. every object
 	var diffs [][]byte
 	var plan *sandbox.RunPlan
+	repoBundle := ""
+	defer func() {
+		if repoBundle != "" {
+			_ = os.Remove(repoBundle)
+		}
+	}()
 	for _, o := range m.Objects {
+		if o.Place == "repo_bundle" { // streamed to disk: a repository can be larger than memory
+			repoBundle = repoBundlePath
+			if err := inputsDownload(ctx, "/inputs/"+o.BucketClass+"/"+o.Key, repoBundle, o.SHA256, o.SizeBytes); err != nil {
+				return fail(exitRepoFetch, "input %s: %v", o.Name, err)
+			}
+			continue
+		}
 		b, err := inputsGet(ctx, "/inputs/"+o.BucketClass+"/"+o.Key)
 		if err != nil {
 			return fail(exitInputs, "input %s: %v", o.Name, err)
@@ -174,8 +192,8 @@ func prepare(ctx context.Context) error {
 			return fail(exitInputs, "prompt %s sha256 mismatch", name)
 		}
 	}
-	// git checkout through agentd's loopback git route
-	if err := checkout(ctx, bs, plan); err != nil {
+	// git checkout from the repo bundle staged in the run's inputs (SIMPLIFY-D40: the sandbox has no git endpoint)
+	if err := checkout(ctx, bs, plan, repoBundle); err != nil {
 		return err
 	}
 	// repo_config use (§8c): the repo's agent configuration is trusted only as it is on the default branch
@@ -197,6 +215,11 @@ func prepare(ctx context.Context) error {
 			return fail(exitDiffApply, "%v", err)
 		}
 	}
+	// the uploader's watchdog starts only with the agent: check the clone (and applied diffs) against the limit here
+	limit, _ := strconv.ParseInt(os.Getenv("REPLICANT_WORKSPACE_LIMIT_BYTES"), 10, 64)
+	if err := checkWorkspaceDisk(sandbox.WorkspaceDir, limit); err != nil {
+		return err
+	}
 	// 5. security layer into the managed volume
 	managed := httpx.Env("REPLICANT_MANAGED_OUT", "/replicant/managed")
 	if err := renderManaged(managed, plan, bs); err != nil {
@@ -208,6 +231,15 @@ func prepare(ctx context.Context) error {
 	}
 	if err := agentd.Status(ctx, "prepared"); err != nil {
 		log.Warn("prepared report failed", "err", err)
+	}
+	return nil
+}
+
+// checkWorkspaceDisk fails prepare with the agent's disk exit (30, WorkspaceDiskExceeded) when the workspace is
+// already at the watchdog's exceeded threshold.
+func checkWorkspaceDisk(ws string, limit int64) error {
+	if used := sandbox.DiskUsage(ws); sandbox.DiskLevel(used, limit) == "exceeded" {
+		return fail(exitDisk, "workspace %d bytes after checkout exceeds %d%% of the %d byte limit", used, sandbox.DiskExceededPercent, limit)
 	}
 	return nil
 }
@@ -247,11 +279,66 @@ func git(ctx context.Context, dir string, env []string, args ...string) (string,
 	return out.String(), nil
 }
 
-func checkout(ctx context.Context, bs *sandbox.Bootstrap, plan *sandbox.RunPlan) error {
-	repo := sandbox.RepoDir
+// repoBundlePath is where prepare downloads the repo bundle: the workspace volume (outside the checkout), not the
+// size-capped /tmp tmpfs. It is removed once fetched.
+var repoBundlePath = filepath.Join(sandbox.WorkspaceDir, ".replicant-repo.bundle")
+
+// Refs of the repo bundle (replicant_worker/activities/repo_bundle.py): the base commit and, when the plan restores
+// the repo configuration from the default branch, that commit. Kept in the checkout so repoconfig.go finds it.
+const (
+	bundleRefBase   = "refs/replicant/base"
+	bundleRefConfig = "refs/replicant/config"
+)
+
+// inputsDownload streams one input object to dst through agentd's inputs route, checking its size and digest.
+func inputsDownload(ctx context.Context, path, dst, sha string, size int64) error {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, inputsBase+path, nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
+		return fmt.Errorf("GET %s: HTTP %d %s", path, resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	h := sha256.New()
+	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, size+1))
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	if n != size || hex.EncodeToString(h.Sum(nil)) != sha {
+		return fmt.Errorf("digest or size mismatch (%d bytes, want %d)", n, size)
+	}
+	return nil
+}
+
+// checkout creates /workspace/repo at the base commit from the repo bundle: no remote, HEAD detached at base_sha,
+// then the job branch (workspace.branch_name) created there. Diffs are computed against base_sha (collect*.go).
+func checkout(ctx context.Context, bs *sandbox.Bootstrap, plan *sandbox.RunPlan, bundle string) error {
 	base := bs.Repo.BaseSHA
 	if base == "" {
 		base = plan.Workspace.BaseSHA
+	}
+	return checkoutAt(ctx, sandbox.RepoDir, base, plan.Workspace.BranchName, bundle)
+}
+
+func checkoutAt(ctx context.Context, repo, base, branch, bundle string) error {
+	if base == "" {
+		return fail(exitRepoFetch, "no base_sha in bootstrap.json or the run plan")
+	}
+	if bundle == "" {
+		return fail(exitRepoFetch, "no repo_bundle in the inputs manifest")
 	}
 	if err := os.MkdirAll(repo, 0o755); err != nil {
 		return fail(exitRepoFetch, "mkdir repo: %v", err)
@@ -261,34 +348,19 @@ func checkout(ctx context.Context, bs *sandbox.Bootstrap, plan *sandbox.RunPlan)
 	if len(base) == 64 {
 		format = "sha256"
 	}
-	steps := [][]string{
+	for _, s := range [][]string{
 		{"init", "-q", "--object-format=" + format},
-		{"config", "fetch.negotiationAlgorithm", "skipping"},
 		{"config", "user.name", "replicant-agent"},
 		{"config", "user.email", "replicant-agent@replicant.invalid"},
-	}
-	if _, err := git(ctx, repo, env, "remote", "get-url", "origin"); err != nil {
-		steps = append(steps, []string{"remote", "add", "origin", "http://" + sandbox.LoopbackGit + "/git/" + bs.Repo.RepoID})
-	}
-	for _, s := range steps {
+		{"bundle", "verify", "-q", bundle},
+		{"fetch", "-q", "--no-tags", "--no-write-fetch-head", bundle, "+refs/replicant/*:refs/replicant/*"},
+	} {
 		if _, err := git(ctx, repo, env, s...); err != nil {
 			return fail(exitRepoFetch, "%v", err)
 		}
 	}
-	fetch := []string{"fetch", "--no-tags", "--filter=blob:none"}
-	if bs.Repo.FetchDepth > 0 {
-		fetch = append(fetch, "--depth", strconv.Itoa(bs.Repo.FetchDepth))
-	}
-	fetch = append(fetch, "origin", base)
-	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
-		if _, lastErr = git(ctx, repo, env, fetch...); lastErr == nil {
-			break
-		}
-		time.Sleep(time.Duration(2<<attempt) * time.Second)
-	}
-	if lastErr != nil {
-		return fail(exitRepoFetch, "%v", lastErr)
+	if got, err := git(ctx, repo, env, "rev-parse", "-q", "--verify", bundleRefBase+"^{commit}"); err != nil || strings.TrimSpace(got) != base {
+		return fail(exitRepoFetch, "repo bundle base %s != base_sha %s", strings.TrimSpace(got), base)
 	}
 	if _, err := git(ctx, repo, env, "-c", "advice.detachedHead=false", "checkout", "-q", "--detach", base); err != nil {
 		return fail(exitRepoFetch, "%v", err)
@@ -297,8 +369,8 @@ func checkout(ctx context.Context, bs *sandbox.Bootstrap, plan *sandbox.RunPlan)
 	if err != nil || strings.TrimSpace(head) != base {
 		return fail(exitRepoFetch, "HEAD %s != base_sha %s", strings.TrimSpace(head), base)
 	}
-	if b := plan.Workspace.BranchName; b != "" {
-		_, _ = git(ctx, repo, env, "checkout", "-q", "-B", b)
+	if branch != "" {
+		_, _ = git(ctx, repo, env, "checkout", "-q", "-B", branch)
 	}
 	return nil
 }

@@ -3,6 +3,16 @@
 Spec: `spec/07-control-plane-and-ux/github-app.md` §3 and §7, `triggers.md` §1 (Gitea row). One process runs the
 ingress and the consumer (`--role all`, default; `ingress`/`consumer` split as in prod).
 
+**In the stack, this package runs inside the `core` process** (`control-plane-api serve`; DEVIATIONS SIMPLIFY-D10):
+
+- **Ingress:** `/webhooks/gitea`, `/github/webhook` and `/v1/admin/scm-installations` are served on
+  control-plane-api's listener, port 8401.
+- **Internal routes:** the `/internal/v1/**` routes are reached in process only.
+- **Calls to control-plane-api:** they run in process too, so `REPLICANT_CONTROL_PLANE_TOKEN_FILE` is not used there.
+- **Database login:** `REPLICANT_GITHUB_INTEGRATION_DB_DSN` / `_DB_PASSWORD_FILE`.
+
+The standalone `github-integration serve` below still works.
+
 * `POST /webhooks/gitea`: `X-Gitea-Signature` (hex HMAC-SHA256 of the raw body, `gitea_webhook_secret`) is verified
   before parsing; the delivery is stored in `github_app.inbound_deliveries` keyed by `X-Gitea-Delivery`
   (`ON CONFLICT DO NOTHING`) and answered 202. Bad signature: 401.
@@ -26,7 +36,7 @@ Identity in M1: a Gitea login in `REPLICANT_DEV_LINKED_LOGINS` (default alice,bo
 ## Run and test
 
 ```sh
-podman build -f services/github-integration/Dockerfile -t localhost/replicant/github-integration:dev .
+podman build -f images/replicant-py/Dockerfile --target dev -t localhost/replicant/replicant-py:dev .   # shared Python image (SIMPLIFY-D2)
 CTL_GI_DB_DSN=postgresql+psycopg://svc_github_integration@127.0.0.1:55432/replicant \
 CTL_GI_DB_PASSWORD_FILE=$CTL_HOME/secrets/db_svc_github_integration \
   .venv-ctl/bin/python -m pytest -q services/github-integration/tests      # needs control-plane-api tests/smoke/env.sh up

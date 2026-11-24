@@ -4,8 +4,19 @@ FastAPI 0.162 / SQLAlchemy 2.1 (async, psycopg 3) / temporalio 1.34. Spec: `spec
 §2, `api/control-plane-api.openapi.yaml`, WS-06 `api/releases.openapi.yaml` (implemented subset below).
 
 The image has two build targets (identity.md §9.3 L-1): `prod` (default) and `dev` = prod + `replicant-dev-auth`
-(dev seed token, static dev users, `/v1/admin/dev/**`). The same image runs the API (`control-plane-api serve`, 8401)
-and the run-grant app (`control-plane-api serve-grants --port 8403`, compose service `run-grants`).
+(dev seed token, static dev users, `/v1/admin/dev/**`).
+
+`control-plane-api serve` is the `core` process (`core.py`, DEVIATIONS SIMPLIFY-D10..D13). It serves:
+
+- the API on 8401, with github-integration's webhook and admin ingress mounted on it, and slack-integration's ingress
+  when `REPLICANT_SLACK_ENABLED=true`;
+- github-integration's consumer and scanner, slack-integration's loops, and the replicant-projector worker
+  (`replicant-projections`), all in the same process.
+
+Each module connects with its own database login (`REPLICANT_<GITHUB_INTEGRATION|SLACK_INTEGRATION|PROJECTOR>_DB_DSN`
+/ `_DB_PASSWORD_FILE`). Calls between modules run in process through `in_process.py`, with no caller tokens.
+There is no run-grant app or 8403 listener any more (SIMPLIFY-D50): the Runner signs run tokens itself and asks core
+for a job's run scope and the job revocation list on two internal routes (`routes_runner.py`).
 
 ## Routes in M1
 
@@ -33,7 +44,8 @@ and the run-grant app (`control-plane-api serve-grants --port 8403`, compose ser
 | `GET/PUT /v1/me/notification-preferences` | signed in | schema notification-preferences v1; `none` refused for obligations |
 | `GET /v1/me/waiting` | signed in | v0 addition (NOTIFY-D4): gates you can decide + open PRs where you are requester/reviewer; UI "Waiting on you" |
 | dev only: `GET/PUT /v1/admin/dev/seed-status[/{step}]`, `POST /v1/admin/dev/release-bundles` | `dev:seed` | bundle shortcut: `{worker_build_id?, spec?, bootstrap?}` |
-| `serve-grants`: `GET /.well-known/jwks.json`, `GET /grants/revoked` | public | JWKS file (private members stripped); revocations from `jobs_read` + exec feed |
+| `GET /internal/v1/jobs/{job_id}/run-scope?tenant_id=T` | `service:runner-local\|service:runner-api` | SIMPLIFY-D50: tenant, target repo_ids, acting_for, revoked from `intake.job_requests` + `jobs_read`; 404 for another tenant's job |
+| `GET /internal/v1/revocations` | `service:runner-local\|service:runner-api` | SIMPLIFY-D50: cancelled/failed/taken-over jobs and cancelled/security-failed runs from `jobs_read` (48 h), ETag |
 
 Authentication in M1 (no Dex/identity-service): `Authorization: Bearer <token>` from
 `REPLICANT_INTERNAL_CALLER_TOKENS_FILE` (service callers), the dev seed token (`svc_dev-seeder`), or
@@ -46,15 +58,15 @@ runs in-process; repository permissions are not checked live in M1.
 ```sh
 # unit + DB integration tests (uv env; DB tests need the ctl- environment)
 cd replicant && UV_PROJECT_ENVIRONMENT=$PWD/.venv-ctl uv sync --package control-plane-api --package replicant-dev-auth
-services/control-plane-api/tests/smoke/env.sh up          # ctl-pg (migrated by PLATFORM's migrate image), ctl-temporal
+services/control-plane-api/tests/smoke/env.sh up          # ctl-pg (migrated by MIGRATE_IMAGE; `replicant dev test unit` passes replicant-py, SIMPLIFY-D2), ctl-temporal
 CTL_DB_DSN=postgresql+psycopg://svc_control_plane_api@127.0.0.1:55432/replicant \
 CTL_DB_PASSWORD_FILE=$CTL_HOME/secrets/db_svc_control_plane_api \
 CTL_SU_DSN=postgresql+psycopg://postgres:<pw>@127.0.0.1:55432/replicant \
   .venv-ctl/bin/python -m pytest -q services/control-plane-api/tests
 
 # images
-podman build -f services/control-plane-api/Dockerfile --target dev  -t localhost/replicant/control-plane-api:dev .
-podman build -f services/control-plane-api/Dockerfile --target prod -t localhost/replicant/control-plane-api:prod .
+podman build -f images/replicant-py/Dockerfile --target dev  -t localhost/replicant/replicant-py:dev .    # shared Python image (SIMPLIFY-D2)
+podman build -f images/replicant-py/Dockerfile --target prod -t localhost/replicant/replicant-py:prod .
 
 # component smoke (all three CONTROL services + Gitea + Postgres + Temporal + stub ReplicantJob worker)
 PYTHON=.venv-ctl/bin/python services/control-plane-api/tests/smoke/smoke.sh
@@ -62,8 +74,7 @@ services/control-plane-api/tests/smoke/smoke.sh down
 ```
 
 Environment: exactly the spec compose names (`REPLICANT_HTTP_PORT`, `REPLICANT_DB_DSN`, `REPLICANT_DB_PASSWORD_FILE`,
-`REPLICANT_TEMPORAL_*`, `REPLICANT_DEV_SEED_TOKEN_FILE`, `REPLICANT_INTERNAL_CALLER_TOKENS_FILE`, `REPLICANT_RUN_GRANT_JWKS_*`,
-`REPLICANT_EXEC_REVOCATIONS_*`, `REPLICANT_S3_*`), plus `REPLICANT_WORKER_BUILD_ID` (dev bundle default),
+`REPLICANT_TEMPORAL_*`, `REPLICANT_DEV_SEED_TOKEN_FILE`, `REPLICANT_INTERNAL_CALLER_TOKENS_FILE`, `REPLICANT_S3_*`), plus `REPLICANT_WORKER_BUILD_ID` (dev bundle default),
 `REPLICANT_GITHUB_INTEGRATION_URL` (default `http://github-integration:8080`), `REPLICANT_WORKER_READY_QUEUES`
 (task queues a build must poll before the registrar marks it ready; default the three replicant-worker queues) and
 `REPLICANT_CPA_BACKGROUND_TASKS` (`false` disables the retriers and the registrar, for tests).

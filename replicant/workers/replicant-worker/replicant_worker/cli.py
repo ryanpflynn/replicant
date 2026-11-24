@@ -7,7 +7,6 @@
     replicant-worker local-bundle spec             print the v0 ReleaseBundle `spec` for REPLICANT_WORKER_BUILD_ID
     replicant-worker local-bundle export --out D   write registry-layout blobs + bundle-spec.json to D
     replicant-worker local-bundle publish          write the v0 definition blobs to the local registry bucket
-    replicant-worker grant-jwks                    print the public JWK Set of REPLICANT_RUN_GRANT_KEY_FILE
 
 Configuration (env, names from spec/11-local-dev compose.yaml):
     REPLICANT_ENV, REPLICANT_TEMPORAL_ADDRESS, REPLICANT_TEMPORAL_NAMESPACE, REPLICANT_TEMPORAL_TLS (+ cert files),
@@ -15,7 +14,7 @@ Configuration (env, names from spec/11-local-dev compose.yaml):
     REPLICANT_WORKER_SET_CURRENT_ON_START (local/dev only),
     REPLICANT_LLM_ACTIVITIES_PER_SECOND (default 20), REPLICANT_MAX_CACHED_WORKFLOWS (default 2000),
     REPLICANT_RUNNER_URL / _TOKEN_FILE, REPLICANT_GATEWAY_URL / REPLICANT_GATEWAY_SERVICE_TOKEN_FILE,
-    REPLICANT_RUN_GRANT_KEY_FILE / _KID / _ISSUER, REPLICANT_S3_*, REPLICANT_CONTROL_PLANE_URL (+ _TOKEN_FILE),
+    REPLICANT_S3_*, REPLICANT_CONTROL_PLANE_URL (+ _TOKEN_FILE),
     REPLICANT_GATEWAY_CASSETTE_SET, REPLICANT_GATEWAY_SCRIPT_SET (+ _SCRIPT_KEY, _SCRIPT_SETS), REPLICANT_LOCAL_REGISTRY_PUBLISH.
 
 The payload codec is not installed in v0 (plan.md §1.3, deferred to P2).
@@ -184,7 +183,6 @@ def main(argv: list[str] | None = None) -> int:
     lb = sub.add_parser("local-bundle")
     lb.add_argument("action", choices=["spec", "export", "publish"])
     lb.add_argument("--out", default="local-bundle")
-    sub.add_parser("grant-jwks")
     a = ap.parse_args(argv)
     if a.cmd == "nodecatalog":
         print(json.dumps(nodecatalog(), indent=2, sort_keys=True))
@@ -193,10 +191,6 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(healthcheck())
     if a.cmd == "local-bundle":
         return local_bundle_cmd(a)
-    if a.cmd == "grant-jwks":
-        from replicant_worker.activities.grants import signer
-        print(json.dumps({"keys": [signer().public_jwk()]}, indent=2))
-        return 0
     setup_logging()
     from replicant_worker.activities.catalog_impl import ACTIVITIES_BY_QUEUE
     asyncio.run(run(ACTIVITIES_BY_QUEUE))

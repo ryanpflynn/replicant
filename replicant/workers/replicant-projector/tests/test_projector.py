@@ -55,6 +55,22 @@ def test_invalid_event_is_rejected() -> None:
     assert ei.value.type == "SchemaViolation"
 
 
+def test_conninfo_prefers_projector_login(tmp_path, monkeypatch) -> None:
+    """Inside core (SIMPLIFY-D11) the projector keeps its own login next to control-plane-api's REPLICANT_DB_*."""
+    from replicant_projector import db
+    (tmp_path / "cpa").write_text("cpa-pw")
+    (tmp_path / "proj").write_text("proj-pw")
+    monkeypatch.setenv("REPLICANT_DB_DSN", "postgresql+psycopg://svc_control_plane_api@pg:5432/replicant")
+    monkeypatch.setenv("REPLICANT_DB_PASSWORD_FILE", str(tmp_path / "cpa"))
+    monkeypatch.delenv("REPLICANT_PROJECTOR_DB_DSN", raising=False)
+    assert db.conninfo() == ("postgresql://svc_control_plane_api@pg:5432/replicant",
+                             {"application_name": "replicant-projector", "password": "cpa-pw"})
+    monkeypatch.setenv("REPLICANT_PROJECTOR_DB_DSN", "postgresql+psycopg://svc_replicant_projector@pg:5432/replicant")
+    monkeypatch.setenv("REPLICANT_PROJECTOR_DB_PASSWORD_FILE", str(tmp_path / "proj"))
+    assert db.conninfo() == ("postgresql://svc_replicant_projector@pg:5432/replicant",
+                             {"application_name": "replicant-projector", "password": "proj-pw"})
+
+
 @pytest.fixture(scope="module")
 def pg():
     if not shutil.which(ENGINE) or not (SPEC / "10-data-platform").exists():

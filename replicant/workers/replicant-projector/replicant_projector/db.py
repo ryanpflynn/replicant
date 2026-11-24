@@ -20,10 +20,14 @@ _pool: AsyncConnectionPool | None = None
 
 
 def conninfo() -> tuple[str, dict[str, Any]]:
-    dsn = os.environ.get("REPLICANT_DB_DSN", "postgresql://svc_replicant_projector@localhost:5432/replicant")
+    """REPLICANT_PROJECTOR_DB_* when set (the projector inside core keeps its own login next to control-plane-api's
+    REPLICANT_DB_*, SIMPLIFY-D11), else REPLICANT_DB_* (standalone worker)."""
+    own = bool(os.environ.get("REPLICANT_PROJECTOR_DB_DSN"))
+    dsn = os.environ.get("REPLICANT_PROJECTOR_DB_DSN" if own else "REPLICANT_DB_DSN",
+                         "postgresql://svc_replicant_projector@localhost:5432/replicant")
     dsn = dsn.replace("postgresql+psycopg://", "postgresql://").replace("postgresql+psycopg2://", "postgresql://")
     kw: dict[str, Any] = {"application_name": "replicant-projector"}
-    pf = os.environ.get("REPLICANT_DB_PASSWORD_FILE")
+    pf = os.environ.get("REPLICANT_PROJECTOR_DB_PASSWORD_FILE" if own else "REPLICANT_DB_PASSWORD_FILE")
     if pf and os.path.exists(pf):
         with open(pf, encoding="utf-8") as f:
             kw["password"] = f.read().strip()
@@ -183,6 +187,13 @@ async def apply_in(cur: psycopg.AsyncCursor, ev: dict[str, Any]) -> dict[str, An
                           (m["message_id"], m["job_id"], m["tenant_id"], m["actor"], m["outcome"], m["run_id"], m["at"]))
     await cur.execute("SELECT pg_notify('replicant_job_updates', %s)", (f"{tenant}:{job}:{row['seq']}",))
     return stats
+
+
+async def close() -> None:
+    global _pool
+    if _pool is not None:
+        p, _pool = _pool, None
+        await p.close()
 
 
 async def ready() -> bool:

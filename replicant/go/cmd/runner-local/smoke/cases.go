@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -31,9 +32,9 @@ type tcase struct {
 	fn              func(context.Context, *env) (string, error)
 }
 
-// isolatedOnly cases need the driver's contract fakes (the fake grants host revokes jobs for RC-GRANT-05);
-// v0Only cases need the live v0 stack (sbx network, egress proxy, mirrors, STS credentials, real run-grants).
-var isolatedOnly = map[string]bool{"RC-GRANT-05": true, "RC-REPO-CFG": true}
+// isolatedOnly cases need the driver's contract fakes (the fake core revokes jobs for RC-SCOPE-06);
+// v0Only cases need the live v0 stack (sbx network, egress proxy, STS credentials, real core).
+var isolatedOnly = map[string]bool{"RC-SCOPE-06": true, "RC-REPO-CFG": true}
 var v0Only = map[string]bool{"SEC-EGRESS": true}
 
 func (e *env) record(id, name string, pass bool, detail string) {
@@ -91,7 +92,7 @@ func baseCases() []tcase {
 			return fmt.Sprint(c, " ", code(out)), expect(c == 403 && code(out) == "forbidden", "got %d %v", c, out)
 		}},
 		{"RC-IDEM-05/06/07", "missing, unquoted and mismatched keys", false, true, caseIdemHeaders},
-		{"RC-GRANT-01..04", "grant missing, forged, digest mismatch, repo coverage", false, true, caseGrants},
+		{"RC-SCOPE-01..05", "run scope missing, repo outside the job, acting_for, repo coverage, another tenant's job", false, true, caseScope},
 		{"RC-ADM-01/02/03/05", "admission: prefix, definition, inputs digest, callback namespace", false, true, caseAdmission},
 		{"RC-GET-01/03", "unknown run, list without filter", false, true, func(ctx context.Context, e *env) (string, error) {
 			c, _, out := e.do("GET", "/v1/runs/"+ids.ULID("run"), e.workerToken, "", nil)
@@ -128,15 +129,14 @@ func baseCases() []tcase {
 		{"SMOKE-IMPL", "implementer run: claude -p through the shim, run_result and outputs in S3", true, true, caseImplementer},
 		{"SMOKE-QA", "QA run: replicant-qa install/unit/build on base + the implementer's diff", true, true, caseQA},
 		{"RC-REPO-CFG", "repo_config use: repo hook runs, rules and nested CLAUDE.md load, .mcp.json skipped, managed deny wins", false, true, caseRepoConfig},
-		{"RC-GRANT-05", "grant of a revoked job", false, true, func(ctx context.Context, e *env) (string, error) {
+		{"RC-SCOPE-06", "run of a revoked job", false, true, func(ctx context.Context, e *env) (string, error) {
 			st, err := e.stage(ctx, runOpts{})
 			if err != nil {
 				return "", err
 			}
-			e.grants.revokeJob(st.jobID)
-			time.Sleep(8 * time.Second) // runner-local polls /grants/revoked every 5 s in the smoke stack
+			e.core.revokeJob(st.jobID)
 			c, out := e.create(st)
-			return fmt.Sprint(c, " ", code(out)), expect(c == 422 && code(out) == "run_grant_invalid", "got %d %v", c, out)
+			return fmt.Sprint(c, " ", code(out)), expect(c == 422 && code(out) == "run_scope_invalid", "got %d %v", c, out)
 		}},
 		{"RC-RUN-09+ID-01", "C-IDS vector key; nonexistent base_sha", true, true, caseRepoFetch},
 		{"RC-RUN-10", "inputs digest wrong", true, true, func(ctx context.Context, e *env) (string, error) {
@@ -160,7 +160,7 @@ func baseCases() []tcase {
 			return e.failCase(ctx, runOpts{scriptSet: "runner-contract", scriptKey: "long_running", active: 60, finalize: 30}, "DeadlineExceeded", false, 6*time.Minute)
 		}},
 		{"RC-CAN-02+LEASE-02", "cancel while running (and security cancel control key)", true, true, caseCancel},
-		{"SEC-EGRESS", "sandbox egress and reachability SEC-EGRESS-01..08 (+ RC-SBX-04)", false, true, caseEgress},
+		{"SEC-EGRESS", "sandbox egress and reachability SEC-EGRESS-01..11 (+ RC-SBX-04)", false, true, caseEgress},
 		{"RC-RUN-17", "image that does not exist", true, true, func(ctx context.Context, e *env) (string, error) {
 			ref := e.badEnvRef
 			return e.failCase(ctx, runOpts{envRef: &ref, startup: 60}, "ImagePullFailed", false, 4*time.Minute)
@@ -188,50 +188,51 @@ func caseIdemHeaders(ctx context.Context, e *env) (string, error) {
 	return "400 missing_idempotency_key / 400 invalid_request / 400", nil
 }
 
-func caseGrants(ctx context.Context, e *env) (string, error) {
+// caseScope: the run scope is checked against core's intake record (C-RUNNER 4.0.0, SIMPLIFY-D50).
+func caseScope(ctx context.Context, e *env) (string, error) {
 	st, err := e.stage(ctx, runOpts{})
 	if err != nil {
 		return "", err
 	}
 	idem := `"` + st.key + `"`
-	// 01 missing
-	spec := clone(st.spec)
-	delete(spec, "run_grant")
-	c, _, out := e.do("POST", "/v1/runs", e.workerToken, idem, spec)
-	if c != 400 || code(out) != "invalid_request" {
-		return "", fmt.Errorf("RC-GRANT-01: %d %v", c, out)
+	try := func(id string, mut func(spec map[string]any), wantStatus int, wantCode string) error {
+		spec := clone(st.spec)
+		mut(spec)
+		c, _, out := e.do("POST", "/v1/runs", e.workerToken, idem, spec)
+		if c != wantStatus || code(out) != wantCode {
+			return fmt.Errorf("%s: %d %v", id, c, out)
+		}
+		return nil
 	}
-	// 02 forged: signed by a key not in the JWKS
-	forged := jose.GenerateSigner("rg-local-1")
-	var claims api.RunGrantClaims
-	_ = jose.UnsafeClaims(st.grant, &claims)
-	fg, _ := forged.Sign(api.GrantTyp, claims)
-	spec = clone(st.spec)
-	spec["run_grant"] = fg
-	c, _, out = e.do("POST", "/v1/runs", e.workerToken, idem, spec)
-	if c != 422 || code(out) != "run_grant_invalid" {
-		return "", fmt.Errorf("RC-GRANT-02: %d %v", c, out)
+	scope := func(spec map[string]any) map[string]any { return spec["run_scope"].(map[string]any) }
+	for _, tc := range []struct {
+		id     string
+		mut    func(map[string]any)
+		status int
+		code   string
+	}{
+		{"RC-SCOPE-01 missing", func(s map[string]any) { delete(s, "run_scope") }, 400, "invalid_request"},
+		{"RC-SCOPE-02 repo not a job target", func(s map[string]any) { scope(s)["repo_ids"] = []any{fmt.Sprint(e.gitea.id), "99"} }, 422, "run_scope_invalid"},
+		{"RC-SCOPE-03 acting for someone else", func(s map[string]any) { scope(s)["acting_for"] = ids.Derived("usr", "replicant-dev-user", "mallory") }, 422, "run_scope_invalid"},
+		{"RC-SCOPE-04 additional repo uncovered", func(s map[string]any) {
+			s["additional_repos"] = []any{map[string]any{"provider": "gitea", "host": "git.replicant.localhost:3300", "owner": "acme-payments",
+				"name": "payments-contracts", "repo_id": "99", "base_sha": e.gitea.baseSHA}}
+		}, 422, "run_scope_invalid"},
+	} {
+		if err := try(tc.id, tc.mut, tc.status, tc.code); err != nil {
+			return "", err
+		}
 	}
-	// 03 digest mismatch: change limits after signing
-	spec = clone(st.spec)
-	spec["limits"] = map[string]any{"max_cost_usd": 2}
-	c, _, out = e.do("POST", "/v1/runs", e.workerToken, idem, spec)
-	if c != 422 || code(out) != "run_grant_invalid" {
-		return "", fmt.Errorf("RC-GRANT-03: %d %v", c, out)
+	// RC-SCOPE-05: another tenant's job (core answers 404 for the pair; the run_id is derived from the new tenant)
+	other, err := e.stage(ctx, runOpts{tenant: "local-dev", jobID: st.jobID})
+	if err != nil {
+		return "", err
 	}
-	// 04 repo coverage: additional repo not in the grant
-	spec = clone(st.spec)
-	spec["additional_repos"] = []any{map[string]any{"provider": "gitea", "host": "git.replicant.localhost:3300", "owner": "acme-payments",
-		"name": "payments-contracts", "repo_id": "99", "base_sha": e.gitea.baseSHA}}
-	b, _ := json.Marshal(spec)
-	st2 := &staged{spec: spec, runID: st.runID, key: st.key, jobID: st.jobID}
-	e.resign(st2, runOpts{jobID: st.jobID})
-	_ = b
-	c, _, out = e.do("POST", "/v1/runs", e.workerToken, idem, st2.body)
-	if c != 422 || code(out) != "run_grant_invalid" {
-		return "", fmt.Errorf("RC-GRANT-04: %d %v", c, out)
+	c, out := e.create(other)
+	if c != 422 || code(out) != "run_scope_invalid" {
+		return "", fmt.Errorf("RC-SCOPE-05: %d %v", c, out)
 	}
-	return "400 / 422 run_grant_invalid x3", nil
+	return "400 / 422 run_scope_invalid x4", nil
 }
 
 func caseAdmission(ctx context.Context, e *env) (string, error) {
@@ -241,7 +242,7 @@ func caseAdmission(ctx context.Context, e *env) (string, error) {
 			return nil, err
 		}
 		mut(st.spec)
-		e.resign(st, runOpts{jobID: st.jobID})
+		e.rescope(st, runOpts{jobID: st.jobID})
 		return st, nil
 	}
 	// 01 prefix not canonical
@@ -292,7 +293,7 @@ func clone(m map[string]any) map[string]any {
 }
 
 // caseImplementer is the M1 smoke: a real `claude -p` implementer run, plus the contract cases that the same run
-// proves (RC-IDEM-01..04, RC-GRANT-06/07, RC-RUN-01/02/05/08, RC-SBX-01..03, RC-REV-01, RC-ENV-01, RC-GET-02,
+// proves (RC-IDEM-01..05, RC-SCOPE-07, RC-RUN-01/02/05/08, RC-SBX-01..03, RC-REV-01, RC-ENV-01, RC-GET-02,
 // RC-CAN-03, RC-MSG-03).
 func caseImplementer(ctx context.Context, e *env) (string, error) {
 	st, err := e.stage(ctx, runOpts{})
@@ -341,20 +342,21 @@ func caseImplementer(ctx context.Context, e *env) (string, error) {
 		fmt.Sprintf("run_id %v phase %v", first["run_id"], first["phase"]))
 	c, out := e.create(st)
 	e.record("RC-IDEM-02", "repeat → 200 same run_id and spec_digest", c == 200 && out["run_id"] == st.runID && out["spec_digest"] == st.digest, fmt.Sprint(c))
-	// RC-GRANT-06: re-signed grant; RC-GRANT-07: new traceparent.
+	// RC-SCOPE-07: different run_scope (a per-attempt field); RC-IDEM-05: new traceparent.
 	st6 := &staged{spec: clone(st.spec), runID: st.runID, key: st.key, jobID: st.jobID}
-	e.resign(st6, runOpts{jobID: st.jobID})
+	st6.spec["run_scope"].(map[string]any)["scopes"] = []any{"gateway:invoke"}
+	st6.body, _ = json.Marshal(st6.spec)
 	c, out = e.create(st6)
-	e.record("RC-GRANT-06", "re-signed grant → 200, same digest", c == 200 && out["spec_digest"] == st.digest, fmt.Sprint(c))
+	e.record("RC-SCOPE-07", "different run_scope → 200, same digest", c == 200 && out["spec_digest"] == st.digest, fmt.Sprint(c))
 	st7 := &staged{spec: clone(st.spec), runID: st.runID, key: st.key, jobID: st.jobID}
 	st7.spec["trace_context"] = map[string]any{"traceparent": "00-fc0575170c8597ce9805552723c08d6e-7f3e9d2c1b0a4958-01"}
 	st7.body, _ = json.Marshal(st7.spec)
 	c, _ = e.create(st7)
-	e.record("RC-GRANT-07", "different traceparent → 200", c == 200, fmt.Sprint(c))
+	e.record("RC-IDEM-05", "different traceparent → 200", c == 200, fmt.Sprint(c))
 	// RC-IDEM-04: same key, different spec.
 	st4 := &staged{spec: clone(st.spec), runID: st.runID, key: st.key, jobID: st.jobID}
 	st4.spec["priority"] = "high"
-	e.resign(st4, runOpts{jobID: st.jobID})
+	e.rescope(st4, runOpts{jobID: st.jobID})
 	c, out = e.create(st4)
 	e.record("RC-IDEM-04", "same key, different spec → 422 idempotency_key_reuse", c == 422 && code(out) == "idempotency_key_reuse", fmt.Sprint(c, " ", code(out)))
 	// RC-MSG-03: steering not enabled.
@@ -481,8 +483,7 @@ func (e *env) tokenChecks(ctx context.Context, st *staged) {
 		e.record("RC-SBX-01", "per-audience tokens", false, "no token files at "+dir)
 		return
 	}
-	var gc api.RunGrantClaims
-	_ = jose.UnsafeClaims(st.grant, &gc)
+	sc := st.scope
 	okAll := true
 	var auds []string
 	for _, f := range files {
@@ -497,16 +498,16 @@ func (e *env) tokenChecks(ctx context.Context, st *staged) {
 			continue
 		}
 		auds = append(auds, c.Aud)
-		if c.Aud != f.Name() || c.Sub != "run:"+st.runID || c.GrantJti != gc.Jti || c.Grant != st.grant || c.Exp > gc.Exp || c.Exp-c.Iat > 3600 ||
-			c.ActingFor != gc.ActingFor || !strings.HasPrefix(c.Jti, "rtk_") {
+		if c.Aud != f.Name() || c.Sub != "run:"+st.runID || !slices.Contains(sc.Audiences, c.Aud) || c.Exp-c.Iat > 3600 ||
+			c.ActingFor != sc.ActingFor || !strings.HasPrefix(c.Jti, "rtk_") {
 			okAll = false
 		}
 		if f.Name() == api.AudSandbox {
 			e.lastSandboxToken = string(b)
 		}
 	}
-	e.record("RC-SBX-01", "one token per grant audience, aud = file name, claims within the grant", okAll && len(files) == len(gc.Audiences),
-		fmt.Sprintf("audiences %v (grant %v)", auds, gc.Audiences))
+	e.record("RC-SBX-01", "one token per run-scope audience, aud = file name, claims within the scope", okAll && len(files) == len(sc.Audiences),
+		fmt.Sprintf("audiences %v (scope %v)", auds, sc.Audiences))
 	if e.lastSandboxToken != "" {
 		req, _ := http.NewRequest("POST", e.runnerSbx+"/sandbox/v1/token:refresh", nil)
 		req.Header.Set("Authorization", "Bearer "+e.lastSandboxToken)
@@ -522,11 +523,11 @@ func (e *env) tokenChecks(ctx context.Context, st *staged) {
 		for aud, t := range tr.Tokens {
 			var c api.RunTokenClaims
 			_ = jose.UnsafeClaims(t.Token, &c)
-			if c.Aud != aud || c.RunID != st.runID || c.GrantJti != gc.Jti {
+			if c.Aud != aud || c.RunID != st.runID || c.ActingFor != sc.ActingFor {
 				newJti = false
 			}
 		}
-		e.record("RC-SBX-02", "refresh → token map, one per audience", resp.StatusCode == 200 && len(tr.Tokens) == len(gc.Audiences) && newJti,
+		e.record("RC-SBX-02", "refresh → token map, one per audience", resp.StatusCode == 200 && len(tr.Tokens) == len(sc.Audiences) && newJti,
 			fmt.Sprintf("%d, %d tokens", resp.StatusCode, len(tr.Tokens)))
 	}
 }
@@ -670,45 +671,68 @@ func (e *env) dumpRun(ctx context.Context, st *staged) {
 
 // failCase runs a scenario that must end Failed with reason.
 func (e *env) failCase(ctx context.Context, o runOpts, reason string, retryable bool, timeout time.Duration) (string, error) {
+	detail, _, err := e.failCaseRun(ctx, o, reason, retryable, timeout)
+	return detail, err
+}
+
+// failCaseRun is failCase that also returns the staged run (for checks on its artifacts).
+func (e *env) failCaseRun(ctx context.Context, o runOpts, reason string, retryable bool, timeout time.Duration) (string, *staged, error) {
 	st, err := e.stage(ctx, o)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	c, out := e.create(st)
 	if c != 201 {
-		return "", fmt.Errorf("create: %d %v", c, out)
+		return "", st, fmt.Errorf("create: %d %v", c, out)
 	}
 	final, phases, err := e.wait(st, timeout)
 	if err != nil {
-		return "", err
+		return "", st, err
 	}
 	f, _ := final["failure"].(map[string]any)
 	got := failureReason(final)
 	detail := fmt.Sprintf("%s retryable=%v via %s; message=%.120q", got, f["retryable"], strings.Join(phases, " → "), f["message"])
 	if final["phase"] != "Failed" || got != reason || f["retryable"] != retryable {
 		e.dumpRun(ctx, st)
-		return detail, fmt.Errorf("want Failed/%s retryable=%v, got %v/%s: %s", reason, retryable, final["phase"], got, detail)
+		return detail, st, fmt.Errorf("want Failed/%s retryable=%v, got %v/%s: %s", reason, retryable, final["phase"], got, detail)
 	}
-	return detail, nil
+	return detail, st, nil
 }
 
 func caseRepoFetch(ctx context.Context, e *env) (string, error) {
 	jobID := "job_01m5p7x7r0bt69j0h0fbxepw90"
-	st, err := e.stage(ctx, runOpts{jobID: jobID, baseSHA: strings.Repeat("0", 39) + "1", steering: true})
+	// base_sha names a commit that does not exist. The worker would fail to build the bundle (it fetches base_sha
+	// from the SCM); the runner-side contract is that a bundle not holding base_sha fails the run as
+	// RepoFetchFailed (prepare exit 43), so stage the bundle at the real base (SIMPLIFY-D56)
+	st, err := e.stage(ctx, runOpts{jobID: jobID, baseSHA: strings.Repeat("0", 39) + "1", bundleBaseSHA: e.gitea.baseSHA, steering: true})
 	if err != nil {
 		return "", err
 	}
-	c, out := e.create(st)
-	if c != 201 && c != 200 {
-		if c == 422 && code(out) == "idempotency_key_reuse" {
-			return "", fmt.Errorf("vector run already exists with another spec (re-run with a fresh runner state)")
-		}
-		return "", fmt.Errorf("create %d %v", c, out)
-	}
 	wantID := "run_gj3h3ep3phjfs9e23v768zrca5"
-	ar, _ := out["agentrun"].(map[string]any)
-	e.record("RC-ID-01", "C-IDS vector key → run_gj3h3ep3phjfs9e23v768zrca5, ar-<body>", out["run_id"] == wantID && ar["name"] == "ar-"+ids.Body(wantID),
-		fmt.Sprint(out["run_id"], " ", ar["name"]))
+	c, out := e.create(st)
+	note := ""
+	if c == 422 && code(out) == "idempotency_key_reuse" {
+		// The vector run already exists in the runner's records (an earlier pass within the record retention) and
+		// this pass's spec differs (inputs created_at, current main). Check the vector id on the existing run, then
+		// exercise the RepoFetchFailed path on a fresh job.
+		gc, _, gout := e.do("GET", "/v1/runs/"+wantID, e.workerToken, "", nil)
+		ar, _ := gout["agentrun"].(map[string]any)
+		e.record("RC-ID-01", "C-IDS vector key → run_gj3h3ep3phjfs9e23v768zrca5, ar-<body>", gc == 200 && gout["run_id"] == wantID && ar["name"] == "ar-"+ids.Body(wantID),
+			fmt.Sprint("existing run: ", gc, " ", gout["run_id"], " ", ar["name"]))
+		if st, err = e.stage(ctx, runOpts{baseSHA: strings.Repeat("0", 39) + "1", bundleBaseSHA: e.gitea.baseSHA, steering: true}); err != nil {
+			return "", err
+		}
+		if c, out = e.create(st); c != 201 {
+			return "", fmt.Errorf("create %d %v", c, out)
+		}
+		note = " (vector run from an earlier pass; fresh job for RepoFetchFailed)"
+	} else if c != 201 && c != 200 {
+		return "", fmt.Errorf("create %d %v", c, out)
+	} else {
+		ar, _ := out["agentrun"].(map[string]any)
+		e.record("RC-ID-01", "C-IDS vector key → run_gj3h3ep3phjfs9e23v768zrca5, ar-<body>", out["run_id"] == wantID && ar["name"] == "ar-"+ids.Body(wantID),
+			fmt.Sprint(out["run_id"], " ", ar["name"]))
+	}
 	final, phases, err := e.wait(st, 5*time.Minute)
 	if err != nil {
 		return "", err
@@ -718,7 +742,7 @@ func caseRepoFetch(ctx context.Context, e *env) (string, error) {
 	mc, _, mo := e.do("POST", "/v1/runs/"+st.runID+"/messages", e.workerToken, `"ik1:`+st.wf+`:steer.c0.n1.send"`,
 		map[string]any{"message_id": ids.ULID("msg"), "text": "hi", "author": "svc_operator", "sent_at": time.Now().UTC().Format(time.RFC3339)})
 	e.record("RC-MSG-04", "steering a terminal run → 409 run_not_active", mc == 409 && code(mo) == "run_not_active", fmt.Sprint(mc, " ", code(mo)))
-	return fmt.Sprintf("%s via %s", got, strings.Join(phases, " → ")), expect(final["phase"] == "Failed" && got == "RepoFetchFailed", "got %v/%s", final["phase"], got)
+	return fmt.Sprintf("%s via %s%s", got, strings.Join(phases, " → "), note), expect(final["phase"] == "Failed" && got == "RepoFetchFailed", "got %v/%s", final["phase"], got)
 }
 
 // caseCancel: cancel while Running (RC-CAN-02), then a security cancel of a second run (RC-LEASE-02).

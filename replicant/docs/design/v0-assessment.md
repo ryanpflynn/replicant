@@ -10,6 +10,12 @@
 The orchestrator then re-checked each finding that drives a recommendation against the code. Nothing was refactored.
 The companion document is [v0-system-design.md](v0-system-design.md).
 
+**Update 2026-11-24: the architecture simplification landed** (`docs/v0/DEVIATIONS.md` `## SIMPLIFY`,
+SIMPLIFY-D1..D59; spec ADR-015). It did the compose, image and `gateway-state` items of §4.2 and §6, and went further:
+one core process, six containers per run, sbx-edge as the only sandbox network service, a git bundle instead of
+repo-mirror, and no run grants. RC-RUN-13 is closed (SIMPLIFY-D57). The findings below are otherwise as of
+2026-10-26; items made moot or done by the simplification are marked.
+
 ## 1. Verdict
 
 The system is sound and maintainable. The core design choices hold up:
@@ -22,7 +28,7 @@ The code is better than its build history suggests:
 - Permission checks are applied consistently, with a check at startup that every route has one.
 - SQL is parameterised.
 - The sandbox network boundary is real: a sandbox can reach only the gateway, the mirror, S3, telemetry and the
-  runner. An agent therefore cannot approve its own gate.
+  runner (the mirror has since been removed, SIMPLIFY-D40). An agent therefore cannot approve its own gate.
 - About 175 Python, Go and web unit tests pass in about a minute, with 0 failures.
 
 The debt falls into four themes, and none of it blocks the product:
@@ -68,7 +74,7 @@ These are bugs or near-bugs. Each is small (S).
 | F7 | **The design doc overstates tenant isolation.** control-plane-api reads use `OPERATOR_SCOPE` (34 references), which bypasses RLS, so isolation for API reads rests on the application-level `check()` | `grep OPERATOR_SCOPE services/control-plane-api/src` | Corrected in the design doc §9. Enforcement is deferred (§5) |
 
 Lower priority, from the code review:
-- **repo-mirror** chooses its upstream from `X-Replicant-Repo-*` headers instead of the grant claims
+- **Moot since 2026-11-23: repo-mirror was removed (SIMPLIFY-D40).** **repo-mirror** chooses its upstream from `X-Replicant-Repo-*` headers instead of the grant claims
   (`go/cmd/repo-mirror/main.go:195`). agentd strips those headers, which mitigates it.
 - **Notification preferences:** `PUT /v1/me/notification-preferences` ignores `version`, so concurrent edits overwrite
   each other.
@@ -123,14 +129,14 @@ Lower priority, from the code review:
 
 | Opportunity | Value | Effort | When |
 |---|---|---|---|
-| **Standalone v0 compose** (~400 lines) instead of layering on the 1,656-line, 69-service spec compose, `compose.v0.deps.yaml` and the CLI's second pass. A duplicate key there already dropped config once (NOTIFY-D7) | High: removes the most fragile part of the dev loop | M | Now or next |
+| **Done 2026-11-23 (SIMPLIFY-D1).** **Standalone v0 compose** (~400 lines) instead of layering on the 1,656-line, 69-service spec compose, `compose.v0.deps.yaml` and the CLI's second pass. A duplicate key there already dropped config once (NOTIFY-D7) | High: removes the most fragile part of the dev loop | M | Now or next |
 | **`replicant dev prune`** (leftover sandbox containers, dangling images, `fstrim`) and fail `dev up` when an image build fails (it currently starts a partial stack) | High: disk-full VM hangs were the top time sink | S | Now |
 | **Consolidate duplicated helpers**: `read_secret` (6 copies), JSON log formatter (8), two Gitea clients, two JCS implementations, gateway-shim's own `jose`/`ids` packages, three identity-resolution rules | Medium: fewer places for fixes to diverge (F2 is an instance) | S–M | With F2 |
 | **Contract drift test**: byte-compare the schemas vendored in `contracts/`, `go/internal/runner/schemas`, control-plane-api and the worker | Medium | S | Now |
-| **Drop `gateway-state` Valkey** (the shim ignores it, GATEWAY-D1); move slack-mock and slack-integration to an opt-in profile | Low–medium: fewer containers | S | Now |
+| **Done 2026-11-23 (SIMPLIFY-D1).** **Drop `gateway-state` Valkey** (the shim ignores it, GATEWAY-D1); move slack-mock and slack-integration to an opt-in profile | Low–medium: fewer containers | S | Now |
 | **One `locked_loop` helper** for the 3 advisory-lock loops in control-plane-api. Today, if a loop's lock connection drops, the loop keeps running without the lock | Medium: correctness under a DB blip | S | Now |
 | **Remove dead guards**: 14 `has_relation` checks and the speculative `cost.job_rollups` branch | Low | S | Anytime |
-| **Build images from `uv.lock`** (`uv export --frozen`) on one shared Python base. Today transitive dependencies float, so images differ from the tested environment | Medium: reproducibility | S–M | Now |
+| **Done 2026-11-23 (SIMPLIFY-D2: one `replicant-py` image).** **Build images from `uv.lock`** (`uv export --frozen`) on one shared Python base. Today transitive dependencies float, so images differ from the tested environment | Medium: reproducibility | S–M | Now |
 | **Split `replicant_job.py`** (2,161 lines, 127 methods) along its existing `# ====` sections | Medium | M | Defer: the next change to waits or Updates |
 | **Make `notify_*` its own package** inside control-plane-api; split it into a separate service only when needed | Medium | S now, M later | Defer the split: a second replica or real Slack volume |
 | **Unused spec surface**: 12 `NotImplementedInV0` activities; DDL for memory, evals, ecosystem and jira (4.4k lines). They fail fast, so the cost is reading time | Low | — | Keep; mark v0-dead paths in the worker README |
@@ -183,7 +189,7 @@ Lower priority, from the code review:
    - `e2e03` has a bare `sleep(35)`.
    - Both reviewers' scenario runs killed each other's processes: shared, long-running suites with no isolation.
 6. **Only part of the runner contract runs.** The driver defines about 70 RC-* cases, but the standard pass runs only
-   SEC-EGRESS. RC-RUN-13 is open.
+   SEC-EGRESS. RC-RUN-13 is open. *(Update 2026-11-24: RC-RUN-13 is closed, SIMPLIFY-D57.)*
 
 ### 5.3 Simplifications
 
@@ -206,7 +212,7 @@ Lower priority, from the code review:
    the product's core value, and it may surface issues the scripted backend hides.
 
 **Next. Before more features:**
-6. Standalone v0 compose.
+6. Standalone v0 compose. **Done** (SIMPLIFY-D1).
 7. Consolidate the duplicated helpers, the contract drift test, and `locked_loop`.
 8. Commit the repo and add CI: unit tests on every PR, scenarios plus scripted E2E nightly.
 

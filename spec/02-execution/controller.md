@@ -1,9 +1,31 @@
 # AgentRun Controller
 
-**Workstream:** WS-02 · **Constraints:** D-04, D-05, D-07, D-08, D-17, D-21 · **Contracts:** C-CRD 3.0.0 (observable behavior; required `spec.runGrant`, optional `spec.workflowType`), C-RUNNER 3.0.0 (notification payload, per-audience run tokens, heartbeat, revocation), C-ART 2.0.0 (prefixes, manifest, upload semantics), C-IDS 2.0.0 §7–§8, C-ARCH 2.0.0 (`agentrun-controller` role)
+**Workstream:** WS-02 · **Constraints:** D-04, D-05, D-07, D-08, D-17, D-21 · **Contracts:** C-CRD 4.0.0 (observable behavior; required `spec.runScope`, optional `spec.workflowType`), C-RUNNER 4.0.0 (notification payload, per-audience run tokens, heartbeat, revocation; no run grants), C-ART 2.0.0 (prefixes, manifest, upload semantics), C-IDS 2.0.0 §7–§8, C-ARCH 2.0.0 (`agentrun-controller` role)
 **ADRs:** [ADR-02-002](adr/02-002-bare-pod-not-job.md) (bare Pod), [ADR-02-003](adr/02-003-in-pod-uploader-split-tokens.md) (in-pod uploader, split tokens), [ADR-02-004](adr/02-004-workspace-hard-limit-per-runtime.md) (workspace limits)
 **Code in this section (compiled and tested):** [api/v1alpha1/agentrun_types.go](api/v1alpha1/agentrun_types.go), [controller/derive.go](controller/derive.go), [controller/derive_test.go](controller/derive_test.go)
 **Rendered example:** [manifests/sandbox-pod.example.yaml](manifests/sandbox-pod.example.yaml)
+
+## Design note (2026-11-23): AgentRun is a bare Pod plus a write-once S3 record; the notifier is in the Runner
+
+[ADR-015](../00-contracts/adr/015-single-cluster-hardened-sandbox-pool.md) puts the Runner on core nodes in the one
+cluster and the sandboxes on a hardened node pool. With that, the controller design below collapses into the Runner
+process, which is what runner-local already does ([local-runner.md](local-runner.md), `go/cmd/runner-local`):
+
+- **AgentRun is a bare Pod plus a write-once S3 record.** The Runner validates the RunSpec (admission, including the
+  run-scope check against core, C-RUNNER 4.0.0), keeps the AgentRun object as its own state (etcd in a cluster, a
+  state file locally), creates exactly one bare Pod `ar-<body>` and its children, and derives the phase with the same
+  pure function `controller.Derive` (C-5). At the terminal phase it writes the AgentRun once to
+  `<artifacts>agentrun_record/agentrun.json` (`If-None-Match: *`, C-ART); that record, not etcd, is what outlives the
+  run. There is no Job and no separate controller deployment to keep in sync with runner-api.
+- **The notifier is inside the Runner.** Phase transitions are queued on the AgentRun and delivered as the Temporal
+  Signal `run.status_changed` by the Runner itself (C-6 semantics unchanged: the latest undelivered phase supersedes
+  earlier ones). There is no run-notifier service and no controller → notifier hop.
+- **Tokens are minted by the Runner** with its own key from the admitted `spec.runScope` (no grant, no internal
+  `/tokens` call); it also serves the JWKS and the revocation feed verifiers poll (§4.3).
+- What stays as written below: the pod shape (§4), credentials lifecycle (§5), deadlines and graceful termination
+  (§6), terminal handling and GC (§7), the exit-code contract (§8), artifact verification (§9). Where the sections
+  below say "controller" read "the Runner's executor"; where they say "run-notifier", the Runner's in-process notifier.
+  Leader election (§10) becomes the Runner's own (one active executor per shard).
 
 ## Purpose
 
@@ -12,7 +34,7 @@ watches it to a terminal phase, makes sure artifacts are committed before declar
 notifies run-notifier on every phase transition, revokes credentials, and cleans up. It must
 produce exactly the observable behavior in [agentrun-crd.md](../00-contracts/agentrun-crd.md):
 phases, conditions, failure reasons, at-most-once execution, and recovery by recomputation after a
-restart.
+restart. (Since 2026-11-23 these are functions of the Runner process; see the design note above.)
 
 ## Decisions summary
 
@@ -26,16 +48,16 @@ restart.
 | C-6 | **Notification state lives in status:** `CallbackDelivered` condition `message` holds the last delivered `notification_id`; the reconciler delivers the current phase whenever it differs. Later phases supersede undelivered earlier ones | agentrun-crd.md §5.1 |
 | C-7 | Exit-code contract is WS-03's normative table; termination messages ≤ 1 KiB; cancel cause passed by Pod annotation through the downward API | §8; XD-02-01 |
 | C-10 | **Admission (XD-FIX-R1-213, R1-224):** four WS-09 objects are deployed unchanged with the `replicant-exec` chart: `ValidatingAdmissionPolicy` `replicant-sandbox-pod-shape` (09 vap-sandbox-pods.yaml), `replicant-sandbox-children-writer` (only the controller writes sandbox children), `replicant-agentrun-binding` (namespace = `sbx-<tenantId>`, bucket names, callback namespace, network profile ∈ the binding-params list, writer identities; its params are the ConfigMap of §2a), and Kyverno `ImageValidatingPolicy` `replicant-images-signed` (09 ivp-replicant-images.yaml: cosign signature by KMS key `alias/replicant/<env>/image-signing`, inline public-key PEM rendered by IaC). WS-02 installs **Kyverno ≥ 1.19** in both clusters (exec and core; chart pinned by the platform repo, admission controller 3 replicas, `failurePolicy: Fail` for the sandbox namespaces). The controller itself re-checks namespace↔tenant before acting (CEL in the CRD cannot see the namespace, WS-09 G-11) | §2a, §4.1 |
-| C-11 | Accepted CCR-09-02 (run grants) and CCR-09-04 (`SecurityViolation`, cancel reason `security`) are implemented in the types and `Derive` | §4.3, §8 |
+| C-11 | CCR-09-04 (`SecurityViolation`, cancel reason `security`) is implemented in the types and `Derive`. CCR-09-02 (run grants) is withdrawn by ADR-015: `spec.runScope` replaces `spec.runGrant` (C-CRD 4.0.0) | §4.3, §8 |
 | C-8 | Network policy object: one `CiliumNetworkPolicy` `ar-<body>-egress` per run, rendered from the bundle's `network_profiles` policy | [network.md](network.md) |
 | C-9 | controller-runtime **v0.25.x** (latest v0.25.2, 2026-10-01), kubebuilder **v4.16** [verified: GitHub releases API, 2026-10-24]; leader election with a Lease; 32 concurrent reconciles | §10 |
 
 ```mermaid
 flowchart TB
-  subgraph exec["exec cluster · ns replicant-runner"]
+  subgraph exec["core nodes · ns replicant-runner (ADR-015: one process, the Runner)"]
     RA[runner-api]
-    CT["agentrun-controller<br/>(2 replicas, Lease leader)"]
-    RN[run-notifier]
+    CT["executor (was agentrun-controller)"]
+    RN["notifier (in process)"]
   end
   subgraph sbx["ns sbx-&lt;tenant&gt;"]
     AR[(AgentRun ar-…)]
@@ -342,6 +364,12 @@ The process model is agreed with WS-03 ([cli-invocation.md §1.1](../03-agents-a
 XD-03-01) and reviewed by WS-09 (control review G-01, G-22): **run tokens exist only in
 `replicant-agentd`**; the agent container holds no credential.
 
+> **Local runner (v0, SIMPLIFY-D20..D22 in docs/v0/DEVIATIONS.md):** runner-local's group has six containers:
+> `sandbox-init`, `pause`, `replicant-agentd`, `prepare`, `agent` and `uploader`. `sandbox-init` is a no-network
+> one-shot that sets volume ownership and then runs the `workspace-guard` check below (exit 84). The uploader runs
+> the `watchdog` loop below as a goroutine (same uid 10003, workspace read-only). `prepare` checks disk usage after
+> the clone and exits 30 at ≥ 98 %. The table describes the production Pod.
+
 | Order | Container | Kind | Image | uid | Mounts | Responsibility |
 |---|---|---|---|---|---|---|
 | 1 | `workspace-guard` | init | `replicant/sandbox-utils` (WS-02) | 10001 | `workspace` | Fail closed: `statfs("/workspace")` total must equal the hard limit ± 1 % (workspace-storage.md §4.2); exit 84 otherwise. Being the first container that mounts the workspace, it also triggers the NRI provisioning |
@@ -381,22 +409,22 @@ Example: [manifests/sandbox-pod.qa-build.example.yaml](manifests/sandbox-pod.qa-
 | No `subPath` | anywhere (Kata, runtime-evaluation.md F-14) |
 | Ephemeral storage | each sidecar has its own small `limits.ephemeral-storage` (WS-09 admission requires one on every container): services 1Gi, stubs 256Mi, builder 1Gi (its cache lives in the workspace) |
 
-### 4.3 Secret content and token issuance (per-audience tokens, run grants)
+### 4.3 Secret content and token issuance (per-audience tokens)
 
-Accepted contract changes CCR-09-01 (one token per audience) and CCR-09-02 (core-signed run
-grants) apply. The controller calls runner-api's internal listener
-(`POST /internal/v1/runs/{run_id}/tokens`, port 9444, controller SA token with audience
-`runner-internal`; [runner-service.md](runner-service.md) §7). runner-api verifies that the
-AgentRun's `spec.runGrant` is valid and unexpired, then mints **one ES256 token per audience in
-the grant**, each with `aud` set to that single audience, scopes and `repo_ids` ⊆ grant, `budget_usd`
-≤ grant, `exp = min(iat + 3600, grant.exp)`, and the embedded `grant` and `grant_jti` claims.
+CCR-09-01 (one token per audience) applies; CCR-09-02 (run grants) is withdrawn (ADR-015, C-RUNNER 4.0.0). At
+admission the Runner checks `RunSpec.run_scope` against core's intake record of the job
+(`GET /internal/v1/jobs/{job_id}/run-scope?tenant_id=…`: tenant, target repo_ids, acting_for, not revoked) and stores
+it as `spec.runScope`. It then mints **one ES256 token per audience in `spec.runScope.audiences`** with its own key,
+each with `aud` set to that single audience, scopes = the audience's scopes (table) ∩ `runScope.scopes`, `repo_ids` =
+`runScope.repoIds`, `budget_usd` = `limits.max_cost_usd`, `acting_for` = `runScope.actingFor`, and
+`exp = min(iat + 3600, the run's overall deadline)`. Verifiers check the Runner's JWKS and the Runner's revocation
+feed only; the Runner copies core's job revocations (`GET /internal/v1/revocations`) into that feed.
 
-| Secret key (file name) | `aud` | Scopes (subset of the grant) | Used by agentd for |
+| Secret key (file name) | `aud` | Scopes (subset of the run scope) | Used by agentd for |
 |---|---|---|---|
 | `ai-gateway` | `ai-gateway` | `gateway:invoke` | model traffic |
 | `memory-mcp` | `memory-mcp` | `memory:read`, `memory:search` | memory MCP |
 | `context-mcp` | `context-mcp` | `context:read`, `code_search:read` | context and code-search MCP |
-| `repo-mirror` | `repo-mirror` | `repo:fetch` | git fetches (prepare, lazy blob fetches) |
 | `runner-sandbox` | `runner-sandbox` | `credentials:aws`, `inbox:read` (if steering effective) | token refresh, S3 session credentials for the uploader, steering inbox |
 
 The Secret `ar-<body>-creds` is `immutable: true` and mounted only into `replicant-agentd`

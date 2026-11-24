@@ -24,8 +24,8 @@ payload codec. The worker registers Worker Deployment version `replicant-worker:
 ## Run
 
 ```bash
-podman build -f workers/replicant-worker/Dockerfile -t localhost/replicant/replicant-worker:dev .   # from replicant/
-replicant-worker run | healthcheck | nodecatalog export | local-bundle spec|export|publish | grant-jwks
+podman build -f images/replicant-py/Dockerfile --target dev -t localhost/replicant/replicant-py:dev .   # from replicant/; shared Python image (SIMPLIFY-D2)
+replicant-worker run | healthcheck | nodecatalog export | local-bundle spec|export|publish
 ```
 
 ## Test

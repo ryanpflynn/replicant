@@ -36,7 +36,7 @@ func TestSpecDigestVector(t *testing.T) {
 		t.Fatalf("digest %s", d)
 	}
 	ex["trace_context"] = map[string]any{"traceparent": "00-fc0575170c8597ce9805552723c08d6e-7f3e9d2c1b0a4958-01"}
-	ex["run_grant"] = "a.b.c"
+	ex["run_scope"] = map[string]any{"repo_ids": []string{"R_x"}, "audiences": []string{"ai-gateway"}, "scopes": []string{}, "acting_for": "usr_x"}
 	b, _ = json.Marshal(ex)
 	d2, _ := jcsx.SpecDigest(b)
 	if d2 != d {
@@ -56,12 +56,12 @@ func TestRunSpecSchema(t *testing.T) {
 		t.Fatalf("example invalid: %v", err)
 	}
 	ex["bogus"] = 1
-	delete(ex, "run_grant")
+	delete(ex, "run_scope")
 	err := schemas.Validate(schemas.RunSpec, ex)
 	if err == nil {
 		t.Fatal("expected violations")
 	}
-	if !strings.Contains(err.Error(), "bogus") && !strings.Contains(err.Error(), "run_grant") {
+	if !strings.Contains(err.Error(), "bogus") && !strings.Contains(err.Error(), "run_scope") {
 		t.Fatalf("unexpected: %v", err)
 	}
 }

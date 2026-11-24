@@ -6,7 +6,7 @@ inside the stack).
 
 ```sh
 uv run --package slack-mock --group dev pytest tools/slack-mock/tests -q
-podman build -f tools/slack-mock/Dockerfile -t localhost/replicant/slack-mock:dev .
+podman build -f images/replicant-py/Dockerfile --target dev -t localhost/replicant/replicant-py:dev .   # shared Python image (SIMPLIFY-D2)
 ```
 
 ## Configuration

@@ -14,7 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// RunClaims is C-RUNNER RunTokenClaims (2.x, CCR-09-01/02/03).
+// RunClaims is C-RUNNER RunTokenClaims (4.0.0: no run grant, SIMPLIFY-D50; CCR-09-01/03).
 type RunClaims struct {
 	Iss             string          `json:"iss"`
 	Sub             string          `json:"sub"`
@@ -31,27 +31,6 @@ type RunClaims struct {
 	Scopes          []string        `json:"scopes"`
 	BudgetUSD       *float64        `json:"budget_usd"`
 	ActingFor       string          `json:"acting_for"`
-	Grant           string          `json:"grant"`
-	GrantJti        string          `json:"grant_jti"`
-}
-
-// GrantClaims is C-RUNNER RunGrantClaims.
-type GrantClaims struct {
-	Iss        string   `json:"iss"`
-	Typ        string   `json:"typ"`
-	Jti        string   `json:"jti"`
-	Iat        int64    `json:"iat"`
-	Exp        int64    `json:"exp"`
-	TenantID   string   `json:"tenant_id"`
-	JobID      string   `json:"job_id"`
-	RunID      string   `json:"run_id"`
-	Role       string   `json:"role"`
-	RepoIDs    []string `json:"repo_ids"`
-	Audiences  []string `json:"audiences"`
-	Scopes     []string `json:"scopes"`
-	BudgetUSD  float64  `json:"budget_usd"`
-	ActingFor  string   `json:"acting_for"`
-	SpecDigest string   `json:"spec_digest"`
 }
 
 // Caller is an authenticated principal.
@@ -75,14 +54,12 @@ func unauth(format string, a ...any) *AuthError {
 	return &AuthError{Status: 401, Code: "unauthenticated", Msg: fmt.Sprintf(format, a...)}
 }
 
-// Authenticator verifies run tokens (runner JWKS + core grant JWKS) and static local service tokens.
+// Authenticator verifies run tokens (the runner's JWKS only, SIMPLIFY-D50) and static local service tokens.
 type Authenticator struct {
-	audience    string
-	issuers     map[string]*jose.KeySet
-	grantIssuer string
-	grantKeys   *jose.KeySet
-	svcFile     string
-	now         func() time.Time
+	audience string
+	issuers  map[string]*jose.KeySet
+	svcFile  string
+	now      func() time.Time
 
 	mu       sync.Mutex
 	svc      map[string]string // token -> principal
@@ -99,13 +76,9 @@ var (
 
 // NewAuthenticator wires the key sets from config.
 func NewAuthenticator(c *Config) *Authenticator {
-	a := &Authenticator{audience: c.RunTokenAudience, issuers: map[string]*jose.KeySet{}, grantIssuer: c.GrantIssuer,
-		svcFile: c.ServiceTokensFile, now: time.Now}
+	a := &Authenticator{audience: c.RunTokenAudience, issuers: map[string]*jose.KeySet{}, svcFile: c.ServiceTokensFile, now: time.Now}
 	for i, iss := range c.RunTokenIssuers {
 		a.issuers[iss] = jose.NewKeySet(c.RunTokenJWKSURLs[i])
-	}
-	if c.GrantJWKSURL != "" {
-		a.grantKeys = jose.NewKeySet(c.GrantJWKSURL)
 	}
 	return a
 }
@@ -116,10 +89,6 @@ func (a *Authenticator) KeyStatus() map[string]string {
 	for iss, ks := range a.issuers {
 		ok, err := ks.Status()
 		out["run_token:"+iss] = statusString(ok, err)
-	}
-	if a.grantKeys != nil {
-		ok, err := a.grantKeys.Status()
-		out["run_grant"] = statusString(ok, err)
 	}
 	return out
 }
@@ -156,7 +125,8 @@ func audMatches(raw json.RawMessage, want string) bool {
 	return false
 }
 
-// VerifyRunToken implements GW-2 (gateway.md §3) and C-RUNNER verifier obligations 1, 2 and 4.
+// VerifyRunToken implements GW-2 (gateway.md §3) and C-RUNNER 4.0.0 verifier obligations 1 and 2; obligation 3
+// (the runner's revocation feed) is MemState.IsRevoked on every request.
 func (a *Authenticator) VerifyRunToken(tok string) (*RunClaims, error) {
 	p, err := jose.Parse(tok)
 	if err != nil {
@@ -199,60 +169,6 @@ func (a *Authenticator) VerifyRunToken(tok string) (*RunClaims, error) {
 	}
 	if c.ActingFor == "" {
 		return nil, unauth("acting_for missing")
-	}
-	if c.Grant == "" || c.GrantJti == "" {
-		return nil, unauth("run grant missing")
-	}
-	if a.grantKeys == nil {
-		return nil, unauth("run grant JWKS not configured")
-	}
-	gh, gp, err := a.grantKeys.Verify(c.Grant)
-	if err != nil {
-		return nil, unauth("run grant signature: %v", err)
-	}
-	var g GrantClaims
-	if err := json.Unmarshal(gp, &g); err != nil {
-		return nil, unauth("run grant claims malformed")
-	}
-	if gh.Typ != "" && gh.Typ != "replicant-run-grant+jwt" {
-		return nil, unauth("run grant typ %q", gh.Typ)
-	}
-	if g.Typ != "replicant-run-grant+jwt" {
-		return nil, unauth("run grant typ claim")
-	}
-	if a.grantIssuer != "" && g.Iss != a.grantIssuer {
-		return nil, unauth("run grant issuer")
-	}
-	if g.Exp == 0 || now > g.Exp+30 {
-		return nil, unauth("run grant expired")
-	}
-	if g.Jti != c.GrantJti {
-		return nil, unauth("grant_jti mismatch")
-	}
-	if !contains(g.Audiences, a.audience) {
-		return nil, unauth("grant does not cover %s", a.audience)
-	}
-	for _, s := range c.Scopes {
-		if !contains(g.Scopes, s) {
-			return nil, unauth("token scope %s outside grant", s)
-		}
-	}
-	if !contains(g.Scopes, "gateway:invoke") {
-		return nil, &AuthError{Status: 403, Code: "scope_missing", Msg: "grant lacks gateway:invoke"}
-	}
-	for _, r := range c.RepoIDs {
-		if !contains(g.RepoIDs, r) {
-			return nil, unauth("token repo outside grant")
-		}
-	}
-	if c.BudgetUSD != nil && *c.BudgetUSD > g.BudgetUSD+1e-9 {
-		return nil, unauth("token budget exceeds grant")
-	}
-	if c.Exp > g.Exp {
-		return nil, unauth("token outlives grant")
-	}
-	if g.TenantID != c.TenantID || g.JobID != c.JobID || g.RunID != c.RunID || g.ActingFor != c.ActingFor || (g.Role != "" && g.Role != c.Role) {
-		return nil, unauth("token identity differs from grant")
 	}
 	return &c, nil
 }
